@@ -1,0 +1,16 @@
+[package]
+name = "olvin_hub_gui"
+description = "olvin-hub desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "olvin-hub-gui"
+path = "src/main.rs"
+
+[dependencies]
+olvin_hub.workspace = true
+eframe.workspace = true
+anyhow.workspace = true
+dirs.workspace = true

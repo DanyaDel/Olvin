@@ -22,6 +22,10 @@ crates/
   olvin/              фасад: реэкспорты, DefaultPlugins, prelude, features window/render
 apps/
   sandbox/            стресс-демо: N вращающихся кубов + свободная камера
+hub/                  olvin-hub — отдельный инструмент, не часть движка
+  olvin_hub/          ядро: каталог модулей, проекты игр, правка Cargo.toml, конфиг
+  olvin_hub_cli/      бинарник `olvin-hub` (clap)
+  olvin_hub_gui/      бинарник `olvin-hub-gui` (eframe/egui 0.35)
 ```
 
 ## olvin_core
@@ -57,9 +61,22 @@ apps/
 
 Features `window` и `render` включены по умолчанию. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
 
+## hub (olvin-hub, рабочее имя)
+
+Хаб создаёт проекты игр и ставит в них модули. Источник правды о модулях — `Cargo.toml` игры, у хаба нет своего состояния об установленном.
+
+- `olvin_hub/catalog.toml`: встроенный каталог. `kind = "olvin"` — фича фасада `olvin` (плагин подключит `DefaultPlugins`). `kind = "crate"` — зависимость с crates.io (rapier3d, kira, gltf, rand, serde, ron). Поле `requires` ставит модули вместе.
+- `catalog.rs`: `Catalog` (парсинг, проверка `requires`, `resolve` — сначала зависимости, ловит циклы, `categories`), `Module`, `Source`.
+- `project.rs`: `Project::create` (шаблон + модули с `default = true`), `open`, `discover` (ищет вверх по папкам), `add` (вместе с requires), `remove` (не даёт удалить то, от чего зависят другие, если нет `force`), `save`. Правки через `toml_edit`, комментарии и форматирование пользователя сохраняются. `olvin` подключается с `default-features = false`, список модулей Olvin = `features`.
+- `config.rs`: `HubConfig` в `<config_dir>/olvin-hub/config.toml` (на Linux учитывает `XDG_CONFIG_HOME`): список проектов и `EngineSource` (`path` к checkout'у или `git`). По умолчанию это папка, из которой собран хаб, если её нет — GitHub.
+- `template.rs`: Cargo.toml (deps всегда -O3), `src/main.rs` (вращающийся куб, Esc выход), README, .gitignore.
+- CLI: `new`, `list`, `add`, `remove [--force]`, `run [--release]`, `projects`, `register`, `forget`, `engine [--path|--git]`.
+- GUI: слева проекты, создание и добавление существующего; справа каталог с галочками по категориям, запуск или остановка `cargo run`, статус-бар.
+
 ## Зависимости
 
 wgpu 30, winit 0.30, hecs 0.11, glam 0.34 (проекции в `glam::camera`), bytemuck, pollster, log/env_logger.
+Хаб: toml_edit, toml, serde, clap, dirs, anyhow, eframe 0.35 (0.36+ требует rustc 1.95).
 
 ## Проверено
 

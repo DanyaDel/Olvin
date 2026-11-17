@@ -1,0 +1,15 @@
+[package]
+name = "olvin_hub_cli"
+description = "olvin-hub command line"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "olvin-hub"
+path = "src/main.rs"
+
+[dependencies]
+olvin_hub.workspace = true
+clap.workspace = true
+anyhow.workspace = true

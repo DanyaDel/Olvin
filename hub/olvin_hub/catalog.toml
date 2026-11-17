@@ -1,0 +1,79 @@
+# Каталог модулей olvin-hub.
+#   kind = "olvin": фича фасадного крейта `olvin`, плагин подключается через DefaultPlugins.
+#   kind = "crate": обычная зависимость с crates.io, подключается как библиотека.
+# requires: какие модули ставятся вместе с этим.
+
+[[module]]
+id = "window"
+name = "Окно и ввод"
+category = "Olvin"
+description = "winit: окно, клавиатура, мышь, главный цикл"
+kind = "olvin"
+feature = "window"
+default = true
+
+[[module]]
+id = "render"
+name = "3D-рендер"
+category = "Olvin"
+description = "wgpu: instancing, отсечение по камере; Vulkan / Metal / DX12 / GL / WebGL2"
+kind = "olvin"
+feature = "render"
+requires = ["window"]
+default = true
+
+[[module]]
+id = "physics"
+name = "Физика 3D"
+category = "Геймплей"
+description = "Rapier: твёрдые тела, коллизии, джойнты"
+kind = "crate"
+crate = "rapier3d"
+version = "0.36"
+
+[[module]]
+id = "audio"
+name = "Аудио"
+category = "Геймплей"
+description = "Kira: звуки, музыка, твины громкости, микшер"
+kind = "crate"
+crate = "kira"
+version = "0.12"
+
+[[module]]
+id = "gltf"
+name = "Загрузка glTF"
+category = "Ассеты"
+description = "Чтение моделей .gltf / .glb"
+kind = "crate"
+crate = "gltf"
+version = "1.4"
+
+[[module]]
+id = "rand"
+name = "Случайные числа"
+category = "Утилиты"
+description = "rand: генераторы, распределения, перемешивание"
+kind = "crate"
+crate = "rand"
+version = "0.10"
+
+[[module]]
+id = "serde"
+name = "Сериализация"
+category = "Утилиты"
+description = "serde с derive: основа для сохранений и конфигов"
+kind = "crate"
+crate = "serde"
+version = "1"
+features = ["derive"]
+
+[[module]]
+id = "saves"
+name = "Сохранения (RON)"
+category = "Утилиты"
+description = "ron: читаемый формат для сохранений и настроек"
+kind = "crate"
+crate = "ron"
+version = "0.12"
+requires = ["serde"]

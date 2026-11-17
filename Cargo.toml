@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/*"]
+members = ["crates/*", "apps/*", "hub/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,16 @@ bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
 log = "0.4"
 env_logger = "0.11"
+
+# Hub (olvin-hub): project and module manager, separate from the engine.
+olvin_hub = { path = "hub/olvin_hub" }
+toml_edit = "0.25"
+toml = "1"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+dirs = "7"
+clap = { version = "4", features = ["derive"] }
+eframe = "0.35"
 
 # Dependencies are always optimized: math/ECS/wgpu in debug are painfully slow,
 # while our own crates stay quick to compile.

@@ -38,14 +38,18 @@ impl EngineSource {
 
     /// The `olvin = { ... }` dependency entry, without features.
     pub fn dependency(&self) -> toml_edit::InlineTable {
+        let mut dep = self.crate_dependency("crates/olvin");
+        dep.insert("default-features", false.into());
+        dep
+    }
+
+    /// Dependency on any crate of the Olvin repository, by its path in the repo.
+    pub fn crate_dependency(&self, repo_path: &str) -> toml_edit::InlineTable {
         let mut dep = toml_edit::InlineTable::new();
         match self {
-            Self::Path(path) => {
-                dep.insert("path", path.join("crates/olvin").display().to_string().into())
-            }
+            Self::Path(path) => dep.insert("path", path.join(repo_path).display().to_string().into()),
             Self::Git(url) => dep.insert("git", url.as_str().into()),
         };
-        dep.insert("default-features", false.into());
         dep
     }
 }

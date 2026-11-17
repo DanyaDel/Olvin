@@ -1,6 +1,7 @@
 //! Olvin: a modular game engine. Each subsystem is its own crate and plugin;
 //! this facade re-exports them and wires the default set together.
-//! Disable features (`window`, `render`) for servers, tools or custom platforms.
+//! Disable features (`window`, `render`) for servers, tools or custom platforms;
+//! `scene` adds loading of scenes saved by olvin-editor.
 
 pub use glam as math;
 pub use olvin_core as core;
@@ -10,6 +11,9 @@ pub use olvin_render as render;
 pub use olvin_scene as scene;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
+
+#[cfg(feature = "scene")]
+pub mod scene_file;
 
 use olvin_core::{App, Plugin};
 

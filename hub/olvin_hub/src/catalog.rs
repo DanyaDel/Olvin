@@ -33,10 +33,29 @@ pub struct Module {
     pub default: bool,
 }
 
+/// An element of the editor itself (a plugin crate of olvin-editor).
+#[derive(Clone, Debug, Deserialize)]
+pub struct EditorModule {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Package name.
+    #[serde(rename = "crate")]
+    pub package: String,
+    /// Location inside the Olvin repository.
+    pub path: String,
+    /// Path of the type implementing `EditorPlugin`.
+    pub plugin: String,
+    #[serde(default)]
+    pub default: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Catalog {
     #[serde(rename = "module")]
     pub modules: Vec<Module>,
+    #[serde(rename = "editor_module", default)]
+    pub editor_modules: Vec<EditorModule>,
 }
 
 impl Catalog {
@@ -58,6 +77,10 @@ impl Catalog {
 
     pub fn get(&self, id: &str) -> Option<&Module> {
         self.modules.iter().find(|m| m.id == id)
+    }
+
+    pub fn editor_module(&self, id: &str) -> Option<&EditorModule> {
+        self.editor_modules.iter().find(|m| m.id == id)
     }
 
     /// `id` and everything it requires, dependencies first.

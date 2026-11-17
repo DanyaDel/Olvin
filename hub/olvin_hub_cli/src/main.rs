@@ -5,7 +5,7 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use olvin_hub::{Catalog, EngineSource, HubConfig, Project};
+use olvin_hub::{Catalog, EditorInstall, EngineSource, HubConfig, Project};
 
 #[derive(Parser)]
 #[command(name = "olvin-hub", version, about = "Хаб Olvin: проекты игр и модули")]
@@ -58,6 +58,11 @@ enum Cmd {
     Register { path: PathBuf },
     /// Забыть проект (файлы не трогаются)
     Forget { path: PathBuf },
+    /// Редактор: установка, элементы, запуск
+    Editor {
+        #[command(subcommand)]
+        command: EditorCmd,
+    },
     /// Показать или сменить источник движка для новых проектов
     Engine {
         #[arg(long, conflicts_with = "git")]
@@ -65,6 +70,26 @@ enum Cmd {
         #[arg(long)]
         git: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum EditorCmd {
+    /// Собрать редактор (с элементами по умолчанию при первой установке)
+    Install,
+    /// Элементы редактора; [x] — установлен
+    List,
+    /// Добавить элементы и пересобрать
+    Add {
+        #[arg(required = true)]
+        elements: Vec<String>,
+    },
+    /// Убрать элементы и пересобрать
+    Remove {
+        #[arg(required = true)]
+        elements: Vec<String>,
+    },
+    /// Открыть проект в редакторе (по умолчанию — проект в текущей папке)
+    Open { project: Option<PathBuf> },
 }
 
 fn main() -> ExitCode {
@@ -177,6 +202,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{} не было в списке", path.display());
             }
         }
+        Cmd::Editor { command } => editor(command, &catalog, &config)?,
         Cmd::Engine { path, git } => {
             let new = match (path, git) {
                 (Some(path), _) => Some(EngineSource::Path(path.canonicalize()?)),
@@ -191,6 +217,66 @@ fn run(cli: Cli) -> Result<()> {
             println!("движок: {}", config.engine);
         }
     }
+    Ok(())
+}
+
+fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<()> {
+    let install = EditorInstall::locate()?;
+    let current = install.initial_selection(catalog);
+    let mut selection = current.clone();
+    match command {
+        EditorCmd::Install => {}
+        EditorCmd::List => {
+            println!("База (всегда): сцена, иерархия, инспектор, ассеты");
+            for m in &catalog.editor_modules {
+                let mark = if install.is_generated() && current.contains(&m.id) { "[x]" } else { "[ ]" };
+                println!("  {mark} {:<9} {} — {}", m.id, m.name, m.description);
+            }
+            match install.is_built() {
+                true => println!("\nустановлен: {}", install.binary().display()),
+                false => println!("\nне установлен: olvin-hub editor install"),
+            }
+            return Ok(());
+        }
+        EditorCmd::Add { elements } => {
+            for id in elements {
+                if catalog.editor_module(&id).is_none() {
+                    bail!("нет элемента редактора `{id}` (список: olvin-hub editor list)");
+                }
+                if !selection.contains(&id) {
+                    selection.push(id);
+                }
+            }
+        }
+        EditorCmd::Remove { elements } => selection.retain(|id| !elements.contains(id)),
+        EditorCmd::Open { project } => {
+            let project = match project {
+                Some(path) => Some(Project::open(&path)?),
+                None => Project::discover(&std::env::current_dir()?).ok(),
+            };
+            if !install.is_built() {
+                build_editor(&install, catalog, config, &selection)?;
+            }
+            install.launch(project.as_ref().map(Project::root))?;
+            match &project {
+                Some(p) => println!("редактор открыт: {}", p.name()),
+                None => println!("редактор открыт без проекта"),
+            }
+            return Ok(());
+        }
+    }
+    build_editor(&install, catalog, config, &selection)
+}
+
+fn build_editor(install: &EditorInstall, catalog: &Catalog, config: &HubConfig, ids: &[String]) -> Result<()> {
+    install.write(&config.engine, catalog, ids)?;
+    let names: Vec<_> = catalog.editor_modules.iter().filter(|m| ids.contains(&m.id)).map(|m| m.name.as_str()).collect();
+    println!("сборка редактора (элементы: {})…", if names.is_empty() { "только база".into() } else { names.join(", ") });
+    let status = install.build_command().status().context("не удалось запустить cargo")?;
+    if !status.success() {
+        bail!("сборка редактора не удалась ({status})");
+    }
+    println!("готово: {}", install.binary().display());
     Ok(())
 }
 

@@ -22,6 +22,10 @@ crates/
   olvin/              фасад: реэкспорты, DefaultPlugins, prelude, features window/render
 apps/
   sandbox/            стресс-демо: N вращающихся кубов + свободная камера
+editor/               olvin-editor — ставится отдельно через хаб
+  olvin_editor/        ядро редактора: оболочка, рабочие области, докинг, базовые панели
+  olvin_editor_console/  элемент «Консоль»
+  olvin_editor_animator/ элемент «Аниматор»
 hub/                  olvin-hub — отдельный инструмент, не часть движка
   olvin_hub/          ядро: каталог модулей, проекты игр, правка Cargo.toml, конфиг
   olvin_hub_cli/      бинарник `olvin-hub` (clap)
@@ -57,9 +61,30 @@ hub/                  olvin-hub — отдельный инструмент, н�
 - `frustum.rs`: 6 плоскостей из view-proj (Gribb–Hartmann, глубина 0..1), тест сферы.
 - `mesh.wgsl`: instanced-шейдер в пределах WebGL2: один uniform, 7 атрибутов (матрица модели — 4 vec4 + цвет), Ламберт + ambient.
 
+## olvin_scene::file (feature `serde`)
+
+Формат сцен `*.scene.ron`, общий для редактора и игр. `SceneFile { entities, extensions }`, `EntityDesc` (стабильный `id`, `parent`, позиция, поворот в градусах по Эйлеру YXZ, масштаб, `mesh: Shape+цвет`, `camera`). Родители в списке всегда идут раньше детей. `world_matrices[_with]` разворачивает иерархию в мировые матрицы. `extensions` — данные элементов редактора (клипы аниматора).
+
 ## olvin (фасад)
 
-Features `window` и `render` включены по умолчанию. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
+Features `window` и `render` включены по умолчанию. `scene` добавляет `scene_file::{load, spawn}`: загрузка сцены редактора в `World`. Иерархия при загрузке разворачивается в мировые трансформы, иерархии в рантайме пока нет. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
+
+## editor (olvin-editor)
+
+Редактор сцен на egui 0.35 + egui_dock 0.20, стиль Blender + Unity. Ставится отдельно, отдельные элементы подключаются к нему как крейты-плагины. Хаб генерирует крейт установки, в его `main.rs` перечислены плагины. Плагины линкуются статически, без dylib: так быстрее и без проблем с ABI.
+
+- `lib.rs`: `run(plugins)` — первый аргумент командной строки это папка проекта. Реэкспорт egui, egui_dock, glam, olvin_scene, чтобы плагины собирались строго на тех же версиях.
+- `registry.rs`: трейты `Panel` (`ui(ui, &mut EditorState)`, по экземпляру на вкладку) и `EditorPlugin` (`build(&mut Registry)`). `PanelKind { id, title, factory }`, `WorkspaceTemplate { name, build }`, `TabAlloc`.
+- `state.rs`: `EditorState` — сцена, путь, проект, выделение, `preview` (переопределение поз, не сохраняется), лог, `scene_generation`. Undo/redo снимками: изменения коммитятся, когда отпущены мышь и клавиатура, так что перетаскивание = один шаг. Операции: `create/delete/duplicate/reparent` (reparent сохраняет мировую позицию и запрещает циклы), `open/save/save_as/new_scene`, `request_open`.
+- `workspace.rs`: `Tab { kind, id }`, `Workspace { name, dock: DockState<Tab> }`, `Layout` (вкладки рабочих областей, сохраняется в `<config>/olvin-editor/layout.ron` при выходе). Дублирование выдаёт новые id вкладок, у копий независимое состояние панелей.
+- `app.rs`: меню (Файл/Правка/Объект/Окно), вкладки рабочих областей как в браузере (клик, двойной клик — переименовать, СКМ или × — закрыть, ПКМ — дублировать или сдвинуть, «+» — шаблон, пустая или копия), DockArea (перетаскивание, разделение, всплывающие окна, «+» в каждой группе вкладок), горячие клавиши (Ctrl+S/N/Z/Shift+Z/Y/D, Del/X), подтверждение при несохранённых изменениях, статус-бар, заголовок окна.
+- `theme.rs`: серые тона Blender, синее выделение Unity, оранжевый для выбранного во вьюпорте, цвета осей.
+- `panels/viewport.rs`: программная отрисовка средствами egui: трансформ на CPU, клиппинг по near (Sutherland–Hodgman), сортировка по дальней вершине, плоскость бьётся на тайлы 8×8. Орбитальная камера (СКМ/ПКМ вращать, Shift — сдвиг, колесо, F, 1/3/7), сетка, каркас, контур выделения, иконки камер, стрелки перемещения (с учётом родителя), выбор кликом, индикатор осей. На GPU не переведён, потому что eframe 0.35 сидит на wgpu 29, а движок на 30.
+- `panels/hierarchy.rs`: дерево с drag&drop для смены родителя, поиск, контекстное меню, двойной клик — переименование.
+- `panels/inspector.rs`: имя, Transform (XYZ в цветах осей), Mesh Renderer, Камера, добавить или убрать компонент.
+- `panels/assets.rs`: браузер `assets/` проекта: хлебные крошки, плитки, фильтр, создание папки или сцены, двойной клик открывает сцену.
+- `olvin_editor_console`: панель лога с фильтрами по уровню.
+- `olvin_editor_animator`: таймлайн. Клип `{ length, tracks: entity id → ключи }` хранится в `scene.extensions["animator"]`. Есть ключ по кнопке, перетаскивание ключей, ПКМ — удалить, скраб, play/loop, превью через `state.preview`. Добавляет шаблон рабочей области «Анимация».
 
 ## hub (olvin-hub, рабочее имя)
 
@@ -70,13 +95,15 @@ Features `window` и `render` включены по умолчанию. Без �
 - `project.rs`: `Project::create` (шаблон + модули с `default = true`), `open`, `discover` (ищет вверх по папкам), `add` (вместе с requires), `remove` (не даёт удалить то, от чего зависят другие, если нет `force`), `save`. Правки через `toml_edit`, комментарии и форматирование пользователя сохраняются. `olvin` подключается с `default-features = false`, список модулей Olvin = `features`.
 - `config.rs`: `HubConfig` в `<config_dir>/olvin-hub/config.toml` (на Linux учитывает `XDG_CONFIG_HOME`): список проектов и `EngineSource` (`path` к checkout'у или `git`). По умолчанию это папка, из которой собран хаб, если её нет — GitHub.
 - `template.rs`: Cargo.toml (deps всегда -O3), `src/main.rs` (вращающийся куб, Esc выход), README, .gitignore.
-- CLI: `new`, `list`, `add`, `remove [--force]`, `run [--release]`, `projects`, `register`, `forget`, `engine [--path|--git]`.
-- GUI: слева проекты, создание и добавление существующего; справа каталог с галочками по категориям, запуск или остановка `cargo run`, статус-бар.
+- `editor.rs`: `EditorInstall` в `<data_dir>/olvin-hub/editor` — сгенерированный крейт (`Cargo.toml` + `main.rs` с плагинами, бинарник `olvin-editor`). Источник правды — его `Cargo.toml`. Методы: `write`, `build_command` (`cargo build --release`), `launch(project)`. Элементы редактора описаны в каталоге как `[[editor_module]]`.
+- CLI: `new`, `list`, `add`, `remove [--force]`, `run [--release]`, `projects`, `register`, `forget`, `engine [--path|--git]`, `editor install|list|add|remove|open [проект]`.
+- GUI: слева проекты, создание и добавление существующего, раздел «Редактор» (элементы галочками, установить или пересобрать, открыть); справа каталог с галочками по категориям, «Открыть в редакторе», запуск или остановка `cargo run`, статус-бар.
 
 ## Зависимости
 
 wgpu 30, winit 0.30, hecs 0.11, glam 0.34 (проекции в `glam::camera`), bytemuck, pollster, log/env_logger.
 Хаб: toml_edit, toml, serde, clap, dirs, anyhow, eframe 0.35 (0.36+ требует rustc 1.95).
+Редактор: eframe/egui 0.35, egui_dock 0.20 (0.21 требует egui 0.36), ron, dirs.
 
 ## Проверено
 

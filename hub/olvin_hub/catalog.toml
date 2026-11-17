@@ -23,6 +23,16 @@ requires = ["window"]
 default = true
 
 [[module]]
+id = "scenes"
+name = "Сцены из редактора"
+category = "Olvin"
+description = "Загрузка .scene.ron, сохранённых в olvin-editor"
+kind = "olvin"
+feature = "scene"
+requires = ["render"]
+default = true
+
+[[module]]
 id = "physics"
 name = "Физика 3D"
 category = "Геймплей"
@@ -77,3 +87,24 @@ kind = "crate"
 crate = "ron"
 version = "0.12"
 requires = ["serde"]
+
+# --- Элементы редактора -------------------------------------------------
+# Ставятся в установку olvin-editor (olvin-hub editor add <id>).
+# База редактора (сцена, иерархия, инспектор, ассеты) есть всегда.
+
+[[editor_module]]
+id = "console"
+name = "Консоль"
+description = "Лог редактора: сохранения, ошибки, сообщения элементов"
+crate = "olvin_editor_console"
+path = "editor/olvin_editor_console"
+plugin = "olvin_editor_console::ConsolePlugin"
+default = true
+
+[[editor_module]]
+id = "animator"
+name = "Аниматор"
+description = "Таймлайн с ключами Transform, превью во вьюпорте, рабочая область «Анимация»"
+crate = "olvin_editor_animator"
+path = "editor/olvin_editor_animator"
+plugin = "olvin_editor_animator::AnimatorPlugin"

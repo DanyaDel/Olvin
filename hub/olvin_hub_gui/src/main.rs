@@ -6,7 +6,7 @@ use std::process::{Child, Command};
 use std::time::Duration;
 
 use eframe::egui;
-use olvin_hub::{Catalog, HubConfig, Project};
+use olvin_hub::{Catalog, EditorInstall, HubConfig, Project};
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -34,6 +34,12 @@ struct HubApp {
     existing_path: String,
     status: Option<Status>,
     game: Option<Child>,
+    editor: Option<EditorInstall>,
+    /// Editor elements ticked in the UI (catalog order); applied by rebuilding.
+    editor_wanted: Vec<String>,
+    editor_build: Option<Child>,
+    /// After the build finishes, open the editor (with this project).
+    open_after_build: Option<Option<PathBuf>>,
 }
 
 impl HubApp {
@@ -55,7 +61,18 @@ impl HubApp {
             existing_path: String::new(),
             status,
             game: None,
+            editor: None,
+            editor_wanted: Vec::new(),
+            editor_build: None,
+            open_after_build: None,
         };
+        match EditorInstall::locate() {
+            Ok(install) => {
+                app.editor_wanted = install.initial_selection(&app.catalog);
+                app.editor = Some(install);
+            }
+            Err(err) => app.status = Some(Status::Error(format!("{err:#}"))),
+        }
         if !app.config.projects.is_empty() {
             app.select(0);
         }
@@ -168,6 +185,107 @@ impl HubApp {
         }
     }
 
+    fn editor_up_to_date(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.is_built() && e.installed(&self.catalog) == self.editor_wanted)
+    }
+
+    fn build_editor(&mut self) {
+        let Some(install) = &self.editor else { return };
+        let result = install
+            .write(&self.config.engine, &self.catalog, &self.editor_wanted)
+            .and_then(|()| Ok(install.build_command().spawn()?));
+        match result {
+            Ok(child) => {
+                self.editor_build = Some(child);
+                self.status = Some(Status::Info("сборка редактора… (первая занимает несколько минут)".into()));
+            }
+            Err(err) => {
+                self.open_after_build = None;
+                self.status = Some(Status::Error(format!("{err:#}")));
+            }
+        }
+    }
+
+    fn open_editor(&mut self, project: Option<PathBuf>) {
+        if self.editor_build.is_some() {
+            self.open_after_build = Some(project);
+            return;
+        }
+        if !self.editor_up_to_date() {
+            self.open_after_build = Some(project);
+            self.build_editor();
+            return;
+        }
+        let Some(install) = &self.editor else { return };
+        let result = install.launch(project.as_deref());
+        self.report(result, |_| "редактор открыт".into());
+    }
+
+    fn poll_editor_build(&mut self) {
+        if let Some(child) = &mut self.editor_build
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            self.editor_build = None;
+            if status.success() {
+                self.status = Some(Status::Info("редактор собран".into()));
+                if let Some(project) = self.open_after_build.take() {
+                    self.open_editor(project);
+                }
+            } else {
+                self.open_after_build = None;
+                self.status = Some(Status::Error(format!("сборка редактора не удалась ({status}), см. терминал")));
+            }
+        }
+    }
+
+    fn editor_section(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Редактор");
+        let Some(install) = &self.editor else {
+            ui.weak("недоступен");
+            return;
+        };
+        let built = install.is_built();
+        let building = self.editor_build.is_some();
+        ui.horizontal(|ui| {
+            if building {
+                ui.spinner();
+                ui.weak("сборка…");
+            } else if built {
+                ui.weak("установлен");
+            } else {
+                ui.weak("не установлен");
+            }
+        });
+        ui.weak("База: сцена, иерархия, инспектор, ассеты");
+        let mut changed = false;
+        for m in &self.catalog.editor_modules {
+            let mut on = self.editor_wanted.contains(&m.id);
+            if ui.add_enabled(!building, egui::Checkbox::new(&mut on, &m.name)).on_hover_text(&m.description).changed() {
+                changed = true;
+                if on {
+                    self.editor_wanted.push(m.id.clone());
+                } else {
+                    self.editor_wanted.retain(|id| *id != m.id);
+                }
+            }
+        }
+        if changed {
+            let wanted = std::mem::take(&mut self.editor_wanted);
+            self.editor_wanted =
+                self.catalog.editor_modules.iter().filter(|m| wanted.contains(&m.id)).map(|m| m.id.clone()).collect();
+        }
+        let label = if built { "Применить (пересобрать)" } else { "Установить" };
+        let up_to_date = self.editor_up_to_date();
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!building && !up_to_date, egui::Button::new(label)).clicked() {
+                self.build_editor();
+            }
+            if ui.add_enabled(!building, egui::Button::new("Открыть")).on_hover_text("Без проекта").clicked() {
+                self.open_editor(None);
+            }
+        });
+    }
+
     fn projects_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Проекты");
         ui.add_space(4.0);
@@ -209,6 +327,9 @@ impl HubApp {
             self.register_existing();
         }
 
+        ui.separator();
+        self.editor_section(ui);
+
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.small(format!("движок: {}", self.config.engine));
         });
@@ -227,7 +348,12 @@ impl HubApp {
 
         let running = self.game.is_some();
         let (mut run, mut run_release, mut stop, mut forget) = (false, false, false, false);
+        let mut edit = false;
         ui.horizontal(|ui| {
+            edit = ui
+                .add_enabled(self.editor.is_some(), egui::Button::new("✏ Открыть в редакторе"))
+                .on_hover_text("Соберёт редактор, если нужно")
+                .clicked();
             run = ui.add_enabled(!running, egui::Button::new("▶ Запустить")).clicked();
             run_release = ui.add_enabled(!running, egui::Button::new("▶ Release")).clicked();
             if running {
@@ -276,12 +402,17 @@ impl HubApp {
         if forget {
             self.forget_selected();
         }
+        if edit {
+            let root = self.project.as_ref().map(|p| p.root().to_path_buf());
+            self.open_editor(root);
+        }
     }
 }
 
 impl eframe::App for HubApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_game();
+        self.poll_editor_build();
         egui::Panel::bottom("status").show(ui, |ui| match &self.status {
             Some(Status::Info(msg)) => ui.label(msg),
             Some(Status::Error(msg)) => ui.colored_label(ui.visuals().error_fg_color, msg),
@@ -292,7 +423,7 @@ impl eframe::App for HubApp {
             .resizable(true)
             .show(ui, |ui| self.projects_panel(ui));
         egui::CentralPanel::default_margins().show(ui, |ui| self.project_panel(ui));
-        if self.game.is_some() {
+        if self.game.is_some() || self.editor_build.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(300));
         }
     }

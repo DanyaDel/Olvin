@@ -3,9 +3,11 @@
 
 mod catalog;
 mod config;
+mod editor;
 mod project;
 mod template;
 
-pub use catalog::{Catalog, Module, Source};
+pub use catalog::{Catalog, EditorModule, Module, Source};
 pub use config::{ENGINE_GIT, EngineSource, HubConfig};
+pub use editor::EditorInstall;
 pub use project::Project;

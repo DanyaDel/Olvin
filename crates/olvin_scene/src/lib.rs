@@ -1,5 +1,8 @@
 //! Engine-agnostic scene components. Plain data: no GPU, no window, no ECS dependency.
 
+#[cfg(feature = "serde")]
+pub mod file;
+
 use glam::camera::rh::{proj::directx, view};
 use glam::{Mat4, Quat, Vec3};
 

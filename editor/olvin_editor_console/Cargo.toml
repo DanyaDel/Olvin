@@ -1,0 +1,9 @@
+[package]
+name = "olvin_editor_console"
+description = "Olvin editor plugin: console panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true

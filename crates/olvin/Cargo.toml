@@ -9,6 +9,8 @@ license.workspace = true
 default = ["window", "render"]
 window = ["dep:olvin_window"]
 render = ["dep:olvin_render"]
+# Load .scene.ron files saved by olvin-editor.
+scene = ["render", "olvin_scene/serde"]
 
 [dependencies]
 olvin_core.workspace = true

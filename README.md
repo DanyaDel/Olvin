@@ -22,6 +22,18 @@ olvin-hub add physics audio
 olvin-hub run --release
 ```
 
+## Редактор
+
+Редактор сцен ставится отдельно, его элементы (консоль, аниматор и т.д.) докачиваются по одному:
+
+```sh
+olvin-hub editor install          # база: сцена, иерархия, инспектор, ассеты (+ консоль)
+olvin-hub editor add animator     # элемент «Аниматор» и рабочая область «Анимация»
+cd my_game && olvin-hub editor open
+```
+
+Сцена сохраняется в `assets/scenes/main.scene.ron`, игра загружает её при запуске.
+
 Архитектура: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Лицензия

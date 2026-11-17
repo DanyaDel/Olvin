@@ -30,7 +30,7 @@ pub fn files(name: &str) -> [(&'static str, String); 3] {
             "README.md",
             format!(
                 "# {name}\n\nИгра на Olvin. Модули ставятся через `olvin-hub add <модуль>` \
-                 (список: `olvin-hub list`).\n\n```sh\ncargo run --release\n```\n"
+                 (список: `olvin-hub list`), сцена редактируется в `olvin-hub editor open`.\n\n```sh\ncargo run --release\n```\n"
             ),
         ),
     ]
@@ -62,17 +62,24 @@ fn main() {
 }
 
 fn setup(res: &mut Resources) {
-    let cube = res.fetch_mut::<Meshes>().add(MeshData::cube(1.0));
-    let mut world = res.fetch_mut::<World>();
-    world.spawn((
-        Transform::IDENTITY,
-        MeshRenderer { mesh: cube, color: Color::rgb(0.9, 0.5, 0.2) },
-        Spin(1.0),
-    ));
-    world.spawn((
-        Transform::from_xyz(0.0, 1.5, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Camera::default(),
-    ));
+    // The scene saved in olvin-editor, if there is one.
+    match olvin::scene_file::load(res, "assets/scenes/main.scene.ron") {
+        Ok(count) => log::info!("сцена загружена: {count} объектов"),
+        Err(err) => {
+            log::info!("сцены из редактора нет ({err}), показываю куб");
+            let cube = res.fetch_mut::<Meshes>().add(MeshData::cube(1.0));
+            let mut world = res.fetch_mut::<World>();
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer { mesh: cube, color: Color::rgb(0.9, 0.5, 0.2) },
+                Spin(1.0),
+            ));
+            world.spawn((
+                Transform::from_xyz(0.0, 1.5, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+                Camera::default(),
+            ));
+        }
+    }
 }
 
 fn spin(res: &mut Resources) {

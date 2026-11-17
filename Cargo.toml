@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/*", "hub/*"]
+members = ["crates/*", "apps/*", "hub/*", "editor/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,7 +16,7 @@ olvin_window = { path = "crates/olvin_window" }
 olvin_render = { path = "crates/olvin_render" }
 olvin = { path = "crates/olvin" }
 
-glam = { version = "0.34", features = ["bytemuck"] }
+glam = { version = "0.34", features = ["bytemuck", "serde"] }
 hecs = "0.11"
 wgpu = "30"
 winit = "0.30"
@@ -35,6 +35,12 @@ anyhow = "1"
 dirs = "7"
 clap = { version = "4", features = ["derive"] }
 eframe = "0.35"
+egui = "0.35"
+ron = "0.12"
+
+# Editor (olvin-editor): installed separately, extended by plugin crates.
+olvin_editor = { path = "editor/olvin_editor" }
+egui_dock = { version = "0.20", features = ["serde"] }
 
 # Dependencies are always optimized: math/ECS/wgpu in debug are painfully slow,
 # while our own crates stay quick to compile.

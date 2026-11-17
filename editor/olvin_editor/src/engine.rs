@@ -54,6 +54,17 @@ impl EngineGpu {
         self.core.prepare(view, gpu, world, view_proj, settings);
     }
 
+    /// Shadow pass for view `id`; record it before the pass `draw` goes into.
+    pub fn render_shadows(&self, id: u64, source: Source, encoder: &mut eframe::wgpu::CommandEncoder) {
+        let gpu = match source {
+            Source::Edit => &self.edit,
+            Source::Play => &self.play,
+        };
+        if let Some(view) = self.views.get(&id) {
+            self.core.render_shadows(view, gpu, encoder);
+        }
+    }
+
     pub fn draw(&self, id: u64, source: Source, pass: &mut eframe::wgpu::RenderPass<'static>) {
         let gpu = match source {
             Source::Edit => &self.edit,
@@ -92,6 +103,9 @@ impl ScenePreview {
             if let Some(camera) = &e.camera {
                 self.world.spawn((Transform::IDENTITY, GlobalTransform(*m), Camera::from(camera)));
             }
+            if let Some(light) = &e.light {
+                self.world.spawn((Transform::IDENTITY, GlobalTransform(*m), olvin::scene_file::runtime_light(light)));
+            }
         }
     }
 }
@@ -105,6 +119,7 @@ pub fn settings_for(scene: &SceneFile) -> RenderSettings {
     }
     settings
 }
+
 
 /// Prepares engine view `id` for this frame: the running game while playing,
 /// otherwise the edited scene. Returns what to draw, or `None` without a GPU

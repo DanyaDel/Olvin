@@ -52,6 +52,26 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         if let Some(camera) = &e.camera {
             b.add(Camera::from(camera));
         }
+        // A brush with a Rigidbody leaves the static level and becomes its own
+        // body: its convex geometry (local space; the Transform scales it).
+        if let (Some(brush), Some(_)) = (&e.brush, &e.rigidbody) {
+            let input = olvin_csg::BrushInput {
+                id: e.id,
+                shape: brush.shape,
+                op: CsgOp::Add,
+                transform: glam::Mat4::IDENTITY,
+                color: brush.color,
+                vertices: brush.vertices.clone(),
+            };
+            let tri = olvin_csg::TriMesh::from_polygons(&olvin_csg::build(&[input]));
+            let vertices = tri.positions.iter().zip(&tri.normals).map(|(p, n)| Vertex { position: p.to_array(), normal: n.to_array() }).collect();
+            let mesh = meshes.add(MeshData { vertices, indices: tri.indices.clone() });
+            b.add(MeshRenderer { mesh, color: Color(brush.color) });
+            b.add(MeshGeometry { positions: tri.positions, indices: tri.indices.as_chunks::<3>().0.to_vec() });
+            if e.collider.is_none() {
+                b.add(ColliderDesc::new(ColliderShape::Mesh));
+            }
+        }
         if let Some(collider) = &e.collider {
             if collider.shape == ColliderShape::Mesh
                 && let Some(mesh) = &e.mesh
@@ -66,7 +86,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             b.add(c.clone());
         }
         if let Some(c) = &e.light {
-            b.add(c.clone());
+            b.add(c.clone()).add(runtime_light(c));
         }
         if let Some(c) = &e.character_controller {
             b.add(c.clone());
@@ -92,7 +112,11 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
     }
 
     // CSG: one static mesh per face colour, and one mesh collider for the level.
-    let brushes: Vec<_> = scene.csg_brushes().into_iter().filter(|b| scene.active_in_hierarchy(b.id)).collect();
+    let brushes: Vec<_> = scene
+        .csg_brushes()
+        .into_iter()
+        .filter(|b| scene.active_in_hierarchy(b.id) && scene.get(b.id).is_some_and(|e| e.rigidbody.is_none()))
+        .collect();
     let polygons = olvin_csg::build(&brushes);
     let mut by_color: HashMap<[u32; 4], Vec<&olvin_csg::Polygon>> = HashMap::new();
     for p in &polygons {
@@ -120,6 +144,22 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         ));
     }
     spawned
+}
+
+/// The renderer's light for a scene light.
+pub fn runtime_light(d: &LightDesc) -> olvin_render::Light {
+    olvin_render::Light {
+        kind: match d.kind {
+            LightKind::Directional => olvin_render::LightKind::Directional,
+            LightKind::Point => olvin_render::LightKind::Point,
+            LightKind::Spot => olvin_render::LightKind::Spot,
+        },
+        color: d.color,
+        intensity: d.intensity,
+        range: d.range,
+        spot_angle_deg: d.spot_angle,
+        shadows: d.shadows,
+    }
 }
 
 /// Loads a scene file and spawns it.
@@ -212,5 +252,27 @@ mod tests {
         olvin_transform::propagate(&mut world);
         let x = world.get::<&GlobalTransform>(c).unwrap().0.w_axis.x;
         assert_eq!(x, 21.0, "moving the parent moves the child");
+    }
+
+    #[test]
+    fn brushes_with_rigidbody_become_bodies() {
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        let mut floor = EntityDesc::new(1, "Floor");
+        floor.scale = Vec3::new(10.0, 1.0, 10.0);
+        floor.brush = Some(BrushDesc::default());
+        let mut crate_ = EntityDesc::new(2, "Crate");
+        crate_.position = Vec3::new(0.0, 3.0, 0.0);
+        crate_.brush = Some(BrushDesc::default());
+        crate_.rigidbody = Some(RigidbodyDesc::default());
+        spawn(&res, &SceneFile { entities: vec![floor, crate_], ..Default::default() });
+
+        let world = res.fetch::<World>();
+        let crate_ = world.query::<(&Name, &MeshRenderer, &ColliderDesc, &RigidbodyDesc)>().iter().filter(|(n, ..)| n.0 == "Crate").count();
+        assert_eq!(crate_, 1, "the crate brush is its own rendered, colliding body");
+        let level = world.query::<(&Name, &MeshGeometry)>().iter().find(|(n, _)| n.0 == "CSG Level").map(|(_, m)| m.indices.len()).unwrap();
+        assert_eq!(level, 12, "the level is only the floor box (6 quads)");
     }
 }

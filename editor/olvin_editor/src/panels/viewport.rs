@@ -80,6 +80,8 @@ struct Drag {
     origin_screen: Pos2,
     axis_screen: Vec2,
     angle: f32,
+    /// Other selected objects moved along: (id, world start, parent inverse).
+    others: Vec<(u64, Vec3, Mat4)>,
 }
 
 pub struct Viewport {
@@ -162,7 +164,11 @@ impl Panel for Viewport {
             && response.clicked_by(PointerButton::Primary)
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            state.selection = self.pick(pointer, &camera, state, &worlds);
+            let hit = self.pick(pointer, &camera, state, &worlds);
+            match (hit, ui.input(|i| i.modifiers.command)) {
+                (Some(id), true) => state.toggle_selected(id),
+                (hit, _) => state.select(hit),
+            }
         }
 
         // The engine draws meshes (the edited scene, or the game while playing).
@@ -395,11 +401,13 @@ impl Viewport {
         state: &EditorState,
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) {
-        let Some(sel) = state.selection else { return };
-        let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else { return };
-        if let Some(mesh) = &e.mesh {
-            for [a, b] in &primitive(mesh.shape).outline {
-                camera.line(painter, m.transform_point3(*a), m.transform_point3(*b), (1.5, theme::SELECTED));
+        for sel in state.selected_ids() {
+            let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else { continue };
+            let color = if Some(sel) == state.selection { theme::SELECTED } else { theme::SELECTED.gamma_multiply(0.6) };
+            if let Some(mesh) = &e.mesh {
+                for [a, b] in &primitive(mesh.shape).outline {
+                    camera.line(painter, m.transform_point3(*a), m.transform_point3(*b), (1.5, color));
+                }
             }
         }
     }
@@ -481,7 +489,18 @@ impl Viewport {
                 Handle::Scale(i) => tips[i].map(|t| t - o).unwrap_or(vec2(1.0, 0.0)),
                 _ => vec2(1.0, 0.0),
             };
+            let others = state
+                .selected_ids()
+                .into_iter()
+                .filter(|id| *id != sel)
+                .filter_map(|id| {
+                    let start = worlds.get(&id)?.w_axis.truncate();
+                    let parent = state.scene.get(id)?.parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
+                    Some((id, start, parent.inverse()))
+                })
+                .collect();
             self.drag = Some(Drag {
+                others,
                 handle,
                 entity: sel,
                 scale: e.scale,
@@ -835,6 +854,7 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
         p
     };
     let Some(e) = state.scene.get_mut(d.entity) else { return };
+    let mut moved = None;
 
     match d.handle {
         Handle::Axis(i) => {
@@ -848,6 +868,7 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
                 p = snap_world(p, &[i]);
             }
             e.position = to_local.transform_point3(p);
+            moved = Some(p - d.origin);
         }
         Handle::Plane(_) | Handle::Free => {
             let normal = match d.handle {
@@ -865,6 +886,7 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
                 _ => snap_world(d.origin + delta, &[0, 1, 2]),
             };
             e.position = to_local.transform_point3(p);
+            moved = Some(p - d.origin);
         }
         Handle::Rotate(_) | Handle::RotateView => {
             let axis = match d.handle {
@@ -902,6 +924,14 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
         }
     }
     e.position = e.position.map(|v| if v.abs() < 1e-6 { 0.0 } else { v });
+    // Multi-selection moves together (rotate/scale apply to the active object).
+    if let Some(delta) = moved {
+        for (id, start, parent_inv) in &d.others {
+            if let Some(o) = state.scene.get_mut(*id) {
+                o.position = parent_inv.transform_point3(*start + delta);
+            }
+        }
+    }
 }
 
 fn point_in_quad(p: Pos2, q: &[Pos2; 4]) -> bool {

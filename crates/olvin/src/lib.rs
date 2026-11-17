@@ -51,8 +51,8 @@ pub mod prelude {
     pub use olvin_ecs::{Entity, World};
     #[cfg(feature = "render")]
     pub use olvin_render::{
-        Color, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo, RenderPlugin,
-        RenderSettings, RenderStats,
+        Color, Fog, Light, LightKind, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo,
+        RenderPlugin, RenderSettings, RenderStats, Tonemapping,
     };
     pub use olvin_scene::{Camera, Name, Tag, Transform};
     pub use olvin_transform::{GlobalTransform, Parent};

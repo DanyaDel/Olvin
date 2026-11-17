@@ -97,12 +97,15 @@ impl EditorApp {
         if self.state.tool_owns_keys {
             return;
         }
-        if let Some(sel) = self.state.selection {
-            if duplicate {
-                self.state.duplicate(sel);
-            }
-            if delete {
-                self.state.delete(sel);
+        let selected = self.state.selected_ids();
+        if duplicate && !selected.is_empty() {
+            let copies: Vec<u64> = selected.iter().filter_map(|id| self.state.duplicate(*id)).collect();
+            self.state.multi = copies.clone();
+            self.state.selection = copies.last().copied();
+        }
+        if delete {
+            for id in selected {
+                self.state.delete(id);
             }
         }
     }
@@ -309,22 +312,32 @@ impl EditorApp {
     fn play_controls(&mut self, ui: &mut egui::Ui) {
         let playing = self.state.is_playing();
         let paused = self.state.play.as_ref().is_some_and(|p| p.paused);
-        // Right-to-left layout: added in reverse.
-        if ui.add_enabled(playing, egui::Button::new("⏭")).on_hover_text("Step one frame").clicked()
-            && let Some(p) = &mut self.state.play
-        {
-            p.paused = true;
-            p.step_once();
-        }
-        if ui.add_enabled(playing, egui::Button::selectable(paused, "⏸")).on_hover_text("Pause").clicked()
-            && let Some(p) = &mut self.state.play
-        {
-            p.paused = !p.paused;
-        }
-        let play = egui::Button::selectable(playing, RichText::new("▶").color(if playing { theme::ACCENT } else { ui.visuals().text_color() }));
-        if ui.add(play).on_hover_text(if playing { "Stop (Ctrl+P)" } else { "Play (Ctrl+P)" }).clicked() {
-            self.toggle_play();
-        }
+        egui::Frame::new()
+            .fill(theme::SURFACE)
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(4, 2))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let icon = |text: &str, on: bool| {
+                    let color = if on { egui::Color32::WHITE } else { theme::TEXT };
+                    egui::Button::selectable(on, RichText::new(text).size(15.0).color(color)).min_size(egui::vec2(34.0, 24.0))
+                };
+                let play = ui.add(icon("▶", playing)).on_hover_text(if playing { "Stop (Ctrl+P)" } else { "Play (Ctrl+P)" });
+                if play.clicked() {
+                    self.toggle_play();
+                }
+                if ui.add_enabled(playing, icon("⏸", paused)).on_hover_text("Pause").clicked()
+                    && let Some(p) = &mut self.state.play
+                {
+                    p.paused = !p.paused;
+                }
+                if ui.add_enabled(playing, icon("⏭", false)).on_hover_text("Step one frame").clicked()
+                    && let Some(p) = &mut self.state.play
+                {
+                    p.paused = true;
+                    p.step_once();
+                }
+            });
     }
 
     /// Unity tints the whole editor while playing, so edits that will be lost are obvious.
@@ -549,21 +562,31 @@ impl eframe::App for EditorApp {
         self.tint(&ctx);
         self.state.tool_owns_keys = false;
 
-        egui::Panel::top("top").show(ui, |ui| {
+        let bar = egui::Frame::new().fill(theme::BACKDROP).inner_margin(egui::Margin::symmetric(10, 6));
+        egui::Panel::top("top").frame(bar).show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.label(RichText::new("Olvin").strong().color(theme::SELECTED));
-                ui.separator();
+                // Logo: a small accent tile and the name.
+                let (tile, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                ui.painter().rect_filled(tile, 5.0, theme::ACCENT);
+                ui.painter().rect_filled(tile.shrink(5.0), 2.0, theme::SELECTED);
+                ui.label(RichText::new("Olvin").strong().size(15.0));
+                ui.add_space(6.0);
                 self.menus(ui);
-                ui.separator();
+                ui.add_space(10.0);
                 self.workspace_tabs(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.play_controls(ui));
+            });
+            // Play controls centred over the window, like Unity.
+            let center = egui::Rect::from_center_size(ui.max_rect().center(), egui::vec2(124.0, ui.max_rect().height()));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(center).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                self.play_controls(ui)
             });
         });
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let status = egui::Frame::new().fill(theme::BACKDROP).inner_margin(egui::Margin::symmetric(12, 4));
+        egui::Panel::bottom("status").frame(status).show(ui, |ui| self.status_bar(ui));
 
         let active = self.layout.active;
         let mut added = Vec::new();
-        egui::CentralPanel::default_margins().frame(egui::Frame::NONE).show(ui, |ui| {
+        egui::CentralPanel::default_margins().frame(egui::Frame::new().fill(theme::BACKDROP)).show(ui, |ui| {
             let mut viewer = Viewer {
                 registry: &self.registry,
                 panels: &mut self.panels,
@@ -578,7 +601,7 @@ impl eframe::App for EditorApp {
             }
             DockArea::new(dock)
                 .id(Id::new(("olvin-dock", active)))
-                .style(egui_dock::Style::from_egui(ui.style()))
+                .style(theme::dock_style(ui.style()))
                 .show_add_buttons(true)
                 .show_add_popup(true)
                 .show_leaf_collapse_buttons(false)

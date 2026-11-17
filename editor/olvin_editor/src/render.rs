@@ -168,10 +168,15 @@ impl egui_wgpu::CallbackTrait for Frame {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen: &egui_wgpu::ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        // The engine view was prepared during UI; its shadow map renders here,
+        // before egui's pass samples it.
+        if let Some(source) = self.engine {
+            res.engine.render_shadows(self.viewport, source, encoder);
+        }
         let layout = &res.layout;
         let target = res.targets.entry(self.viewport).or_insert_with(|| {
             let uniforms = device.create_buffer(&wgpu::BufferDescriptor {

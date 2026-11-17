@@ -112,7 +112,10 @@ pub struct EditorState {
     pub scene: SceneFile,
     pub scene_path: Option<PathBuf>,
     pub project: Option<PathBuf>,
+    /// The active object (gizmo, inspector).
     pub selection: Option<u64>,
+    /// All selected objects when several are (always includes `selection`).
+    pub multi: Vec<u64>,
     /// Local-pose overrides for previews (animation scrubbing). Never saved.
     pub preview: HashMap<u64, Transform>,
     pub log: Vec<LogLine>,
@@ -151,6 +154,7 @@ impl EditorState {
             scene_path: None,
             project,
             selection: None,
+            multi: Vec::new(),
             preview: HashMap::new(),
             log: Vec::new(),
             scene_generation: 0,
@@ -273,6 +277,50 @@ impl EditorState {
         self.undo.clear();
         self.redo.clear();
         self.scene_generation += 1;
+    }
+
+    // --- selection ---------------------------------------------------------
+
+    /// Everything selected; code that only sets `selection` selects one object.
+    pub fn selected_ids(&self) -> Vec<u64> {
+        match self.selection {
+            None => Vec::new(),
+            Some(p) if self.multi.contains(&p) => self.multi.clone(),
+            Some(p) => vec![p],
+        }
+    }
+
+    pub fn is_selected(&self, id: u64) -> bool {
+        self.selection == Some(id) || (self.selection.is_some_and(|p| self.multi.contains(&p)) && self.multi.contains(&id))
+    }
+
+    pub fn select(&mut self, id: Option<u64>) {
+        self.selection = id;
+        self.multi.clear();
+    }
+
+    /// Ctrl+click: add or remove one object.
+    pub fn toggle_selected(&mut self, id: u64) {
+        let mut ids = self.selected_ids();
+        if let Some(i) = ids.iter().position(|x| *x == id) {
+            ids.remove(i);
+            self.selection = ids.last().copied();
+        } else {
+            ids.push(id);
+            self.selection = Some(id);
+        }
+        self.multi = ids;
+    }
+
+    /// Shift+click: everything between the active object and `id`, in `order`.
+    pub fn select_range(&mut self, id: u64, order: &[u64]) {
+        let Some(anchor) = self.selection else { return self.select(Some(id)) };
+        let (Some(a), Some(b)) = (order.iter().position(|x| *x == anchor), order.iter().position(|x| *x == id)) else {
+            return self.select(Some(id));
+        };
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.multi = order[lo..=hi].to_vec();
+        self.selection = Some(id);
     }
 
     // --- play mode -------------------------------------------------------
@@ -417,6 +465,7 @@ impl EditorState {
         if self.selection.is_some_and(|s| doomed.contains(&s)) {
             self.selection = None;
         }
+        self.multi.retain(|id| !doomed.contains(id));
     }
 
     /// Copies an entity with its children; returns the copy's id.
@@ -606,5 +655,21 @@ mod tests {
         assert_eq!(s.scene.get(id).unwrap().position.x, 0.0);
         s.undo();
         assert!(s.scene.get(id).is_none(), "undo continues from before Play");
+    }
+
+    #[test]
+    fn multi_selection_toggle_and_range() {
+        let mut s = state();
+        let ids: Vec<u64> = (0..4).map(|_| s.create(NewEntity::Empty, None)).collect();
+        s.select(Some(ids[0]));
+        s.toggle_selected(ids[2]);
+        assert_eq!(s.selected_ids(), vec![ids[0], ids[2]]);
+        s.toggle_selected(ids[0]);
+        assert_eq!(s.selected_ids(), vec![ids[2]]);
+        s.select_range(ids[0], &ids);
+        assert_eq!(s.selected_ids(), ids[0..=2].to_vec());
+        // Plain assignment (used by tools) still means one object.
+        s.selection = Some(ids[3]);
+        assert_eq!(s.selected_ids(), vec![ids[3]]);
     }
 }

@@ -232,6 +232,9 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
                 let mark = if install.is_generated() && current.contains(&m.id) { "[x]" } else { "[ ]" };
                 println!("  {mark} {:<9} {} — {}", m.id, m.name, m.description);
             }
+            if install.is_stale(&config.engine) {
+                println!("\n⚠ движок изменился после сборки: olvin-hub editor install");
+            }
             match install.is_built() {
                 true => println!("\nустановлен: {}", install.binary().display()),
                 false => println!("\nне установлен: olvin-hub editor install"),
@@ -256,6 +259,9 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
             };
             if !install.is_built() {
                 build_editor(&install, catalog, config, &selection)?;
+            } else if install.is_stale(&config.engine) {
+                println!("движок изменился после сборки редактора — пересобираю");
+                build_editor(&install, catalog, config, &selection)?;
             }
             install.launch(project.as_ref().map(Project::root))?;
             match &project {
@@ -276,6 +282,7 @@ fn build_editor(install: &EditorInstall, catalog: &Catalog, config: &HubConfig, 
     if !status.success() {
         bail!("сборка редактора не удалась ({status})");
     }
+    install.mark_built(&config.engine);
     println!("готово: {}", install.binary().display());
     Ok(())
 }

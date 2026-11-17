@@ -107,6 +107,27 @@ impl EditorInstall {
         cmd
     }
 
+    /// Records which engine sources this build was made from.
+    pub fn mark_built(&self, engine: &EngineSource) {
+        if let Some(stamp) = engine_fingerprint(engine) {
+            let _ = std::fs::write(self.root.join(STAMP), stamp.to_string());
+        }
+    }
+
+    /// The engine changed since the editor was built (local engine checkouts
+    /// only; git sources are pinned by Cargo.lock).
+    pub fn is_stale(&self, engine: &EngineSource) -> bool {
+        if !self.is_built() {
+            return false;
+        }
+        let Some(current) = engine_fingerprint(engine) else { return false };
+        let built = std::fs::read_to_string(self.root.join(STAMP))
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .or_else(|| std::fs::metadata(self.binary()).ok().and_then(|m| mtime(&m)));
+        built.is_none_or(|b| current > b)
+    }
+
     pub fn launch(&self, project: Option<&Path>) -> Result<Child> {
         if !self.is_built() {
             bail!("редактор не собран: olvin-hub editor install");
@@ -117,6 +138,41 @@ impl EditorInstall {
         }
         cmd.spawn().context("не удалось запустить olvin-editor")
     }
+}
+
+const STAMP: &str = ".engine-stamp";
+
+/// Newest modification time (seconds) of the engine's sources: Rust, manifests, shaders.
+pub fn engine_fingerprint(engine: &EngineSource) -> Option<u64> {
+    let EngineSource::Path(root) = engine else { return None };
+    fn walk(dir: &Path, newest: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                if path.file_name().is_some_and(|n| n != "target" && !n.to_string_lossy().starts_with('.')) {
+                    walk(&path, newest);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs" || e == "toml" || e == "wgsl")
+                && let Some(t) = mtime(&meta)
+            {
+                *newest = (*newest).max(t);
+            }
+        }
+    }
+    let mut newest = 0;
+    for dir in ["crates", "editor"] {
+        walk(&root.join(dir), &mut newest);
+    }
+    if let Some(t) = std::fs::metadata(root.join("Cargo.lock")).ok().and_then(|m| mtime(&m)) {
+        newest = newest.max(t);
+    }
+    (newest > 0).then_some(newest)
+}
+
+fn mtime(meta: &std::fs::Metadata) -> Option<u64> {
+    meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
 const CARGO_TOML: &str = r#"# Сгенерировано olvin-hub: установка редактора Olvin.
@@ -163,6 +219,11 @@ mod tests {
         assert!(install.installed(&catalog).is_empty());
         assert!(std::fs::read_to_string(dir.join("src/main.rs")).unwrap().contains("vec![\n    ]"));
         assert!(install.write(&engine, &catalog, &["nope".into()]).is_err());
+        // Stale detection: no binary yet means "not built", not "stale".
+        assert!(!install.is_stale(&engine));
+        if let EngineSource::Path(_) = engine {
+            assert!(engine_fingerprint(&engine).is_some());
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

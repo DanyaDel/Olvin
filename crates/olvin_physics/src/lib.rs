@@ -161,7 +161,7 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
         let handle = physics.world.insert_body(builder);
 
         let shape = collider.clone().unwrap_or_else(|| ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }));
-        match collider_builder(&shape, transform.scale, mesh.as_ref()) {
+        match collider_builder(&shape, transform.scale, mesh.as_ref(), kind == Kind::Dynamic) {
             Some(mut c) => {
                 if let Some(r) = &rigidbody {
                     c = c.mass(r.mass);
@@ -175,7 +175,9 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
 }
 
 /// Rapier has no scale: bake the object's scale into the shape.
-fn collider_builder(desc: &ColliderDesc, scale: Vec3, mesh: Option<&MeshGeometry>) -> Option<rp::ColliderBuilder> {
+/// Moving bodies get the convex hull of mesh colliders: Rapier (like PhysX)
+/// doesn't simulate concave triangle meshes as dynamic bodies.
+fn collider_builder(desc: &ColliderDesc, scale: Vec3, mesh: Option<&MeshGeometry>, dynamic: bool) -> Option<rp::ColliderBuilder> {
     let s = scale.abs();
     let builder = match &desc.shape {
         ColliderShape::Box { size } => {
@@ -190,8 +192,12 @@ fn collider_builder(desc: &ColliderDesc, scale: Vec3, mesh: Option<&MeshGeometry
         }
         ColliderShape::Mesh => {
             let mesh = mesh?;
-            let vertices = mesh.positions.iter().map(|p| v(*p * scale)).collect();
-            rp::ColliderBuilder::trimesh(vertices, mesh.indices.clone()).ok()?
+            let vertices: Vec<rp::Vector> = mesh.positions.iter().map(|p| v(*p * scale)).collect();
+            if dynamic {
+                rp::ColliderBuilder::convex_hull(&vertices)?
+            } else {
+                rp::ColliderBuilder::trimesh(vertices, mesh.indices.clone()).ok()?
+            }
         }
     };
     Some(
@@ -284,5 +290,32 @@ mod tests {
         // The trigger box doesn't stop it; the floor does.
         let ghost_y = world.get::<&Transform>(ghost).unwrap().translation.y;
         assert!((ghost_y - 0.25).abs() < 0.05, "trigger must not collide, got {ghost_y}");
+    }
+
+    #[test]
+    fn dynamic_mesh_collider_uses_convex_hull() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let cube = {
+            let mut world = res.fetch_mut::<World>();
+            world.spawn((
+                Transform::from_xyz(0.0, -0.5, 0.0).with_scale(Vec3::new(20.0, 1.0, 20.0)),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            // A unit cube given as triangles, scaled 2x: rests with its centre at y = 1.
+            let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) * 0.5;
+            let positions = vec![c(-1., -1., -1.), c(1., -1., -1.), c(1., 1., -1.), c(-1., 1., -1.), c(-1., -1., 1.), c(1., -1., 1.), c(1., 1., 1.), c(-1., 1., 1.)];
+            let indices = vec![[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1], [3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]];
+            world.spawn((
+                Transform::from_xyz(0.0, 4.0, 0.0).with_scale(Vec3::splat(2.0)),
+                ColliderDesc::new(ColliderShape::Mesh),
+                MeshGeometry { positions, indices },
+                RigidbodyDesc::default(),
+            ))
+        };
+        for _ in 0..240 {
+            step(&res, FIXED_DT);
+        }
+        let y = res.fetch::<World>().get::<&Transform>(cube).unwrap().translation.y;
+        assert!((y - 1.0).abs() < 0.05, "dynamic mesh body should fall and rest at y = 1, got {y}");
     }
 }

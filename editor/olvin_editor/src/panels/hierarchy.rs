@@ -73,6 +73,8 @@ pub(crate) fn create_menu(ui: &mut egui::Ui, items: &[CreateItem]) -> Option<Cre
 
 enum Action {
     Select(Option<u64>),
+    Toggle(u64),
+    Range(u64),
     Create(Creation, Option<u64>),
     MoveSibling(u64, i32),
     Duplicate(u64),
@@ -133,7 +135,12 @@ impl Panel for Hierarchy {
 
         for action in actions {
             match action {
-                Action::Select(id) => state.selection = id,
+                Action::Select(id) => state.select(id),
+                Action::Toggle(id) => state.toggle_selected(id),
+                Action::Range(id) => {
+                    let order: Vec<u64> = state.scene.hierarchy_order().into_iter().map(|i| state.scene.entities[i].id).collect();
+                    state.select_range(id, &order);
+                }
                 Action::Create(creation, parent) => {
                     creation.apply(state, parent);
                 }
@@ -209,13 +216,29 @@ impl Hierarchy {
         } else {
             "○"
         };
-        let selected = state.selection == Some(id);
-        let drag = ui.dnd_drag_source(Id::new(("hier-drag", id)), id, |ui| {
-            ui.selectable_label(selected, format!("{icon} {}", entity.name))
-        });
-        let label = drag.inner;
+        let selected = state.is_selected(id);
+        let text = if state.selection == Some(id) && state.selected_ids().len() > 1 {
+            egui::RichText::new(format!("{icon} {}", entity.name)).strong()
+        } else {
+            egui::RichText::new(format!("{icon} {}", entity.name))
+        };
+        // One widget for clicks and drags: a drag source wrapping the label
+        // would swallow the clicks.
+        let label = ui.add(egui::Button::selectable(selected, text).sense(Sense::click_and_drag()));
+        if label.dragged() {
+            label.dnd_set_drag_payload(id);
+            if let Some(p) = ui.ctx().pointer_interact_pos() {
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("hier-drag")));
+                painter.text(p + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, &entity.name, egui::FontId::proportional(13.0), theme::SELECTED);
+            }
+        }
         if label.clicked() {
-            actions.push(Action::Select(Some(id)));
+            let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+            actions.push(match (ctrl, shift) {
+                (true, _) => Action::Toggle(id),
+                (_, true) => Action::Range(id),
+                _ => Action::Select(Some(id)),
+            });
         }
         if label.double_clicked() {
             actions.push(Action::StartRename(id));
@@ -243,7 +266,7 @@ impl Hierarchy {
             }
         });
 
-        let response = drag.response;
+        let response = label;
         if let Some(dragged) = response.dnd_release_payload::<u64>()
             && *dragged != id
         {

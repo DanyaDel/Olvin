@@ -133,6 +133,8 @@ struct Hub {
     build: Option<Build>,
     build_log: Vec<String>,
     open_after_build: Option<Option<PathBuf>>,
+    /// Cached "engine changed since the editor build" check (it walks the sources).
+    stale: Option<(std::time::Instant, bool)>,
 }
 
 impl Hub {
@@ -160,6 +162,7 @@ impl Hub {
             build: None,
             build_log: Vec::new(),
             open_after_build: None,
+            stale: None,
         };
         hub.refresh();
         hub
@@ -294,7 +297,8 @@ impl Hub {
             return;
         }
         let Some(install) = &self.editor else { return };
-        if !install.is_built() {
+        if !install.is_built() || install.is_stale(&self.config.engine) {
+            // Never open an editor older than the engine: rebuild first.
             let wanted = install.initial_selection(&self.catalog);
             self.open_after_build = Some(project);
             self.start_build(&wanted);
@@ -324,6 +328,10 @@ impl Hub {
             if let Ok(Some(status)) = build.child.try_wait() {
                 self.build = None;
                 if status.success() {
+                    if let Some(install) = &self.editor {
+                        install.mark_built(&self.config.engine);
+                    }
+                    self.stale = None;
                     self.status = Some(Status::Info("редактор собран".into()));
                     if let Some(project) = self.open_after_build.take() {
                         self.open_editor(project);
@@ -368,8 +376,54 @@ impl Hub {
         });
     }
 
+    fn editor_stale(&mut self) -> bool {
+        if self.build.is_some() {
+            return false;
+        }
+        if let Some((at, stale)) = self.stale
+            && at.elapsed() < Duration::from_secs(3)
+        {
+            return stale;
+        }
+        let stale = self.editor.as_ref().is_some_and(|e| e.is_stale(&self.config.engine));
+        self.stale = Some((std::time::Instant::now(), stale));
+        stale
+    }
+
+    /// Offers a rebuild when the engine changed after the editor was built.
+    fn stale_banner(&mut self, ui: &mut egui::Ui) {
+        if !self.editor_stale() {
+            return;
+        }
+        let mut rebuild = false;
+        egui::Frame::new()
+            .fill(ORANGE.gamma_multiply(0.15))
+            .stroke(Stroke::new(1.0, ORANGE.gamma_multiply(0.6)))
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("⟳").size(18.0).color(ORANGE));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Движок обновился после сборки редактора").strong());
+                        ui.weak("Пересобери, чтобы редактор получил новые возможности. При открытии проекта это сделается само.");
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        rebuild = ui.add(accent_button("Пересобрать")).clicked();
+                    });
+                });
+            });
+        ui.add_space(8.0);
+        if rebuild {
+            let wanted = self.editor.as_ref().map(|e| e.initial_selection(&self.catalog)).unwrap_or_default();
+            self.start_build(&wanted);
+        }
+    }
+
     fn projects_page(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
+        self.stale_banner(ui);
         ui.horizontal(|ui| {
             ui.heading(RichText::new("Проекты").size(24.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -433,6 +487,7 @@ impl Hub {
 
     fn editor_page(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
+        self.stale_banner(ui);
         ui.heading(RichText::new("Редактор").size(24.0));
         ui.weak("Редактор ставится отдельно; его элементы собираются вместе с ним.");
         ui.add_space(12.0);

@@ -175,6 +175,9 @@ impl Renderer {
         };
         let target = frame.texture.create_view(&Default::default());
         let mut encoder = self.core.device.create_command_encoder(&Default::default());
+        if stats.draw_calls > 0 {
+            self.core.render_shadows(&self.view, &self.gpu, &mut encoder);
+        }
         {
             let mut pass = begin_pass(&mut encoder, &target, &self.depth, settings);
             if stats.draw_calls > 0 {

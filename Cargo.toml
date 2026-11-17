@@ -36,13 +36,13 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 dirs = "7"
 clap = { version = "4", features = ["derive"] }
-eframe = "0.35"
-egui = "0.35"
+eframe = "0.36"
+egui = "0.36"
 ron = "0.12"
 
 # Editor (olvin-editor): installed separately, extended by plugin crates.
 olvin_editor = { path = "editor/olvin_editor" }
-egui_dock = { version = "0.20", features = ["serde"] }
+egui_dock = { version = "0.21", features = ["serde"] }
 
 # Dependencies are always optimized: math/ECS/wgpu in debug are painfully slow,
 # while our own crates stay quick to compile.

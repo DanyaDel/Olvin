@@ -4,6 +4,7 @@ description = "olvin-hub core: module catalog, game projects, Cargo.toml editing
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 toml_edit.workspace = true

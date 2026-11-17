@@ -347,7 +347,7 @@ impl Viewport {
                 let normal_matrix = glam::Mat3::from_mat4(*m).inverse().transpose();
                 let color = linear_color(mesh.color);
                 let f = if state.selection == Some(e.id) { flags::SELECTED } else { 0 };
-                for t in prim.indices.chunks_exact(3) {
+                for t in prim.indices.as_chunks::<3>().0 {
                     let idx = [t[0], t[1], t[2]].map(|i| i as usize);
                     let pos = idx.map(|i| m.transform_point3(prim.positions[i]));
                     let nrm = idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());

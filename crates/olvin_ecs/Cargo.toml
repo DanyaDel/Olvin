@@ -4,6 +4,7 @@ description = "Olvin ECS facade (hecs underneath)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 olvin_core.workspace = true

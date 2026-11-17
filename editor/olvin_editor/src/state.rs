@@ -395,12 +395,7 @@ impl EditorState {
         if subtree.is_empty() {
             return None;
         }
-        let mut next = self.next_id();
-        let mut remap = HashMap::new();
-        for e in &subtree {
-            remap.insert(e.id, next);
-            next += 1;
-        }
+        let remap: HashMap<u64, u64> = subtree.iter().map(|e| e.id).zip(self.next_id()..).collect();
         for mut e in subtree {
             if e.id == id {
                 e.name = format!("{} (copy)", e.name);

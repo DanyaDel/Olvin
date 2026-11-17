@@ -118,7 +118,7 @@ impl Geometry {
     /// Nearest triangle hit along the ray.
     pub fn raycast(&self, ray: &Ray) -> Option<Hit> {
         let mut best: Option<Hit> = None;
-        for (i, tri) in self.vertices.chunks_exact(3).enumerate() {
+        for (i, tri) in self.vertices.as_chunks::<3>().0.iter().enumerate() {
             let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
             if let Some(t) = ray.triangle(a, b, c)
                 && best.as_ref().is_none_or(|h| t < h.distance)

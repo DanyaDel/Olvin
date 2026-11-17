@@ -4,6 +4,7 @@ description = "Olvin sandbox: 10k instanced cubes, fly camera"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]

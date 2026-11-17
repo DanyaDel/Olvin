@@ -187,7 +187,7 @@ impl Hub {
                 },
             })
             .collect();
-        self.rows.sort_by(|a, b| b.modified.cmp(&a.modified));
+        self.rows.sort_by_key(|r| std::cmp::Reverse(r.modified));
     }
 
     fn report<T>(&mut self, result: anyhow::Result<T>, ok: impl FnOnce(T) -> String) {
@@ -874,7 +874,8 @@ mod tests {
                 events: vec![egui::Event::PointerMoved(pointer)],
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| hub.draw(ui));
+            // Headless: nobody uploads textures, so drop the deltas explicitly.
+            ctx.run_ui(input, |ui| hub.draw(ui)).textures_delta.clear();
         }
         assert!(hub.modal.is_some(), "dialog closed by itself");
         ctx.memory(|m| m.area_rect(egui::Id::new(id))).expect("dialog was shown")

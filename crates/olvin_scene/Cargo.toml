@@ -4,6 +4,7 @@ description = "Olvin scene components: Transform, Camera"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [features]
 # Scene files (.scene.ron) shared by the editor and games.

@@ -4,6 +4,7 @@ description = "Olvin: modular game engine. Facade crate, every subsystem is an o
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [features]
 default = ["window", "render"]

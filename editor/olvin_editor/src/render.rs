@@ -73,7 +73,7 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
     let pipeline = |label: &str,
                     vs: &str,
                     fs: &str,
-                    buffers: &[wgpu::VertexBufferLayout],
+                    buffers: &[Option<wgpu::VertexBufferLayout>],
                     topology: wgpu::PrimitiveTopology,
                     depth_write: bool,
                     depth_compare: wgpu::CompareFunction,
@@ -120,10 +120,10 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
     use wgpu::CompareFunction::{Always, Less, LessEqual};
     use wgpu::PrimitiveTopology::{LineList, TriangleList};
     let resources = Resources {
-        mesh: pipeline("olvin mesh", "vs_mesh", "fs_mesh", &[mesh_layout], TriangleList, true, Less, None),
+        mesh: pipeline("olvin mesh", "vs_mesh", "fs_mesh", &[Some(mesh_layout)], TriangleList, true, Less, None),
         grid: pipeline("olvin grid", "vs_grid", "fs_grid", &[], TriangleList, false, LessEqual, premultiplied),
-        lines: pipeline("olvin lines", "vs_line", "fs_line", std::slice::from_ref(&line_layout), LineList, false, LessEqual, premultiplied),
-        overlay: pipeline("olvin overlay", "vs_line", "fs_line", &[line_layout], LineList, false, Always, premultiplied),
+        lines: pipeline("olvin lines", "vs_line", "fs_line", &[Some(line_layout.clone())], LineList, false, LessEqual, premultiplied),
+        overlay: pipeline("olvin overlay", "vs_line", "fs_line", &[Some(line_layout)], LineList, false, Always, premultiplied),
         layout,
         targets: HashMap::new(),
     };

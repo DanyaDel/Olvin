@@ -25,9 +25,19 @@ impl Creation {
 /// Built-in objects, then element items grouped by their "Group/Item" path.
 pub(crate) fn create_menu(ui: &mut egui::Ui, items: &[CreateItem]) -> Option<Creation> {
     let mut chosen = None;
-    for kind in NewEntity::ALL {
-        if ui.button(kind.label()).clicked() {
-            chosen = Some(Creation::Builtin(kind));
+    for (submenu, kinds) in NewEntity::MENU {
+        let mut items = |ui: &mut egui::Ui| {
+            for kind in kinds {
+                if ui.button(kind.label()).clicked() {
+                    chosen = Some(Creation::Builtin(*kind));
+                }
+            }
+        };
+        match submenu {
+            Some(name) => {
+                ui.menu_button(name, items);
+            }
+            None => items(ui),
         }
     }
     let mut groups: Vec<&str> = Vec::new();

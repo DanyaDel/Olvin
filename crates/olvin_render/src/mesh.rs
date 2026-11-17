@@ -50,6 +50,18 @@ impl MeshData {
         Self { vertices, indices: vec![0, 1, 2, 0, 2, 3] }
     }
 
+    /// Unity-style built-in mesh (shared with the editor).
+    pub fn primitive(shape: olvin_scene::primitives::Shape) -> Self {
+        let p = olvin_scene::primitives::Primitive::new(shape);
+        let vertices = p
+            .positions
+            .iter()
+            .zip(&p.normals)
+            .map(|(pos, n)| Vertex { position: pos.to_array(), normal: n.to_array() })
+            .collect();
+        Self { vertices, indices: p.indices }
+    }
+
     /// Local-space bounding sphere (center, radius), used for frustum culling.
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         if self.vertices.is_empty() {

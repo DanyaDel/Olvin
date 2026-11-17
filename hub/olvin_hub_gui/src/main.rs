@@ -141,6 +141,12 @@ impl Hub {
             Ok(c) => (c, None),
             Err(e) => (HubConfig::default(), Some(Status::Error(format!("{e:#}")))),
         };
+        let mut hub = Self::new(config, EditorInstall::locate().ok());
+        hub.status = status;
+        hub
+    }
+
+    fn new(config: HubConfig, editor: Option<EditorInstall>) -> Self {
         let mut hub = Self {
             catalog: Catalog::builtin(),
             config,
@@ -148,9 +154,9 @@ impl Hub {
             modal: None,
             search: String::new(),
             rows: Vec::new(),
-            status,
+            status: None,
             game: None,
-            editor: EditorInstall::locate().ok(),
+            editor,
             build: None,
             build_log: Vec::new(),
             open_after_build: None,
@@ -529,7 +535,11 @@ impl Hub {
                                 }
                             }
                         });
-                        ui.separator();
+                        // Not `ui.separator()`: in a horizontal layout it takes the
+                        // available height, which in a modal comes from the previous
+                        // frame's size, and the dialog grows every frame.
+                        let (line, _) = ui.allocate_exact_size(vec2(9.0, 3.0 * 46.0), Sense::hover());
+                        ui.painter().vline(line.center().x, line.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
                         ui.vertical(|ui| {
                             let t = &TEMPLATES[*template];
                             ui.label(RichText::new(t.name).size(18.0).strong());
@@ -556,7 +566,7 @@ impl Hub {
                         });
                     });
                     ui.add_space(12.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    buttons_row(ui, |ui| {
                         create = ui.add_enabled(!name.trim().is_empty(), accent_button("Создать проект")).clicked();
                         if ui.button("Отмена").clicked() {
                             keep = false;
@@ -578,7 +588,7 @@ impl Hub {
                     ui.label("Папка с Cargo.toml игры на Olvin:");
                     ui.add(egui::TextEdit::singleline(path).hint_text("/home/…/my_game").desired_width(f32::INFINITY));
                     ui.add_space(8.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    buttons_row(ui, |ui| {
                         add = ui.add_enabled(!path.trim().is_empty(), accent_button("Добавить")).clicked();
                         if ui.button("Отмена").clicked() {
                             keep = false;
@@ -622,7 +632,7 @@ impl Hub {
                         }
                     });
                     ui.add_space(8.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    buttons_row(ui, |ui| {
                         if ui.add(accent_button("Готово")).clicked() {
                             keep = false;
                         }
@@ -668,7 +678,7 @@ impl Hub {
                         .map(|m| m.id.clone())
                         .collect();
                     ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    buttons_row(ui, |ui| {
                         let same = self.editor_up_to_date(wanted);
                         apply = ui.add_enabled(!same, accent_button(if same { "Без изменений" } else { "Установить" })).clicked();
                         if ui.button("Отмена").clicked() {
@@ -748,7 +758,7 @@ fn project_row(ui: &mut egui::Ui, row: &Row, running: bool) -> Option<RowAction>
                     ui.weak(row.modified.map(ago).unwrap_or_else(|| "—".into()));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button(RichText::new("⋯").size(18.0), |ui| {
+                    ui.menu_button(RichText::new("•••").strong(), |ui| {
                         let items = [
                             ("✏ Открыть в редакторе", RowAction::Open, true),
                             ("▶ Запустить", RowAction::Run, !running),
@@ -787,6 +797,14 @@ fn project_row(ui: &mut egui::Ui, row: &Row, running: bool) -> Option<RowAction>
     action
 }
 
+/// Dialog buttons, right-aligned. The row is bounded to one line: a bare
+/// right-to-left layout in a modal would claim the whole screen height.
+fn buttons_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
+    });
+}
+
 fn chip(ui: &mut egui::Ui, text: &str, color: Color32) {
     egui::Frame::new()
         .stroke(Stroke::new(1.0, color.gamma_multiply(0.7)))
@@ -813,6 +831,12 @@ fn ago(t: SystemTime) -> String {
 
 impl eframe::App for Hub {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl Hub {
+    fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll(&ctx);
         egui::Panel::left("nav")
@@ -828,5 +852,45 @@ impl eframe::App for Hub {
                 Page::Editor => self.editor_page(ui),
             });
         self.modals(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs a few frames headless and returns the dialog's rect.
+    fn modal_rect(modal: Modal, id: &str) -> egui::Rect {
+        let ctx = egui::Context::default();
+        style(&ctx);
+        let mut hub = Hub::new(HubConfig::default(), None);
+        hub.modal = Some(modal);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(955.0, 999.0));
+        for frame in 0..40 {
+            // Real sessions repaint on every mouse move; sizes settle over frames.
+            let pointer = egui::pos2(300.0 + frame as f32 * 7.0, 400.0);
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| hub.draw(ui));
+        }
+        assert!(hub.modal.is_some(), "dialog closed by itself");
+        ctx.memory(|m| m.area_rect(egui::Id::new(id))).expect("dialog was shown")
+    }
+
+    #[test]
+    fn dialogs_fit_their_content() {
+        let cases = [
+            (Modal::NewProject { template: 0, name: String::new(), location: "/tmp".into() }, "new-project"),
+            (Modal::AddExisting { path: String::new() }, "add-existing"),
+            (Modal::EditorElements { wanted: Vec::new() }, "editor-elements"),
+        ];
+        for (modal, id) in cases {
+            let rect = modal_rect(modal, id);
+            assert!(rect.height() < 600.0, "{id}: {rect:?}");
+            assert!(rect.top() > 0.0 && rect.bottom() < 999.0, "{id} off screen: {rect:?}");
+        }
     }
 }

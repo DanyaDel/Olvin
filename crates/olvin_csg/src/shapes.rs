@@ -6,9 +6,10 @@ use std::f32::consts::TAU;
 
 use glam::{Vec3, vec3};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BrushShape {
+    #[default]
     Box,
     /// Ramp: full bottom and back (-Z) faces, slope down towards +Z.
     Wedge,
@@ -112,4 +113,78 @@ fn pyramid(sides: u32) -> Piece {
         faces.push(vec![base[i], apex, base[j]]);
     }
     faces
+}
+
+/// Unique corners of a single-piece shape: the starting point for polygon
+/// editing. Multi-piece shapes (stairs) aren't convex and return `None`.
+pub fn shape_vertices(shape: BrushShape) -> Option<Vec<Vec3>> {
+    let mut pieces = pieces(shape);
+    if pieces.len() != 1 {
+        return None;
+    }
+    let mut out: Vec<Vec3> = Vec::new();
+    for v in pieces.remove(0).into_iter().flatten() {
+        if !out.iter().any(|o| o.abs_diff_eq(v, 1e-5)) {
+            out.push(v);
+        }
+    }
+    Some(out)
+}
+
+/// Convex hull of a point cloud as outward faces (counter-clockwise loops).
+/// Brute force over point triples: brushes have tens of vertices, not thousands.
+pub fn convex_hull(points: &[Vec3]) -> Option<Piece> {
+    const EPS: f32 = 1e-4;
+    let mut pts: Vec<Vec3> = Vec::new();
+    for p in points {
+        if !pts.iter().any(|q| q.abs_diff_eq(*p, 1e-5)) {
+            pts.push(*p);
+        }
+    }
+    if pts.len() < 4 {
+        return None;
+    }
+    let center = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+    let mut planes: Vec<(Vec3, f32)> = Vec::new();
+    for i in 0..pts.len() {
+        for j in i + 1..pts.len() {
+            for k in j + 1..pts.len() {
+                let mut n = (pts[j] - pts[i]).cross(pts[k] - pts[i]);
+                if n.length_squared() < 1e-10 {
+                    continue;
+                }
+                n = n.normalize();
+                if n.dot(pts[i] - center) < 0.0 {
+                    n = -n;
+                }
+                let d = n.dot(pts[i]);
+                let known = planes.iter().any(|(m, e)| m.dot(n) > 0.9999 && (e - d).abs() < EPS);
+                if !known && pts.iter().all(|p| n.dot(*p) - d <= EPS) {
+                    planes.push((n, d));
+                }
+            }
+        }
+    }
+    if planes.len() < 4 {
+        return None; // flat
+    }
+    let faces: Piece = planes
+        .iter()
+        .filter_map(|&(n, d)| {
+            let on: Vec<Vec3> = pts.iter().copied().filter(|p| (n.dot(*p) - d).abs() <= EPS).collect();
+            if on.len() < 3 {
+                return None;
+            }
+            let c = on.iter().copied().sum::<Vec3>() / on.len() as f32;
+            let u = n.any_orthonormal_vector();
+            let v = n.cross(u);
+            let mut on = on;
+            on.sort_by(|a, b| {
+                let angle = |p: &Vec3| (p - c).dot(v).atan2((p - c).dot(u));
+                angle(a).total_cmp(&angle(b))
+            });
+            Some(on)
+        })
+        .collect();
+    (faces.len() >= 4).then_some(faces)
 }

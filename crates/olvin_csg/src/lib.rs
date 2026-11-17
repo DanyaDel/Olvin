@@ -11,7 +11,7 @@
 mod shapes;
 
 use glam::{Mat4, Vec3};
-pub use shapes::{BrushShape, Face, Piece, pieces};
+pub use shapes::{BrushShape, Face, Piece, convex_hull, pieces, shape_vertices};
 
 /// Distance below which a point is considered on a plane.
 const PLANE_EPS: f32 = 1e-4;
@@ -49,6 +49,18 @@ pub struct BrushInput {
     pub op: CsgOp,
     pub transform: Mat4,
     pub color: [f32; 4],
+    /// Edited brush: convex hull of these local points instead of `shape`.
+    pub vertices: Option<Vec<Vec3>>,
+}
+
+impl BrushInput {
+    /// Local-space convex pieces of this brush.
+    pub fn pieces(&self) -> Vec<Piece> {
+        match &self.vertices {
+            Some(v) => convex_hull(v).into_iter().collect(),
+            None => pieces(self.shape),
+        }
+    }
 }
 
 /// A surviving convex surface polygon, counter-clockwise when seen from the
@@ -181,7 +193,7 @@ pub fn build(brushes: &[BrushInput]) -> Vec<Polygon> {
     let pieces: Vec<WorldPiece> = brushes
         .iter()
         .enumerate()
-        .flat_map(|(i, b)| pieces(b.shape).into_iter().filter_map(move |p| WorldPiece::new(i, &p, b.transform)))
+        .flat_map(|(i, b)| b.pieces().into_iter().filter_map(move |p| WorldPiece::new(i, &p, b.transform)))
         .collect();
 
     let solid = |p: Vec3| {
@@ -262,9 +274,10 @@ pub fn build(brushes: &[BrushInput]) -> Vec<Polygon> {
 }
 
 /// Outline edges of a brush in world space, for editor wireframes.
-pub fn brush_edges(shape: BrushShape, transform: Mat4) -> Vec<[Vec3; 2]> {
+pub fn brush_edges(brush: &BrushInput) -> Vec<[Vec3; 2]> {
+    let transform = brush.transform;
     let mut edges: Vec<[Vec3; 2]> = Vec::new();
-    for piece in pieces(shape) {
+    for piece in brush.pieces() {
         for face in piece {
             for i in 0..face.len() {
                 let (a, b) = (face[i], face[(i + 1) % face.len()]);
@@ -314,6 +327,7 @@ mod tests {
             op,
             transform: Mat4::from_scale_rotation_translation(size, glam::Quat::IDENTITY, center),
             color: [1.0; 4],
+            vertices: None,
         }
     }
 
@@ -406,19 +420,46 @@ mod tests {
             BrushShape::Pyramid { sides: 4 },
             BrushShape::Stairs { steps: 4 },
         ] {
-            let polys = build(&[BrushInput { id: 1, shape, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4] }]);
+            let polys = build(&[BrushInput { id: 1, shape, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4], vertices: None }]);
             assert!(!polys.is_empty(), "{shape:?}");
             // Closed surface: the oriented normals integrate to zero.
             let flux: Vec3 = polys.iter().map(|p| p.normal * area(&p.vertices)).sum();
             assert!(flux.length() < 1e-3, "{shape:?} not closed: {flux}");
         }
         // Wedge volume check via area: bottom 1 + back 1 + slope sqrt2 + 2 * 0.5.
-        let wedge = build(&[BrushInput { id: 1, shape: BrushShape::Wedge, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4] }]);
+        let wedge = build(&[BrushInput { id: 1, shape: BrushShape::Wedge, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4], vertices: None }]);
         assert_close(total_area(&wedge), 3.0 + 2f32.sqrt());
         // Stairs: internal faces between steps are removed.
-        let stairs = build(&[BrushInput { id: 1, shape: BrushShape::Stairs { steps: 2 }, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4] }]);
+        let stairs = build(&[BrushInput { id: 1, shape: BrushShape::Stairs { steps: 2 }, op: CsgOp::Add, transform: Mat4::IDENTITY, color: [1.0; 4], vertices: None }]);
         // bottom 1, back 1, sides 2*(0.5*1 + 0.5*0.5)=1.5, treads 0.5+0.5, risers 0.5+0.5
         assert_close(total_area(&stairs), 1.0 + 1.0 + 1.5 + 1.0 + 1.0);
+    }
+
+    #[test]
+    fn hull_brush_matches_shape_and_edits_stay_convex() {
+        let verts = shape_vertices(BrushShape::Box).unwrap();
+        assert_eq!(verts.len(), 8);
+        let hull = convex_hull(&verts).unwrap();
+        assert_eq!(hull.len(), 6, "coplanar triangles merge into quads");
+        assert!(shape_vertices(BrushShape::Stairs { steps: 3 }).is_none());
+
+        // Pull one top corner up: still a closed convex brush.
+        let mut edited = verts.clone();
+        let i = edited.iter().position(|v| *v == Vec3::new(0.5, 0.5, 0.5)).unwrap();
+        edited[i].y = 1.5;
+        let polys = build(&[BrushInput {
+            id: 1,
+            shape: BrushShape::Box,
+            op: CsgOp::Add,
+            transform: Mat4::IDENTITY,
+            color: [1.0; 4],
+            vertices: Some(edited),
+        }]);
+        let flux: Vec3 = polys.iter().map(|p| p.normal * area(&p.vertices)).sum();
+        assert!(flux.length() < 1e-3);
+        assert!(polys.iter().any(|p| p.vertices.iter().any(|v| v.y > 1.4)));
+        // A flat point set has no hull.
+        assert!(convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::ONE.with_y(0.0)]).is_none());
     }
 
     #[test]
@@ -429,6 +470,7 @@ mod tests {
             op: CsgOp::Add,
             transform: Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)),
             color: [1.0; 4],
+            vertices: None,
         };
         let polys = build(&[mirrored]);
         let flux: Vec3 = polys.iter().map(|p| p.normal * area(&p.vertices)).sum();

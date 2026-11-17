@@ -5,6 +5,7 @@
 //! is rebuilt live whenever a brush changes, and games rebuild it on load.
 
 mod panel;
+mod poly;
 mod viewport;
 
 use std::cell::RefCell;
@@ -18,6 +19,7 @@ use olvin_editor::{EditorPlugin, EditorState, PanelKind, Registry, Tab, TabAlloc
 
 pub const DRAW_TOOL: &str = "csg.draw";
 pub const EDIT_TOOL: &str = "csg.edit";
+pub const POLY_TOOL: &str = "csg.poly";
 const PANEL: &str = "csg.panel";
 
 pub struct CsgPlugin;
@@ -30,7 +32,7 @@ impl EditorPlugin for CsgPlugin {
     fn build(&self, registry: &mut Registry) {
         registry
             .add_viewport_extension(|| Box::<viewport::CsgViewport>::default())
-            .add_panel(PanelKind { id: PANEL, title: "◩ CSG", factory: || Box::new(panel::CsgPanel) })
+            .add_panel(PanelKind { id: PANEL, title: "◩ Mapping", factory: || Box::new(panel::CsgPanel) })
             .add_component(ComponentEditor {
                 title: "CSG Brush",
                 has: |e| e.brush.is_some(),
@@ -38,7 +40,7 @@ impl EditorPlugin for CsgPlugin {
                 remove: |e| e.brush = None,
                 ui: brush_inspector,
             })
-            .add_workspace_template(WorkspaceTemplate { name: "Level Design", build: level_layout });
+            .add_workspace_template(WorkspaceTemplate { name: "Mapping", build: level_layout });
         for (path, create) in CREATE {
             registry.add_create_item(CreateItem { path, create });
         }
@@ -66,6 +68,7 @@ pub(crate) struct Shared {
     pub grid_texture: bool,
     pub wall: f32,
     pub stats: Stats,
+    pub poly: poly::PolyState,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -85,6 +88,7 @@ thread_local! {
         grid_texture: true,
         wall: 0.25,
         stats: Stats::default(),
+        poly: poly::PolyState::default(),
     });
 }
 
@@ -93,7 +97,7 @@ pub(crate) fn shared<R>(f: impl FnOnce(&mut Shared) -> R) -> R {
 }
 
 pub(crate) fn default_brush(shape: BrushShape) -> BrushDesc {
-    shared(|s| BrushDesc { shape, op: s.op, color: s.color })
+    shared(|s| BrushDesc { shape, op: s.op, color: s.color, ..Default::default() })
 }
 
 fn spawn(state: &mut EditorState, parent: Option<u64>, shape: BrushShape) -> u64 {
@@ -128,7 +132,7 @@ pub(crate) fn hollow(state: &mut EditorState, id: u64) -> Option<u64> {
     let e = state.scene.get_mut(child).unwrap();
     e.name = "Hollow".into();
     e.scale = inner;
-    e.brush = Some(BrushDesc { shape: BrushShape::Box, op: CsgOp::Subtract, color });
+    e.brush = Some(BrushDesc { shape: BrushShape::Box, op: CsgOp::Subtract, color, ..Default::default() });
     Some(child)
 }
 

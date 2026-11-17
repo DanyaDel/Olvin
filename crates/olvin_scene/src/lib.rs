@@ -2,9 +2,25 @@
 
 #[cfg(feature = "serde")]
 pub mod file;
+pub mod primitives;
 
 use glam::camera::rh::{proj::directx, view};
 use glam::{Mat4, Quat, Vec3};
+
+/// Object name from the scene.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Name(pub String);
+
+/// Unity-style tag ("Player", "Respawn", ...).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tag(pub String);
+
+/// Triangle geometry in the entity's local space, for mesh colliders.
+#[derive(Clone, Debug, Default)]
+pub struct MeshGeometry {
+    pub positions: Vec<Vec3>,
+    pub indices: Vec<[u32; 3]>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {

@@ -4,7 +4,9 @@ use std::time::Instant;
 
 use glam::{EulerRot, Mat4, Vec3};
 use olvin_scene::Transform;
-use olvin_scene::file::{CameraDesc, EntityDesc, MeshDesc, SceneFile, Shape};
+use olvin_scene::file::{
+    AudioSourceDesc, CameraDesc, ColliderDesc, EntityDesc, LightDesc, LightKind, MeshDesc, SceneFile, Shape,
+};
 
 use crate::ext::Extensions;
 
@@ -50,20 +52,55 @@ pub struct LogLine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NewEntity {
     Empty,
-    Cube,
-    Plane,
+    Primitive(Shape),
     Camera,
+    Light(LightKind),
+    AudioSource,
 }
 
 impl NewEntity {
-    pub const ALL: [NewEntity; 4] = [Self::Empty, Self::Cube, Self::Plane, Self::Camera];
+    /// Unity's GameObject menu: (submenu, items); `None` is the top level.
+    pub const MENU: [(Option<&'static str>, &'static [NewEntity]); 5] = [
+        (None, &[NewEntity::Empty]),
+        (
+            Some("3D Object"),
+            &[
+                NewEntity::Primitive(Shape::Cube),
+                NewEntity::Primitive(Shape::Sphere),
+                NewEntity::Primitive(Shape::Capsule),
+                NewEntity::Primitive(Shape::Cylinder),
+                NewEntity::Primitive(Shape::Plane),
+                NewEntity::Primitive(Shape::Quad),
+            ],
+        ),
+        (
+            Some("Light"),
+            &[
+                NewEntity::Light(LightKind::Directional),
+                NewEntity::Light(LightKind::Point),
+                NewEntity::Light(LightKind::Spot),
+            ],
+        ),
+        (Some("Audio"), &[NewEntity::AudioSource]),
+        (None, &[NewEntity::Camera]),
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Empty => "Empty",
-            Self::Cube => "Cube",
-            Self::Plane => "Plane",
+            Self::Empty => "Create Empty",
+            Self::Primitive(shape) => shape.label(),
             Self::Camera => "Camera",
+            Self::Light(LightKind::Directional) => "Directional Light",
+            Self::Light(LightKind::Point) => "Point Light",
+            Self::Light(LightKind::Spot) => "Spot Light",
+            Self::AudioSource => "Audio Source",
+        }
+    }
+
+    fn object_name(self) -> &'static str {
+        match self {
+            Self::Empty => "GameObject",
+            other => other.label(),
         }
     }
 }
@@ -89,6 +126,10 @@ pub struct EditorState {
     pub local_space: bool,
     /// Hold Ctrl to invert `snap.enabled` temporarily.
     pub snap: SnapSettings,
+    /// Set by a tool that handles Delete / Ctrl+D itself (e.g. editing
+    /// vertices); the editor then won't delete or duplicate the object.
+    /// Cleared every frame.
+    pub tool_owns_keys: bool,
     pub(crate) ext: Extensions,
     committed: SceneFile,
     saved: SceneFile,
@@ -112,6 +153,7 @@ impl EditorState {
             tool: tools::MOVE.to_owned(),
             local_space: false,
             snap: SnapSettings::default(),
+            tool_owns_keys: false,
             ext: Extensions::default(),
             committed: SceneFile::default(),
             saved: SceneFile::default(),
@@ -299,18 +341,27 @@ impl EditorState {
 
     pub fn create(&mut self, kind: NewEntity, parent: Option<u64>) -> u64 {
         let id = self.next_id();
-        let mut e = EntityDesc::new(id, kind.label());
+        let mut e = EntityDesc::new(id, kind.object_name());
         e.parent = parent.filter(|p| self.scene.get(*p).is_some());
         match kind {
             NewEntity::Empty => {}
-            NewEntity::Cube => {
-                e.mesh = Some(MeshDesc { shape: Shape::Cube, color: [0.8, 0.8, 0.8, 1.0] })
+            NewEntity::Primitive(shape) => {
+                // Like Unity: primitives come with their matching collider.
+                e.mesh = Some(MeshDesc { shape, color: [0.8, 0.8, 0.8, 1.0] });
+                e.collider = Some(ColliderDesc::for_shape(shape));
             }
-            NewEntity::Plane => {
-                e.mesh = Some(MeshDesc { shape: Shape::Plane, color: [0.5, 0.5, 0.5, 1.0] });
-                e.scale = Vec3::splat(10.0);
+            NewEntity::Camera => {
+                e.camera = Some(CameraDesc::default());
+                e.audio_listener = true;
             }
-            NewEntity::Camera => e.camera = Some(CameraDesc::default()),
+            NewEntity::Light(kind) => {
+                e.light = Some(LightDesc::new(kind));
+                e.position = Vec3::new(0.0, 3.0, 0.0);
+                if kind != LightKind::Point {
+                    e.rotation = Vec3::new(-50.0, -30.0, 0.0);
+                }
+            }
+            NewEntity::AudioSource => e.audio_source = Some(AudioSourceDesc::default()),
         }
         self.scene.entities.push(e);
         self.selection = Some(id);
@@ -444,14 +495,21 @@ fn starter_scene() -> SceneFile {
     camera.camera = Some(CameraDesc::default());
 
     let mut ground = EntityDesc::new(2, "Ground");
-    ground.scale = Vec3::splat(20.0);
+    ground.scale = Vec3::splat(2.0);
+    ground.collider = Some(ColliderDesc::for_shape(Shape::Plane));
     ground.mesh = Some(MeshDesc { shape: Shape::Plane, color: [0.18, 0.2, 0.22, 1.0] });
 
     let mut cube = EntityDesc::new(3, "Cube");
     cube.position = Vec3::new(0.0, 0.5, 0.0);
     cube.mesh = Some(MeshDesc { shape: Shape::Cube, color: [0.9, 0.45, 0.15, 1.0] });
+    cube.collider = Some(ColliderDesc::for_shape(Shape::Cube));
 
-    SceneFile { entities: vec![camera, ground, cube], ..Default::default() }
+    let mut sun = EntityDesc::new(4, "Directional Light");
+    sun.position = Vec3::new(0.0, 3.0, 0.0);
+    sun.rotation = Vec3::new(-50.0, -30.0, 0.0);
+    sun.light = Some(LightDesc::new(LightKind::Directional));
+
+    SceneFile { entities: vec![camera, sun, ground, cube], ..Default::default() }
 }
 
 #[cfg(test)]
@@ -465,7 +523,7 @@ mod tests {
     #[test]
     fn edits_collapse_into_one_undo_step() {
         let mut s = state();
-        let id = s.create(NewEntity::Cube, None);
+        let id = s.create(NewEntity::Primitive(Shape::Cube), None);
         s.end_frame(false);
         // A drag: many frames of edits while the mouse is down.
         for i in 0..10 {
@@ -487,7 +545,7 @@ mod tests {
         let mut s = state();
         let a = s.create(NewEntity::Empty, None);
         s.scene.get_mut(a).unwrap().position = Vec3::new(5.0, 0.0, 0.0);
-        let b = s.create(NewEntity::Cube, None);
+        let b = s.create(NewEntity::Primitive(Shape::Cube), None);
         s.scene.get_mut(b).unwrap().position = Vec3::new(1.0, 2.0, 3.0);
         // b was created after a; put a under b and back.
         assert!(s.reparent(a, Some(b)));

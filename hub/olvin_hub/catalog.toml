@@ -36,10 +36,9 @@ default = true
 id = "physics"
 name = "Физика 3D"
 category = "Геймплей"
-description = "Rapier: твёрдые тела, коллизии, джойнты"
-kind = "crate"
-crate = "rapier3d"
-version = "0.36"
+description = "Rapier: коллайдеры и Rigidbody из редактора работают в игре, у CSG-уровня статический коллайдер"
+kind = "olvin"
+feature = "physics"
 
 [[module]]
 id = "audio"

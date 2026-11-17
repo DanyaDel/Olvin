@@ -6,6 +6,7 @@ struct Globals {
     // xyz: direction the light travels, normalized.
     light_dir: vec4<f32>,
     ambient: vec4<f32>,
+    light_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -41,5 +42,5 @@ fn vs_main(in: VertexIn) -> VertexOut {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let diffuse = max(dot(n, -globals.light_dir.xyz), 0.0);
-    return vec4<f32>(in.color.rgb * (globals.ambient.rgb + diffuse), in.color.a);
+    return vec4<f32>(in.color.rgb * (globals.ambient.rgb + diffuse * globals.light_color.rgb), in.color.a);
 }

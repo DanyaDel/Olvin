@@ -11,6 +11,8 @@ pub use olvin_render as render;
 pub use olvin_scene as scene;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
+#[cfg(feature = "physics")]
+pub use olvin_physics as physics;
 
 #[cfg(feature = "scene")]
 pub mod scene_file;
@@ -25,6 +27,8 @@ pub struct DefaultPlugins {
     pub window: olvin_window::WindowPlugin,
     #[cfg(feature = "render")]
     pub render: olvin_render::RenderPlugin,
+    #[cfg(feature = "physics")]
+    pub physics: olvin_physics::PhysicsPlugin,
 }
 
 impl Plugin for DefaultPlugins {
@@ -34,6 +38,8 @@ impl Plugin for DefaultPlugins {
         app.add_plugin(self.window.clone());
         #[cfg(feature = "render")]
         app.add_plugin(olvin_render::RenderPlugin { settings: self.render.settings.clone() });
+        #[cfg(feature = "physics")]
+        app.add_plugin(olvin_physics::PhysicsPlugin { gravity: self.physics.gravity });
     }
 }
 
@@ -47,7 +53,7 @@ pub mod prelude {
         Color, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo, RenderPlugin,
         RenderSettings, RenderStats,
     };
-    pub use olvin_scene::{Camera, Transform};
+    pub use olvin_scene::{Camera, Name, Tag, Transform};
     #[cfg(feature = "window")]
     pub use olvin_window::{Input, KeyCode, MouseButton, WindowPlugin};
 }

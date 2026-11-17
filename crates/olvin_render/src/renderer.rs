@@ -43,6 +43,7 @@ struct Globals {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
     ambient: [f32; 4],
+    light_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -297,6 +298,7 @@ impl Renderer {
                     view_proj: view_proj.to_cols_array_2d(),
                     light_dir: settings.light_dir.normalize_or_zero().extend(0.0).into(),
                     ambient: settings.ambient.0,
+                    light_color: settings.light_color.0,
                 };
                 self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
                 culled

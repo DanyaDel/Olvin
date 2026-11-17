@@ -2,14 +2,15 @@
 //! MSAA), with an infinite adaptive grid, raycast picking and Unity-style
 //! transform tools. Elements extend it through `ViewportExtension`.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use egui::{Align2, Color32, FontId, Pos2, PointerButton, Sense, Stroke, Vec2, vec2};
 use glam::camera::rh::{proj::directx, view};
 use glam::{EulerRot, Mat4, Quat, Vec3};
-use olvin_scene::file::Shape;
+use olvin_scene::file::{ColliderShape, EntityDesc, LightKind, Shape};
+use olvin_scene::primitives::Primitive;
 
 use crate::ext::{Geometry, Snap, ViewCamera, ViewportCtx, flags, linear_color};
 use crate::render::{Frame, Uniforms};
@@ -27,60 +28,15 @@ const STEPS: [f32; 11] = [1.0 / 16.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-struct ShapeGeometry {
-    tris: Vec<[Vec3; 3]>,
-    edges: Vec<[Vec3; 2]>,
+static PRIMITIVES: LazyLock<Vec<Primitive>> = LazyLock::new(|| Shape::ALL.iter().map(|s| Primitive::new(*s)).collect());
+
+fn primitive(shape: Shape) -> &'static Primitive {
+    &PRIMITIVES[Shape::ALL.iter().position(|s| *s == shape).unwrap_or(0)]
 }
 
-static CUBE: LazyLock<ShapeGeometry> = LazyLock::new(|| {
-    let corner = |i: usize| {
-        Vec3::new(
-            if i & 1 != 0 { 0.5 } else { -0.5 },
-            if i & 2 != 0 { 0.5 } else { -0.5 },
-            if i & 4 != 0 { 0.5 } else { -0.5 },
-        )
-    };
-    let faces = [[0, 2, 6, 4], [1, 5, 7, 3], [0, 4, 5, 1], [2, 3, 7, 6], [0, 1, 3, 2], [4, 6, 7, 5]];
-    let mut tris = Vec::new();
-    for face in faces {
-        let mut q = face.map(corner);
-        let center = q.iter().copied().sum::<Vec3>() / 4.0;
-        if (q[1] - q[0]).cross(q[2] - q[0]).dot(center) < 0.0 {
-            q.reverse();
-        }
-        tris.push([q[0], q[1], q[2]]);
-        tris.push([q[0], q[2], q[3]]);
-    }
-    let mut edges = Vec::new();
-    for i in 0..8 {
-        for bit in [1, 2, 4] {
-            if i & bit == 0 {
-                edges.push([corner(i), corner(i | bit)]);
-            }
-        }
-    }
-    ShapeGeometry { tris, edges }
-});
-
-static PLANE: LazyLock<ShapeGeometry> = LazyLock::new(|| {
-    let c = [
-        Vec3::new(-0.5, 0.0, -0.5),
-        Vec3::new(-0.5, 0.0, 0.5),
-        Vec3::new(0.5, 0.0, 0.5),
-        Vec3::new(0.5, 0.0, -0.5),
-    ];
-    ShapeGeometry {
-        tris: vec![[c[0], c[1], c[2]], [c[0], c[2], c[3]]],
-        edges: vec![[c[0], c[1]], [c[1], c[2]], [c[2], c[3]], [c[3], c[0]]],
-    }
-});
-
-fn shape_geometry(shape: Shape) -> &'static ShapeGeometry {
-    match shape {
-        Shape::Cube => &CUBE,
-        Shape::Plane => &PLANE,
-    }
-}
+const COLLIDER: Color32 = Color32::from_rgb(145, 244, 139);
+const LIGHT_GIZMO: Color32 = Color32::from_rgb(255, 236, 140);
+const AUDIO_GIZMO: Color32 = Color32::from_rgb(120, 180, 255);
 
 struct Orbit {
     target: Vec3,
@@ -129,6 +85,9 @@ struct Drag {
 pub struct Viewport {
     id: u64,
     orbit: Orbit,
+    orthographic: bool,
+    /// Fly speed multiplier (scroll while holding RMB, like Unity).
+    fly_speed: f32,
     show_grid: bool,
     wireframe: bool,
     drag: Option<Drag>,
@@ -141,6 +100,8 @@ impl Default for Viewport {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             orbit: Orbit { target: Vec3::ZERO, yaw: 0.6, pitch: 0.45, distance: 14.0 },
+            orthographic: false,
+            fly_speed: 1.0,
             show_grid: true,
             wireframe: false,
             drag: None,
@@ -222,7 +183,7 @@ impl Panel for Viewport {
                 view_proj: camera.view_proj.to_cols_array_2d(),
                 inv_view_proj: inv.to_cols_array_2d(),
                 eye: camera.eye.extend(1.0).to_array(),
-                light: LIGHT.normalize().extend(0.0).to_array(),
+                light: state.scene.sun().map(|(d, _, _)| d).unwrap_or(LIGHT).normalize().extend(0.0).to_array(),
                 grid: [snap.step, 8.0, self.fade_distance(), 0.0],
             },
             vertices: self.geometry.vertices.clone(),
@@ -253,9 +214,25 @@ impl Viewport {
 
     fn camera(&self, rect: egui::Rect) -> ViewCamera {
         let eye = self.orbit.eye();
+        // Pitch is clamped short of ±90°, so Y stays a valid up vector.
         let view = view::look_at_mat4(eye, self.orbit.target, Vec3::Y);
-        let proj = directx::perspective(FOV_DEG.to_radians(), rect.width() / rect.height(), NEAR, FAR);
-        ViewCamera { view, proj, view_proj: proj * view, eye, forward: -self.orbit.back(), rect, near: NEAR }
+        let aspect = rect.width() / rect.height();
+        let proj = if self.orthographic {
+            let h = self.orbit.distance * (FOV_DEG.to_radians() * 0.5).tan();
+            directx::orthographic(-h * aspect, h * aspect, -h, h, NEAR, FAR)
+        } else {
+            directx::perspective(FOV_DEG.to_radians(), aspect, NEAR, FAR)
+        };
+        ViewCamera {
+            view,
+            proj,
+            view_proj: proj * view,
+            eye,
+            forward: -self.orbit.back(),
+            rect,
+            near: NEAR,
+            orthographic: self.orthographic,
+        }
     }
 
     fn hotkeys(&mut self, ui: &egui::Ui, response: &egui::Response, state: &mut EditorState) {
@@ -287,13 +264,11 @@ impl Viewport {
         if pressed(egui::Key::F) {
             state.frame_selection = true;
         }
-        for (key, yaw, pitch) in [(egui::Key::Num1, 0.0, 0.0), (egui::Key::Num3, FRAC_PI_2, 0.0), (egui::Key::Num7, 0.0, 1.55)] {
-            if pressed(key) {
-                (self.orbit.yaw, self.orbit.pitch) = (yaw, pitch);
-            }
-        }
+
     }
 
+    /// Unity scene-view controls: MMB pan, Alt+LMB orbit, Alt+RMB zoom,
+    /// RMB look + WASD/QE fly (scroll changes speed), wheel zoom, F frame.
     fn navigate(
         &mut self,
         ui: &egui::Ui,
@@ -302,48 +277,48 @@ impl Viewport {
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) {
         let delta = response.drag_delta();
-        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+        let alt = ui.input(|i| i.modifiers.alt);
         let middle = response.dragged_by(PointerButton::Middle);
         let right = response.dragged_by(PointerButton::Secondary);
         let left = response.dragged_by(PointerButton::Primary);
         let hand = left && state.tool == tools::VIEW && !alt;
 
-        if (middle && shift) || hand {
+        if middle || hand {
             let view = view::look_at_mat4(self.orbit.eye(), self.orbit.target, Vec3::Y);
             let (r, u) = (view.row(0).truncate(), view.row(1).truncate());
             let scale = self.orbit.distance * 0.0016;
             self.orbit.target += (-r * delta.x + u * delta.y) * scale;
-        } else if middle || (left && alt) {
-            // Orbit around the target (Blender MMB, Unity Alt+LMB).
+        } else if left && alt {
             self.orbit.yaw -= delta.x * 0.008;
             self.orbit.pitch = (self.orbit.pitch + delta.y * 0.008).clamp(-1.55, 1.55);
+        } else if right && alt {
+            self.zoom((delta.x - delta.y) * 0.01);
         } else if right {
-            // Look around from the eye (Unity RMB), WASD to fly.
             let eye = self.orbit.eye();
             self.orbit.yaw -= delta.x * 0.005;
             self.orbit.pitch = (self.orbit.pitch + delta.y * 0.005).clamp(-1.55, 1.55);
             self.orbit.target = eye - self.orbit.back() * self.orbit.distance;
         }
 
-        if response.hovered() || right {
-            let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary));
-            if flying {
-                let (dt, boost) = ui.input(|i| (i.stable_dt.min(0.1), if i.modifiers.shift { 4.0 } else { 1.0 }));
-                let forward = -self.orbit.back();
-                let right_v = forward.cross(Vec3::Y).normalize_or_zero();
-                let axis = |a: egui::Key, b: egui::Key| ui.input(|i| i.key_down(a) as i32 as f32 - i.key_down(b) as i32 as f32);
-                let mv = forward * axis(egui::Key::W, egui::Key::S)
-                    + right_v * axis(egui::Key::D, egui::Key::A)
-                    + Vec3::Y * axis(egui::Key::E, egui::Key::Q);
-                if mv != Vec3::ZERO {
-                    self.orbit.target += mv.normalize() * (self.orbit.distance * 1.2 + 2.0) * boost * dt;
-                    ui.ctx().request_repaint();
-                }
+        let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary)) && !alt;
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if flying && (response.hovered() || right) {
+            let (dt, boost) = ui.input(|i| (i.stable_dt.min(0.1), if i.modifiers.shift { 4.0 } else { 1.0 }));
+            if scroll != 0.0 {
+                self.fly_speed = (self.fly_speed * (scroll * 0.004).exp()).clamp(0.05, 50.0);
             }
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 && response.hovered() {
-                self.orbit.distance = (self.orbit.distance * (-scroll * 0.0015).exp()).clamp(0.1, FAR * 0.5);
+            let forward = -self.orbit.back();
+            let right_v = forward.cross(Vec3::Y).normalize_or_zero();
+            let axis = |a: egui::Key, b: egui::Key| ui.input(|i| i.key_down(a) as i32 as f32 - i.key_down(b) as i32 as f32);
+            let mv = forward * axis(egui::Key::W, egui::Key::S)
+                + right_v * axis(egui::Key::D, egui::Key::A)
+                + Vec3::Y * axis(egui::Key::E, egui::Key::Q);
+            if mv != Vec3::ZERO {
+                self.orbit.target += mv.normalize() * 6.0 * self.fly_speed * boost * dt;
+                ui.ctx().request_repaint();
             }
+        } else if scroll != 0.0 && response.hovered() {
+            self.zoom(-scroll * 0.0015);
         }
 
         if state.frame_selection
@@ -357,16 +332,26 @@ impl Viewport {
         }
     }
 
+    fn zoom(&mut self, amount: f32) {
+        self.orbit.distance = (self.orbit.distance * amount.exp()).clamp(0.1, FAR * 0.5);
+    }
+
     fn scene_geometry(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>) {
         for e in &state.scene.entities {
             let Some(m) = worlds.get(&e.id) else { continue };
+            if !state.scene.active_in_hierarchy(e.id) {
+                continue;
+            }
             if let Some(mesh) = &e.mesh {
+                let prim = primitive(mesh.shape);
+                let normal_matrix = glam::Mat3::from_mat4(*m).inverse().transpose();
                 let color = linear_color(mesh.color);
                 let f = if state.selection == Some(e.id) { flags::SELECTED } else { 0 };
-                for tri in &shape_geometry(mesh.shape).tris {
-                    let w = tri.map(|v| m.transform_point3(v));
-                    let n = (w[1] - w[0]).cross(w[2] - w[0]).normalize_or_zero();
-                    self.geometry.polygon(e.id, &w, n, color, f);
+                for t in prim.indices.chunks_exact(3) {
+                    let idx = [t[0], t[1], t[2]].map(|i| i as usize);
+                    let pos = idx.map(|i| m.transform_point3(prim.positions[i]));
+                    let nrm = idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());
+                    self.geometry.triangle(e.id, pos, nrm, color, f);
                 }
             }
             if e.camera.is_some() {
@@ -384,6 +369,9 @@ impl Viewport {
                 self.geometry.line(c[2], up, color, false);
                 self.geometry.line(c[3], up, color, false);
             }
+            if state.selection == Some(e.id) {
+                component_gizmos(&mut self.geometry, e, *m);
+            }
         }
     }
 
@@ -397,7 +385,7 @@ impl Viewport {
         let Some(sel) = state.selection else { return };
         let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else { return };
         if let Some(mesh) = &e.mesh {
-            for [a, b] in &shape_geometry(mesh.shape).edges {
+            for [a, b] in &primitive(mesh.shape).outline {
                 camera.line(painter, m.transform_point3(*a), m.transform_point3(*b), (1.5, theme::SELECTED));
             }
         }
@@ -410,12 +398,12 @@ impl Viewport {
         state: &EditorState,
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) -> Option<u64> {
-        // Cameras have no surface: pick them by their icon.
+        // Cameras, lights and sounds have no surface: pick them by their icon.
         let icon = state
             .scene
             .entities
             .iter()
-            .filter(|e| e.camera.is_some())
+            .filter(|e| has_icon(e) && state.scene.active_in_hierarchy(e.id))
             .filter_map(|e| Some((e.id, camera.project(worlds.get(&e.id)?.w_axis.truncate())?.distance(pointer))))
             .filter(|(_, d)| *d < 16.0)
             .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -520,6 +508,65 @@ impl Viewport {
 
     // --- overlay -------------------------------------------------------------
 
+    /// Unity's scene gizmo: click an axis to look along it, the centre toggles
+    /// perspective / orthographic.
+    fn view_gizmo(&mut self, ui: &mut egui::Ui, rect: egui::Rect, camera: &ViewCamera) {
+        let center = rect.right_top() + vec2(-52.0, 58.0);
+        let area = egui::Rect::from_center_size(center, vec2(96.0, 96.0));
+        let response = ui.interact(area, egui::Id::new(("view-gizmo", self.id)), Sense::click());
+        let pointer = response.hover_pos();
+        let painter = ui.painter_at(rect);
+        painter.circle_filled(center, 40.0, Color32::from_black_alpha(if response.hovered() { 70 } else { 40 }));
+
+        // (direction, axis index, positive); camera ends up on that side looking at the target.
+        let mut tips: Vec<(Vec3, usize, bool, Vec3)> = Vec::new();
+        for (i, axis) in AXES.iter().enumerate() {
+            for positive in [true, false] {
+                let dir = if positive { *axis } else { -*axis };
+                tips.push((dir, i, positive, camera.view.transform_vector3(dir)));
+            }
+        }
+        tips.sort_by(|a, b| a.3.z.total_cmp(&b.3.z));
+        let mut clicked_axis = None;
+        for (dir, i, positive, v) in &tips {
+            let tip = center + vec2(v.x, -v.y) * 28.0;
+            let hot = pointer.is_some_and(|p| p.distance(tip) < 9.0);
+            let color = if hot { HOT } else { theme::AXES[*i] };
+            if *positive {
+                painter.line_segment([center, tip], (2.0, color));
+                painter.circle_filled(tip, 8.5, color);
+                painter.text(tip, Align2::CENTER_CENTER, ["X", "Y", "Z"][*i], FontId::proportional(11.0), Color32::BLACK);
+            } else {
+                painter.circle(tip, 6.0, Color32::from_gray(60), (1.5, color));
+            }
+            if hot && response.clicked() {
+                clicked_axis = Some(*dir);
+            }
+        }
+        let center_hot = pointer.is_some_and(|p| p.distance(center) < 8.0);
+        painter.circle_filled(center, 6.0, if center_hot { HOT } else { Color32::from_gray(200) });
+        painter.text(
+            center + vec2(0.0, 50.0),
+            Align2::CENTER_CENTER,
+            if self.orthographic { "◀ Iso" } else { "◀ Persp" },
+            FontId::proportional(11.0),
+            Color32::from_white_alpha(170),
+        );
+
+        if let Some(dir) = clicked_axis {
+            (self.orbit.yaw, self.orbit.pitch) = match dir {
+                d if d == Vec3::X => (FRAC_PI_2, 0.0),
+                d if d == -Vec3::X => (-FRAC_PI_2, 0.0),
+                d if d == Vec3::Y => (0.0, 1.55),
+                d if d == -Vec3::Y => (0.0, -1.55),
+                d if d == Vec3::Z => (0.0, 0.0),
+                _ => (PI, 0.0),
+            };
+        } else if response.clicked() && center_hot {
+            self.orthographic = !self.orthographic;
+        }
+    }
+
     fn overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect, camera: &ViewCamera, state: &mut EditorState, grid_step: f32) {
         let bar_rect = rect.shrink(6.0);
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
@@ -590,17 +637,16 @@ impl Viewport {
             });
 
         let painter = ui.painter_at(rect);
-        // Axis indicator, back to front.
-        let center = rect.right_bottom() + vec2(-44.0, -44.0);
-        let mut axes: Vec<(usize, Vec3)> =
-            AXES.iter().enumerate().map(|(i, a)| (i, camera.view.transform_vector3(*a))).collect();
-        axes.sort_by(|a, b| a.1.z.total_cmp(&b.1.z));
-        painter.circle_filled(center, 34.0, Color32::from_black_alpha(50));
-        for (i, d) in axes {
-            let tip = center + vec2(d.x, -d.y) * 26.0;
-            painter.line_segment([center, tip], (2.0, theme::AXES[i]));
-            painter.circle_filled(tip, 8.0, theme::AXES[i]);
-            painter.text(tip, Align2::CENTER_CENTER, ["X", "Y", "Z"][i], FontId::proportional(11.0), Color32::BLACK);
+        draw_icons(&painter, camera, state);
+        self.view_gizmo(ui, rect, camera);
+        if ui.input(|i| i.pointer.button_down(PointerButton::Secondary)) && self.fly_speed != 1.0 {
+            painter.text(
+                rect.center_bottom() + vec2(0.0, -28.0),
+                Align2::CENTER_CENTER,
+                format!("fly speed ×{:.2}", self.fly_speed),
+                FontId::proportional(12.0),
+                Color32::from_white_alpha(170),
+            );
         }
         if !state.preview.is_empty() {
             painter.text(rect.center_top() + vec2(0.0, 44.0), Align2::CENTER_CENTER, "• animation preview", FontId::proportional(13.0), theme::SELECTED);
@@ -608,7 +654,7 @@ impl Viewport {
         painter.text(
             rect.left_bottom() + vec2(8.0, -8.0),
             Align2::LEFT_BOTTOM,
-            "MMB orbit · Shift+MMB pan · RMB look + WASD/QE fly · wheel zoom · F frame",
+            "Alt+LMB orbit · MMB pan · RMB look + WASD/QE fly · Alt+RMB / wheel zoom · F frame",
             FontId::proportional(11.0),
             Color32::from_white_alpha(90),
         );
@@ -863,19 +909,142 @@ fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     p.distance(a + ab * t)
 }
 
+fn has_icon(e: &EntityDesc) -> bool {
+    e.camera.is_some() || e.light.is_some() || e.audio_source.is_some()
+}
+
+/// Unity-style icons for things without a surface.
+fn draw_icons(painter: &egui::Painter, camera: &ViewCamera, state: &EditorState) {
+    let worlds = state.scene.world_matrices();
+    for e in &state.scene.entities {
+        if !has_icon(e) || e.camera.is_some() || !state.scene.active_in_hierarchy(e.id) {
+            continue;
+        }
+        let Some(p) = worlds.get(&e.id).and_then(|m| camera.project(m.w_axis.truncate())) else { continue };
+        let selected = state.selection == Some(e.id);
+        if let Some(light) = &e.light {
+            let color = if selected { theme::SELECTED } else { LIGHT_GIZMO };
+            painter.circle(p, 6.0, color.gamma_multiply(0.3), (1.5, color));
+            let rays = if light.kind == LightKind::Directional { 8 } else { 4 };
+            for i in 0..rays {
+                let a = i as f32 / rays as f32 * std::f32::consts::TAU;
+                let d = vec2(a.cos(), a.sin());
+                painter.line_segment([p + d * 9.0, p + d * 13.0], (1.5, color));
+            }
+        } else if e.audio_source.is_some() {
+            let color = if selected { theme::SELECTED } else { AUDIO_GIZMO };
+            painter.rect_filled(egui::Rect::from_center_size(p - vec2(4.0, 0.0), vec2(5.0, 7.0)), 1.0, color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p + vec2(-2.0, -3.5), p + vec2(5.0, -8.0), p + vec2(5.0, 8.0), p + vec2(-2.0, 3.5)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+    }
+}
+
+/// Gizmos of the selected object's components, in world space.
+fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
+    let (scale, rot, pos) = m.to_scale_rotation_translation();
+    let axes = [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z];
+    if let Some(c) = &e.collider {
+        let center = m.transform_point3(c.center);
+        match c.shape {
+            ColliderShape::Box { size } => {
+                let local = Mat4::from_translation(c.center) * Mat4::from_scale(size);
+                for [a, b] in &primitive(Shape::Cube).outline {
+                    g.line((m * local).transform_point3(*a), (m * local).transform_point3(*b), COLLIDER, true);
+                }
+            }
+            ColliderShape::Sphere { radius } => {
+                let r = radius * scale.abs().max_element();
+                for (u, v) in [(0, 1), (1, 2), (0, 2)] {
+                    g.circle(center, axes[u], axes[v], r, COLLIDER, true);
+                }
+            }
+            ColliderShape::Capsule { radius, height } => {
+                let r = radius * scale.x.abs().max(scale.z.abs());
+                let half = (height * scale.y.abs() * 0.5 - r).max(0.0);
+                let up = axes[1];
+                for end in [-1.0, 1.0] {
+                    g.circle(center + up * half * end, axes[0], axes[2], r, COLLIDER, true);
+                }
+                for side in [axes[0], -axes[0], axes[2], -axes[2]] {
+                    g.line(center + side * r - up * half, center + side * r + up * half, COLLIDER, true);
+                }
+                for side in [axes[0], axes[2]] {
+                    // Cap arcs.
+                    for end in [-1.0f32, 1.0] {
+                        let c0 = center + up * half * end;
+                        let pts: Vec<Vec3> = (0..=16)
+                            .map(|i| {
+                                let a = i as f32 / 16.0 * std::f32::consts::PI;
+                                c0 + side * (r * a.cos()) + up * (r * a.sin() * end)
+                            })
+                            .collect();
+                        for w in pts.windows(2) {
+                            g.line(w[0], w[1], COLLIDER, true);
+                        }
+                    }
+                }
+            }
+            ColliderShape::Mesh => {
+                if let Some(mesh) = &e.mesh {
+                    for [a, b] in &primitive(mesh.shape).outline {
+                        g.line(m.transform_point3(*a), m.transform_point3(*b), COLLIDER, true);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(cc) = &e.character_controller {
+        let half = (cc.height * 0.5 - cc.radius).max(0.0);
+        for end in [-1.0, 1.0] {
+            g.circle(pos + axes[1] * half * end, axes[0], axes[2], cc.radius, COLLIDER, true);
+        }
+        for side in [axes[0], -axes[0], axes[2], -axes[2]] {
+            g.line(pos + side * cc.radius - axes[1] * half, pos + side * cc.radius + axes[1] * half, COLLIDER, true);
+        }
+    }
+    if let Some(l) = &e.light {
+        let forward = -axes[2];
+        match l.kind {
+            LightKind::Directional => {
+                for (dx, dy) in [(0.0, 0.0), (0.3, 0.0), (-0.3, 0.0), (0.0, 0.3), (0.0, -0.3)] {
+                    let o = pos + axes[0] * dx + axes[1] * dy;
+                    g.line(o, o + forward * 2.0, LIGHT_GIZMO, true);
+                }
+                g.circle(pos, axes[0], axes[1], 0.3, LIGHT_GIZMO, true);
+            }
+            LightKind::Point => {
+                for (u, v) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::X, Vec3::Z)] {
+                    g.circle(pos, u, v, l.range, LIGHT_GIZMO, true);
+                }
+            }
+            LightKind::Spot => {
+                let r = l.range * (l.spot_angle.to_radians() * 0.5).tan();
+                let base = pos + forward * l.range;
+                g.circle(base, axes[0], axes[1], r, LIGHT_GIZMO, true);
+                for d in [axes[0], -axes[0], axes[1], -axes[1]] {
+                    g.line(pos, base + d * r, LIGHT_GIZMO, true);
+                }
+            }
+        }
+    }
+    if let Some(a) = &e.audio_source
+        && a.spatial
+    {
+        for r in [a.min_distance, a.max_distance] {
+            g.circle(pos, Vec3::X, Vec3::Z, r, AUDIO_GIZMO, true);
+            g.circle(pos, Vec3::X, Vec3::Y, r, AUDIO_GIZMO.gamma_multiply(0.5), true);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ext::Ray;
-
-    #[test]
-    fn cube_faces_point_outward() {
-        for tri in &CUBE.tris {
-            let center = (tri[0] + tri[1] + tri[2]) / 3.0;
-            assert!((tri[1] - tri[0]).cross(tri[2] - tri[0]).dot(center) > 0.0);
-        }
-        assert_eq!(CUBE.edges.len(), 12);
-    }
 
     #[test]
     fn rays_hit_triangles_and_axes() {

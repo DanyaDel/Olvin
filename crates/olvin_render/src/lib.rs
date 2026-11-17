@@ -43,6 +43,8 @@ pub struct RenderSettings {
     pub clear_color: Color,
     /// Direction the light travels.
     pub light_dir: Vec3,
+    /// Linear RGB × intensity of the sun.
+    pub light_color: Color,
     pub ambient: Color,
 }
 
@@ -53,6 +55,7 @@ impl Default for RenderSettings {
             low_power: false,
             clear_color: Color::rgb(0.02, 0.02, 0.03),
             light_dir: Vec3::new(-0.4, -1.0, -0.3),
+            light_color: Color::WHITE,
             ambient: Color::rgb(0.15, 0.15, 0.18),
         }
     }

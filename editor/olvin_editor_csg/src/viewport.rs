@@ -8,16 +8,23 @@ use olvin_editor::glam::{Mat4, Vec3};
 use olvin_editor::olvin_scene::file::{BrushDesc, CsgOp};
 use olvin_editor::{EditorState, NewEntity, theme};
 
-use crate::{DRAW_TOOL, EDIT_TOOL, op_color, shared};
+use crate::poly::PolyTool;
+use crate::{DRAW_TOOL, EDIT_TOOL, POLY_TOOL, op_color, shared};
 
-const TOOLS: [ToolDesc; 2] = [
+const TOOLS: [ToolDesc; 3] = [
     ToolDesc {
         id: DRAW_TOOL,
         label: "Draw Brush",
         tooltip: "Drag a rectangle on any surface, then set the height: up adds, down carves. Shift: subtract",
         key: Some(Key::B),
     },
-    ToolDesc { id: EDIT_TOOL, label: "Edit Brush", tooltip: "Drag the faces of the selected brush", key: Some(Key::T) },
+    ToolDesc { id: EDIT_TOOL, label: "Resize", tooltip: "Drag the faces of the selected brush", key: Some(Key::T) },
+    ToolDesc {
+        id: POLY_TOOL,
+        label: "Edit Polygons",
+        tooltip: "Select vertices / edges / faces (1/2/3, Shift adds) and move them; Delete removes vertices",
+        key: Some(Key::G),
+    },
 ];
 
 /// An axis-aligned drawing plane picked from the surface under the cursor.
@@ -69,11 +76,12 @@ pub struct CsgViewport {
     polygons: Vec<olvin_csg::Polygon>,
     draw: Draw,
     face: Option<FaceDrag>,
+    poly: PolyTool,
 }
 
 impl Default for CsgViewport {
     fn default() -> Self {
-        Self { cache_key: Vec::new(), polygons: Vec::new(), draw: Draw::Idle, face: None }
+        Self { cache_key: Vec::new(), polygons: Vec::new(), draw: Draw::Idle, face: None, poly: PolyTool::default() }
     }
 }
 
@@ -115,7 +123,7 @@ impl ViewportExtension for CsgViewport {
                     continue; // drawn thicker in `interact`
                 }
                 let c = op_color(b.op);
-                for [a, e] in olvin_csg::brush_edges(b.shape, b.transform) {
+                for [a, e] in olvin_csg::brush_edges(b) {
                     out.line(a, e, c.gamma_multiply(0.55), false);
                     // Hidden parts stay faintly visible: subtractive brushes live inside walls.
                     out.line(a, e, c.gamma_multiply(0.12), true);
@@ -125,8 +133,15 @@ impl ViewportExtension for CsgViewport {
     }
 
     fn interact(&mut self, ctx: &mut ViewportCtx) -> bool {
-        self.selected_outline(ctx);
+        if ctx.tool != POLY_TOOL {
+            self.selected_outline(ctx);
+        }
         match ctx.tool {
+            POLY_TOOL => {
+                self.draw = Draw::Idle;
+                self.face = None;
+                self.poly.interact(ctx)
+            }
             DRAW_TOOL => {
                 self.face = None;
                 self.draw_tool(ctx);
@@ -149,7 +164,7 @@ impl CsgViewport {
     fn selected_outline(&self, ctx: &ViewportCtx) {
         let Some(sel) = ctx.state.selection else { return };
         let Some(b) = self.cache_key.iter().find(|b| b.id == sel) else { return };
-        for [a, e] in olvin_csg::brush_edges(b.shape, b.transform) {
+        for [a, e] in olvin_csg::brush_edges(b) {
             ctx.camera.line(ctx.painter, a, e, (2.0, theme::SELECTED));
         }
     }
@@ -370,7 +385,7 @@ fn create_brush(state: &mut EditorState, plane: DrawPlane, start: Vec3, end: Vec
     e.name = format!("{} ({})", shape.label(), if op == CsgOp::Subtract { "carve" } else { "brush" });
     e.position = (min + max) * 0.5;
     e.scale = (max - min).max(Vec3::splat(0.01));
-    e.brush = Some(BrushDesc { shape, op, color });
+    e.brush = Some(BrushDesc { shape, op, color, ..Default::default() });
     let message = format!("{} {:.2}×{:.2}×{:.2}", op.label(), e.scale.x, e.scale.y, e.scale.z);
     state.info(message);
 }

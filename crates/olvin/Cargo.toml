@@ -11,6 +11,8 @@ window = ["dep:olvin_window"]
 render = ["dep:olvin_render"]
 # Load .scene.ron files saved by olvin-editor.
 scene = ["render", "olvin_scene/serde", "dep:olvin_csg"]
+# Colliders and rigidbodies simulated with Rapier.
+physics = ["dep:olvin_physics"]
 
 [dependencies]
 olvin_core.workspace = true
@@ -19,5 +21,6 @@ olvin_scene.workspace = true
 olvin_window = { workspace = true, optional = true }
 olvin_render = { workspace = true, optional = true }
 olvin_csg = { workspace = true, optional = true }
+olvin_physics = { workspace = true, optional = true }
 glam.workspace = true
 log.workspace = true

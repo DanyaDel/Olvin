@@ -91,6 +91,9 @@ impl EditorApp {
         if undo {
             self.state.undo();
         }
+        if self.state.tool_owns_keys {
+            return;
+        }
         if let Some(sel) = self.state.selection {
             if duplicate {
                 self.state.duplicate(sel);
@@ -483,6 +486,7 @@ impl eframe::App for EditorApp {
             self.request(Confirm::Open(path));
         }
         self.shortcuts(&ctx);
+        self.state.tool_owns_keys = false;
 
         egui::Panel::top("top").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {

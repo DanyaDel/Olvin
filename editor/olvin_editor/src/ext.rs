@@ -71,6 +71,36 @@ impl Geometry {
         }
     }
 
+    /// A triangle with per-vertex normals (smooth shading).
+    pub fn triangle(&mut self, entity: u64, positions: [Vec3; 3], normals: [Vec3; 3], color: Color32, flags: u32) {
+        if self.wireframe {
+            for i in 0..3 {
+                self.line(positions[i], positions[(i + 1) % 3], Color32::from_gray(200), false);
+            }
+        }
+        for i in 0..3 {
+            self.vertices.push(GpuVertex {
+                position: positions[i].to_array(),
+                normal: normals[i].to_array(),
+                color: rgba8(color),
+                flags,
+            });
+        }
+        self.tri_entity.push(entity);
+    }
+
+    /// A circle of line segments around `center` in the plane spanned by `u`, `v`.
+    pub fn circle(&mut self, center: Vec3, u: Vec3, v: Vec3, radius: f32, color: Color32, on_top: bool) {
+        const N: usize = 48;
+        let p = |i: usize| {
+            let a = i as f32 / N as f32 * std::f32::consts::TAU;
+            center + (u * a.cos() + v * a.sin()) * radius
+        };
+        for i in 0..N {
+            self.line(p(i), p(i + 1), color, on_top);
+        }
+    }
+
     /// A line; `on_top` lines ignore depth (outlines of hidden things).
     pub fn line(&mut self, a: Vec3, b: Vec3, color: Color32, on_top: bool) {
         let target = if on_top { &mut self.overlay_lines } else { &mut self.lines };
@@ -180,6 +210,7 @@ pub struct ViewCamera {
     pub forward: Vec3,
     pub rect: Rect,
     pub near: f32,
+    pub orthographic: bool,
 }
 
 impl ViewCamera {
@@ -208,8 +239,11 @@ impl ViewCamera {
 
     /// World units covered by one screen point at `p`.
     pub fn world_per_point(&self, p: Vec3) -> f32 {
-        let depth = (-self.view.transform_point3(p).z).max(self.near);
         let fy = self.proj.y_axis.y;
+        if self.orthographic {
+            return 2.0 / (fy * self.rect.height());
+        }
+        let depth = (-self.view.transform_point3(p).z).max(self.near);
         2.0 * depth / (fy * self.rect.height())
     }
 

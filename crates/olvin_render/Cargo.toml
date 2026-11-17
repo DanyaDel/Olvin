@@ -10,6 +10,7 @@ repository.workspace = true
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true
+olvin_transform.workspace = true
 wgpu.workspace = true
 glam.workspace = true
 bytemuck.workspace = true

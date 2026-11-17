@@ -19,6 +19,7 @@ physics = ["dep:olvin_physics"]
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true
+olvin_transform.workspace = true
 olvin_window = { workspace = true, optional = true }
 olvin_render = { workspace = true, optional = true }
 olvin_csg = { workspace = true, optional = true }

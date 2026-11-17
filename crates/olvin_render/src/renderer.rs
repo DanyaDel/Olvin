@@ -7,6 +7,7 @@ use glam::{Mat4, Vec3};
 use olvin_core::{AppExit, Resources, SurfaceTarget, WindowHandleSource};
 use olvin_ecs::World;
 use olvin_scene::{Camera, Transform};
+use olvin_transform::GlobalTransform;
 
 use crate::{Frustum, MeshData, MeshRenderer, Meshes, RenderSettings, Vertex};
 
@@ -242,12 +243,15 @@ impl Renderer {
         self.buckets.iter_mut().for_each(Vec::clear);
         let mut culled = 0;
 
-        for (transform, renderer) in world.query::<(&Transform, &MeshRenderer)>().iter() {
+        for (global, transform, renderer) in
+            world.query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>().iter()
+        {
             let i = renderer.mesh.0 as usize;
             let Some(Some(mesh)) = self.meshes.get(i) else { continue };
-            let model = transform.matrix();
+            let model = global.map_or_else(|| transform.matrix(), |g| g.0);
             let center = model.transform_point3(mesh.center);
-            let radius = mesh.radius * transform.scale.abs().max_element();
+            let scale = model.x_axis.truncate().length().max(model.y_axis.truncate().length()).max(model.z_axis.truncate().length());
+            let radius = mesh.radius * scale;
             if !frustum.intersects_sphere(center, radius) {
                 culled += 1;
                 continue;
@@ -287,10 +291,13 @@ impl Renderer {
         }
 
         let camera = world
-            .query::<(&Transform, &Camera)>()
+            .query::<(Option<&GlobalTransform>, &Transform, &Camera)>()
             .iter()
             .next()
-            .map(|(t, c)| c.projection(size.0 as f32 / size.1 as f32) * Camera::view(t));
+            .map(|(g, t, c)| {
+                let pose = g.map_or(*t, GlobalTransform::to_transform);
+                c.projection(size.0 as f32 / size.1 as f32) * Camera::view(&pose)
+            });
         let culled = match camera {
             Some(view_proj) => {
                 let culled = self.prepare_instances(world, view_proj);

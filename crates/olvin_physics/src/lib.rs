@@ -7,6 +7,7 @@ use olvin_core::{App, Plugin, Resources, Stage, Time};
 use olvin_ecs::{EcsPlugin, Entity, World};
 use olvin_scene::file::{BodyKind, ColliderDesc, ColliderShape, RigidbodyDesc};
 use olvin_scene::{MeshGeometry, Transform};
+use olvin_transform::{Parent, world_matrix};
 use rapier3d::prelude as rp;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
@@ -76,25 +77,47 @@ pub fn step(res: &Resources, dt: f32) {
     let mut physics = res.fetch_mut::<Physics>();
     let mut world = res.fetch_mut::<World>();
     create_bodies(&mut world, &mut physics);
-    for (transform, body) in world.query_mut::<(&Transform, &Body)>() {
-        if body.kind == Kind::Kinematic
+    let kinematic: Vec<(Entity, Body)> =
+        world.query::<(Entity, &Body)>().iter().filter(|(_, b)| b.kind == Kind::Kinematic).map(|(e, b)| (e, *b)).collect();
+    for (e, body) in kinematic {
+        if let Some(m) = world_matrix(&world, e)
             && let Some(rb) = physics.world.bodies.get_mut(body.handle)
         {
-            rb.set_next_kinematic_position(pose(transform));
+            rb.set_next_kinematic_position(pose(&decompose(m)));
         }
     }
     if physics.advance(dt) == 0 {
         return;
     }
-    for (transform, body) in world.query_mut::<(&mut Transform, &Body)>() {
-        if body.kind == Kind::Dynamic
-            && let Some(rb) = physics.world.bodies.get(body.handle)
-        {
-            let p = rb.position();
-            transform.translation = Vec3::from_array(p.translation.to_array());
-            transform.rotation = Quat::from_array(p.rotation.to_array());
+    // Dynamic bodies own their world pose; store it relative to the parent.
+    let moved: Vec<(Entity, Option<Entity>, Vec3, Quat)> = world
+        .query::<(Entity, &Body, Option<&Parent>)>()
+        .iter()
+        .filter(|(_, b, _)| b.kind == Kind::Dynamic)
+        .filter_map(|(e, b, parent)| {
+            let p = physics.world.bodies.get(b.handle)?.position();
+            Some((e, parent.map(|p| p.0), Vec3::from_array(p.translation.to_array()), Quat::from_array(p.rotation.to_array())))
+        })
+        .collect();
+    for (e, parent, translation, rotation) in moved {
+        let (translation, rotation) = match parent.and_then(|p| world_matrix(&world, p)) {
+            Some(pm) => {
+                let local = pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
+                let (_, r, t) = local.to_scale_rotation_translation();
+                (t, r)
+            }
+            None => (translation, rotation),
+        };
+        if let Ok(mut t) = world.get::<&mut Transform>(e) {
+            t.translation = translation;
+            t.rotation = rotation;
         }
     }
+}
+
+fn decompose(m: glam::Mat4) -> Transform {
+    let (scale, rotation, translation) = m.to_scale_rotation_translation();
+    Transform { translation, rotation, scale }
 }
 
 /// An entity waiting for its body: everything copied out of the ECS first.
@@ -107,6 +130,11 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
         .iter()
         .filter(|(_, _, c, r, _)| c.is_some() || r.is_some())
         .map(|(e, t, c, r, m)| (e, *t, c.cloned(), r.cloned(), m.cloned()))
+        .collect();
+    // Bodies live in world space: use the world pose of parented objects.
+    let pending: Vec<Pending> = pending
+        .into_iter()
+        .map(|(e, t, c, r, m)| (e, world_matrix(world, e).map_or(t, decompose), c, r, m))
         .collect();
 
     for (entity, transform, collider, rigidbody, mesh) in pending {

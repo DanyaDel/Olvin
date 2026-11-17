@@ -16,6 +16,7 @@ olvin_window = { path = "crates/olvin_window" }
 olvin_render = { path = "crates/olvin_render" }
 olvin_csg = { path = "crates/olvin_csg" }
 olvin_physics = { path = "crates/olvin_physics" }
+olvin_transform = { path = "crates/olvin_transform" }
 olvin = { path = "crates/olvin" }
 
 glam = { version = "0.34", features = ["bytemuck", "serde"] }

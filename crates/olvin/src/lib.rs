@@ -9,6 +9,7 @@ pub use olvin_ecs as ecs;
 #[cfg(feature = "render")]
 pub use olvin_render as render;
 pub use olvin_scene as scene;
+pub use olvin_transform as transform;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
 #[cfg(feature = "physics")]
@@ -33,7 +34,7 @@ pub struct DefaultPlugins {
 
 impl Plugin for DefaultPlugins {
     fn build(&self, app: &mut App) {
-        app.add_plugin(olvin_ecs::EcsPlugin);
+        app.add_plugin(olvin_ecs::EcsPlugin).add_plugin(olvin_transform::TransformPlugin);
         #[cfg(feature = "window")]
         app.add_plugin(self.window.clone());
         #[cfg(feature = "render")]
@@ -54,6 +55,7 @@ pub mod prelude {
         RenderSettings, RenderStats,
     };
     pub use olvin_scene::{Camera, Name, Tag, Transform};
+    pub use olvin_transform::{GlobalTransform, Parent};
     #[cfg(feature = "window")]
     pub use olvin_window::{Input, KeyCode, MouseButton, WindowPlugin};
 }

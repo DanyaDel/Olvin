@@ -69,6 +69,7 @@ pub struct RenderPlugin {
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
+            .add_plugin(olvin_transform::TransformPlugin)
             .insert_resource(self.settings.clone())
             .init_resource::<Meshes>()
             .init_resource::<RenderStats>()

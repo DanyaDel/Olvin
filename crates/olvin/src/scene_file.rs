@@ -9,6 +9,7 @@ use olvin_render::{Color, MeshData, MeshHandle, MeshRenderer, Meshes, RenderSett
 pub use olvin_scene::file::*;
 use olvin_scene::primitives::Primitive;
 use olvin_scene::{Camera, MeshGeometry, Name, Tag, Transform};
+use olvin_transform::{GlobalTransform, Parent};
 
 /// Behaviours attached in the editor; game code looks them up by name.
 #[derive(Clone, Debug, Default)]
@@ -23,20 +24,24 @@ pub struct AudioListener;
 /// the CSG level as static meshes with a mesh collider, and points the
 /// renderer's sun at the first directional light. Returns the entity count.
 ///
-/// The hierarchy is flattened: moving a parent at runtime won't move its
-/// children yet.
+/// The hierarchy is kept: `Transform` is local, `Parent` links children, and
+/// `GlobalTransform` starts at the world matrix.
 pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
     let worlds = scene.world_matrices();
     let mut meshes = res.fetch_mut::<Meshes>();
     let mut world = res.fetch_mut::<World>();
     let mut shapes: HashMap<Shape, MeshHandle> = HashMap::new();
+    let mut entities: HashMap<u64, olvin_ecs::Entity> = HashMap::new();
     let mut spawned = 0;
 
+    // Parents come before children in scene files, so parent entities exist already.
     for e in scene.entities.iter().filter(|e| scene.active_in_hierarchy(e.id)) {
         let matrix = worlds.get(&e.id).copied().unwrap_or_else(|| e.local_transform().matrix());
-        let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
         let mut b = EntityBuilder::new();
-        b.add(Transform { translation, rotation, scale }).add(Name(e.name.clone()));
+        b.add(e.local_transform()).add(GlobalTransform(matrix)).add(Name(e.name.clone()));
+        if let Some(parent) = e.parent.and_then(|p| entities.get(&p)) {
+            b.add(Parent(*parent));
+        }
         if !e.tag.is_empty() {
             b.add(Tag(e.tag.clone()));
         }
@@ -75,7 +80,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         if !e.scripts.is_empty() {
             b.add(Scripts(e.scripts.clone()));
         }
-        world.spawn(b.build());
+        entities.insert(e.id, world.spawn(b.build()));
         spawned += 1;
     }
 
@@ -179,9 +184,33 @@ mod tests {
         let scene = SceneFile { entities: vec![sun, crate_, hidden, child], ..Default::default() };
 
         assert_eq!(spawn(&res, &scene), 2, "inactive parents hide their children");
+        assert_eq!(res.fetch::<World>().query::<&Parent>().iter().count(), 0);
         let world = res.fetch::<World>();
         assert_eq!(world.query::<(&RigidbodyDesc, &ColliderDesc, &Tag)>().iter().count(), 1);
         let dir = res.fetch::<RenderSettings>().light_dir;
         assert!(dir.abs_diff_eq(Vec3::NEG_Y, 1e-4), "sun pitched -90° shines down: {dir}");
+    }
+
+    #[test]
+    fn hierarchy_stays_live_at_runtime() {
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        let mut parent = EntityDesc::new(1, "Parent");
+        parent.position = Vec3::new(10.0, 0.0, 0.0);
+        let mut child = EntityDesc::new(2, "Child");
+        child.parent = Some(1);
+        child.position = Vec3::new(1.0, 0.0, 0.0);
+        spawn(&res, &SceneFile { entities: vec![parent, child], ..Default::default() });
+
+        let mut world = res.fetch_mut::<World>();
+        let find = |w: &World, name: &str| w.query::<(olvin_ecs::Entity, &Name)>().iter().find(|(_, n)| n.0 == name).map(|(e, _)| e).unwrap();
+        let (p, c) = (find(&world, "Parent"), find(&world, "Child"));
+        assert_eq!(world.get::<&Transform>(c).unwrap().translation.x, 1.0, "child keeps its local transform");
+        world.get::<&mut Transform>(p).unwrap().translation.x = 20.0;
+        olvin_transform::propagate(&mut world);
+        let x = world.get::<&GlobalTransform>(c).unwrap().0.w_axis.x;
+        assert_eq!(x, 21.0, "moving the parent moves the child");
     }
 }

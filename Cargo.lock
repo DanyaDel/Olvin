@@ -2646,6 +2646,7 @@ dependencies = [
  "olvin_physics",
  "olvin_render",
  "olvin_scene",
+ "olvin_transform",
  "olvin_window",
 ]
 
@@ -2751,6 +2752,7 @@ dependencies = [
  "olvin_core",
  "olvin_ecs",
  "olvin_scene",
+ "olvin_transform",
  "rapier3d",
 ]
 
@@ -2764,6 +2766,7 @@ dependencies = [
  "olvin_core",
  "olvin_ecs",
  "olvin_scene",
+ "olvin_transform",
  "pollster",
  "wgpu",
 ]
@@ -2776,6 +2779,16 @@ dependencies = [
  "olvin_csg",
  "ron",
  "serde",
+]
+
+[[package]]
+name = "olvin_transform"
+version = "0.1.0"
+dependencies = [
+ "glam 0.34.3",
+ "olvin_core",
+ "olvin_ecs",
+ "olvin_scene",
 ]
 
 [[package]]

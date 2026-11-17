@@ -10,6 +10,7 @@ repository.workspace = true
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene = { workspace = true, features = ["serde"] }
+olvin_transform.workspace = true
 glam.workspace = true
 rapier3d = "0.36"
 log.workspace = true

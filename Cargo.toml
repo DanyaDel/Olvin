@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/DanyaDel/Olvin"
+
+[workspace.dependencies]
+olvin_core = { path = "crates/olvin_core" }
+olvin_ecs = { path = "crates/olvin_ecs" }
+olvin_scene = { path = "crates/olvin_scene" }
+olvin_window = { path = "crates/olvin_window" }
+olvin_render = { path = "crates/olvin_render" }
+olvin = { path = "crates/olvin" }
+
+glam = { version = "0.34", features = ["bytemuck"] }
+hecs = "0.11"
+wgpu = "30"
+winit = "0.30"
+raw-window-handle = "0.6"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+log = "0.4"
+env_logger = "0.11"
+
+# Dependencies are always optimized: math/ECS/wgpu in debug are painfully slow,
+# while our own crates stay quick to compile.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

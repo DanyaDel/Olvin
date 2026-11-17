@@ -1,0 +1,16 @@
+[package]
+name = "olvin_render"
+description = "Olvin renderer (wgpu): instanced meshes, frustum culling, render tiers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+olvin_core.workspace = true
+olvin_ecs.workspace = true
+olvin_scene.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+log.workspace = true

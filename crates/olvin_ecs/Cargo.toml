@@ -1,0 +1,10 @@
+[package]
+name = "olvin_ecs"
+description = "Olvin ECS facade (hecs underneath)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+olvin_core.workspace = true
+hecs.workspace = true

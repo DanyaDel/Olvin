@@ -1,0 +1,10 @@
+[package]
+name = "olvin_core"
+description = "Olvin core: App, plugins, resources, schedule, time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+raw-window-handle.workspace = true
+log.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "olvin_window"
+description = "Olvin window, input and main loop (winit)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+olvin_core.workspace = true
+winit.workspace = true
+glam.workspace = true
+log.workspace = true

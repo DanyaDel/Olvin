@@ -1,0 +1,20 @@
+[package]
+name = "olvin"
+description = "Olvin: modular game engine. Facade crate, every subsystem is an optional feature"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["window", "render"]
+window = ["dep:olvin_window"]
+render = ["dep:olvin_render"]
+
+[dependencies]
+olvin_core.workspace = true
+olvin_ecs.workspace = true
+olvin_scene.workspace = true
+olvin_window = { workspace = true, optional = true }
+olvin_render = { workspace = true, optional = true }
+glam.workspace = true
+log.workspace = true

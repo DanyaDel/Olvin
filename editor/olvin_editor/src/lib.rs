@@ -3,6 +3,7 @@
 //! generates the binary that lists the installed plugins.
 
 mod app;
+pub mod engine;
 pub mod ext;
 pub mod panels;
 mod registry;
@@ -53,7 +54,7 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
             theme::apply(&cc.egui_ctx);
             let gpu = cc.wgpu_render_state.as_ref().ok_or("olvin-editor needs the wgpu renderer")?;
             render::init(gpu);
-            Ok(Box::new(app::EditorApp::new(registry, project)))
+            Ok(Box::new(app::EditorApp::new(registry, project, Some(gpu.clone()))))
         }),
     );
     if let Err(err) = result {

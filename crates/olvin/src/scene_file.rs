@@ -57,7 +57,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
                 && let Some(mesh) = &e.mesh
             {
                 let p = Primitive::new(mesh.shape);
-                let indices = p.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+                let indices = p.indices.as_chunks::<3>().0.to_vec();
                 b.add(MeshGeometry { positions: p.positions, indices });
             }
             b.add(collider.clone());
@@ -111,7 +111,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
     }
     if !polygons.is_empty() {
         let tri = olvin_csg::TriMesh::from_polygons(&polygons);
-        let indices = tri.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+        let indices = tri.indices.as_chunks::<3>().0.to_vec();
         world.spawn((
             Transform::IDENTITY,
             Name("CSG Level".into()),

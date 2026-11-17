@@ -165,13 +165,20 @@ impl Panel for Viewport {
             state.selection = self.pick(pointer, &camera, state, &worlds);
         }
 
-        // Geometry for this frame, after edits.
+        // The engine draws meshes (the edited scene, or the game while playing).
+        let frame_nr = ui.ctx().cumulative_frame_nr();
+        let engine = crate::engine::prepare_view(state, self.id, frame_nr, |_| Some(camera.view_proj));
+
+        // Editor geometry for this frame, after edits.
         let worlds = state.world_matrices();
         self.geometry.clear();
         self.geometry.wireframe = self.wireframe;
-        self.scene_geometry(state, &worlds);
-        for ext in &mut extensions {
-            ext.geometry(state, &mut self.geometry);
+        self.scene_geometry(state, &worlds, engine.is_some());
+        if !state.is_playing() {
+            // While playing, element geometry (e.g. CSG) is part of the game world.
+            for ext in &mut extensions {
+                ext.geometry(state, &mut self.geometry);
+            }
         }
         state.ext.viewport = extensions;
         self.selection_outline(&painter, &camera, state, &worlds);
@@ -190,6 +197,7 @@ impl Panel for Viewport {
             lines: self.geometry.lines.clone(),
             overlay: self.geometry.overlay_lines.clone(),
             grid: self.show_grid,
+            engine,
         };
         painter.set(scene_slot, eframe::egui_wgpu::Callback::new_paint_callback(rect, frame));
 
@@ -336,7 +344,8 @@ impl Viewport {
         self.orbit.distance = (self.orbit.distance * amount.exp()).clamp(0.1, FAR * 0.5);
     }
 
-    fn scene_geometry(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>) {
+    /// `engine_meshes`: the engine renderer draws meshes; only make them pickable.
+    fn scene_geometry(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>, engine_meshes: bool) {
         for e in &state.scene.entities {
             let Some(m) = worlds.get(&e.id) else { continue };
             if !state.scene.active_in_hierarchy(e.id) {
@@ -350,8 +359,12 @@ impl Viewport {
                 for t in prim.indices.as_chunks::<3>().0 {
                     let idx = [t[0], t[1], t[2]].map(|i| i as usize);
                     let pos = idx.map(|i| m.transform_point3(prim.positions[i]));
-                    let nrm = idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());
-                    self.geometry.triangle(e.id, pos, nrm, color, f);
+                    if engine_meshes {
+                        self.geometry.pick_triangle(e.id, pos);
+                    } else {
+                        let nrm = idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());
+                        self.geometry.triangle(e.id, pos, nrm, color, f);
+                    }
                 }
             }
             if e.camera.is_some() {

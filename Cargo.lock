@@ -2684,6 +2684,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "glam 0.34.3",
+ "olvin",
  "olvin_scene",
  "ron",
  "serde",

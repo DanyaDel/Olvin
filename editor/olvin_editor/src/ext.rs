@@ -16,6 +16,8 @@ pub struct Geometry {
     pub(crate) tri_entity: Vec<u64>,
     pub(crate) lines: Vec<LineVertex>,
     pub(crate) overlay_lines: Vec<LineVertex>,
+    /// Triangles drawn by the engine renderer: picked, not drawn here.
+    pub(crate) pick: Vec<([Vec3; 3], u64)>,
     /// Draw meshes as edges only.
     pub wireframe: bool,
 }
@@ -108,7 +110,18 @@ impl Geometry {
         target.push(LineVertex { position: b.to_array(), color: rgba8(color) });
     }
 
+    /// A triangle that can be clicked but is drawn elsewhere (engine meshes).
+    pub fn pick_triangle(&mut self, entity: u64, positions: [Vec3; 3]) {
+        if self.wireframe {
+            for i in 0..3 {
+                self.line(positions[i], positions[(i + 1) % 3], Color32::from_gray(200), false);
+            }
+        }
+        self.pick.push((positions, entity));
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.pick.clear();
         self.vertices.clear();
         self.tri_entity.clear();
         self.lines.clear();
@@ -118,8 +131,15 @@ impl Geometry {
     /// Nearest triangle hit along the ray.
     pub fn raycast(&self, ray: &Ray) -> Option<Hit> {
         let mut best: Option<Hit> = None;
-        for (i, tri) in self.vertices.as_chunks::<3>().0.iter().enumerate() {
-            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(tri[k].position));
+        let drawn = self
+            .vertices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .enumerate()
+            .map(|(i, tri)| ([0, 1, 2].map(|k| Vec3::from(tri[k].position)), self.tri_entity[i]));
+        let picked = self.pick.iter().copied();
+        for ([a, b, c], entity) in drawn.chain(picked) {
             if let Some(t) = ray.triangle(a, b, c)
                 && best.as_ref().is_none_or(|h| t < h.distance)
             {
@@ -127,7 +147,7 @@ impl Geometry {
                 if normal.dot(ray.dir) > 0.0 {
                     normal = -normal;
                 }
-                best = Some(Hit { point: ray.at(t), normal, distance: t, entity: Some(self.tri_entity[i]) });
+                best = Some(Hit { point: ray.at(t), normal, distance: t, entity: Some(entity) });
             }
         }
         best

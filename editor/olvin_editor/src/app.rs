@@ -34,13 +34,15 @@ pub struct EditorApp {
     confirm: Option<Confirm>,
     allow_close: bool,
     title: String,
+    tinted: bool,
 }
 
 impl EditorApp {
-    pub fn new(registry: Registry, project: Option<PathBuf>) -> Self {
+    pub fn new(registry: Registry, project: Option<PathBuf>, gpu: Option<eframe::egui_wgpu::RenderState>) -> Self {
         let layout = Layout::load(&registry);
         let mut state = EditorState::new(project);
         state.ext = registry.instantiate_extensions();
+        state.gpu = gpu;
         if !registry.plugins().is_empty() {
             state.info(format!("installed elements: {}", registry.plugins().join(", ")));
         }
@@ -54,6 +56,7 @@ impl EditorApp {
             confirm: None,
             allow_close: false,
             title: String::new(),
+            tinted: false,
         }
     }
 
@@ -293,6 +296,56 @@ impl EditorApp {
         }
     }
 
+    fn toggle_play(&mut self) {
+        if self.state.is_playing() {
+            self.state.stop_play();
+        } else {
+            self.state.start_play();
+            crate::engine::reset_play_gpu(&self.state);
+        }
+    }
+
+    /// ▶ ⏸ ⏭, like Unity's toolbar.
+    fn play_controls(&mut self, ui: &mut egui::Ui) {
+        let playing = self.state.is_playing();
+        let paused = self.state.play.as_ref().is_some_and(|p| p.paused);
+        // Right-to-left layout: added in reverse.
+        if ui.add_enabled(playing, egui::Button::new("⏭")).on_hover_text("Step one frame").clicked()
+            && let Some(p) = &mut self.state.play
+        {
+            p.paused = true;
+            p.step_once();
+        }
+        if ui.add_enabled(playing, egui::Button::selectable(paused, "⏸")).on_hover_text("Pause").clicked()
+            && let Some(p) = &mut self.state.play
+        {
+            p.paused = !p.paused;
+        }
+        let play = egui::Button::selectable(playing, RichText::new("▶").color(if playing { theme::ACCENT } else { ui.visuals().text_color() }));
+        if ui.add(play).on_hover_text(if playing { "Stop (Ctrl+P)" } else { "Play (Ctrl+P)" }).clicked() {
+            self.toggle_play();
+        }
+    }
+
+    /// Unity tints the whole editor while playing, so edits that will be lost are obvious.
+    fn tint(&mut self, ctx: &egui::Context) {
+        let playing = self.state.is_playing();
+        if playing == self.tinted {
+            return;
+        }
+        self.tinted = playing;
+        theme::apply(ctx);
+        if playing {
+            ctx.all_styles_mut(|style| {
+                let v = &mut style.visuals;
+                let tint = |c: egui::Color32| egui::Color32::from_rgb(c.r().saturating_sub(4), c.g().saturating_sub(2), c.b().saturating_add(14));
+                v.panel_fill = tint(v.panel_fill);
+                v.window_fill = tint(v.window_fill);
+                v.extreme_bg_color = tint(v.extreme_bg_color);
+            });
+        }
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let name = self
@@ -486,6 +539,14 @@ impl eframe::App for EditorApp {
             self.request(Confirm::Open(path));
         }
         self.shortcuts(&ctx);
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P))) {
+            self.toggle_play();
+        }
+        if let Some(play) = &mut self.state.play {
+            play.tick();
+            ctx.request_repaint();
+        }
+        self.tint(&ctx);
         self.state.tool_owns_keys = false;
 
         egui::Panel::top("top").show(ui, |ui| {
@@ -495,6 +556,7 @@ impl eframe::App for EditorApp {
                 self.menus(ui);
                 ui.separator();
                 self.workspace_tabs(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.play_controls(ui));
             });
         });
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));

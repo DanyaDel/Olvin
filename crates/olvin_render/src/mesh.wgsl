@@ -3,7 +3,8 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    // xyz: direction the light travels, normalized.
+    // xyz: direction the light travels, normalized; w = 1: encode sRGB here
+    // (the target isn't an sRGB format, e.g. the editor's egui pass).
     light_dir: vec4<f32>,
     ambient: vec4<f32>,
     light_color: vec4<f32>,
@@ -42,5 +43,15 @@ fn vs_main(in: VertexIn) -> VertexOut {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let diffuse = max(dot(n, -globals.light_dir.xyz), 0.0);
-    return vec4<f32>(in.color.rgb * (globals.ambient.rgb + diffuse * globals.light_color.rgb), in.color.a);
+    var color = in.color.rgb * (globals.ambient.rgb + diffuse * globals.light_color.rgb);
+    if (globals.light_dir.w > 0.5) {
+        color = linear_to_srgb(color);
+    }
+    return vec4<f32>(color, in.color.a);
+}
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
 }

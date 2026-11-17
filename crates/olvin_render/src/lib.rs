@@ -2,13 +2,17 @@
 //! Reads the ECS world and a [`SurfaceTarget`](olvin_core::SurfaceTarget);
 //! knows nothing about the windowing library.
 
+pub mod core;
 mod frustum;
 mod mesh;
 mod renderer;
 
 pub use frustum::Frustum;
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
-pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer};
+pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
+pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
+/// The wgpu version the engine renders with (the editor shares it).
+pub use wgpu;
 
 use glam::Vec3;
 use olvin_core::{App, Plugin, Stage};

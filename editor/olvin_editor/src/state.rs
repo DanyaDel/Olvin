@@ -8,6 +8,7 @@ use olvin_scene::file::{
     AudioSourceDesc, CameraDesc, ColliderDesc, EntityDesc, LightDesc, LightKind, MeshDesc, SceneFile, Shape,
 };
 
+use crate::engine::{PlaySession, ScenePreview};
 use crate::ext::Extensions;
 
 const UNDO_LIMIT: usize = 200;
@@ -131,6 +132,11 @@ pub struct EditorState {
     /// Cleared every frame.
     pub tool_owns_keys: bool,
     pub(crate) ext: Extensions,
+    /// egui's GPU context; the engine renderer draws through the same device.
+    pub(crate) gpu: Option<eframe::egui_wgpu::RenderState>,
+    pub(crate) engine_scene: ScenePreview,
+    /// The running game in Play Mode.
+    pub play: Option<PlaySession>,
     committed: SceneFile,
     saved: SceneFile,
     undo: Vec<SceneFile>,
@@ -155,6 +161,9 @@ impl EditorState {
             snap: SnapSettings::default(),
             tool_owns_keys: false,
             ext: Extensions::default(),
+            gpu: None,
+            engine_scene: ScenePreview::default(),
+            play: None,
             committed: SceneFile::default(),
             saved: SceneFile::default(),
             undo: Vec::new(),
@@ -264,6 +273,33 @@ impl EditorState {
         self.undo.clear();
         self.redo.clear();
         self.scene_generation += 1;
+    }
+
+    // --- play mode -------------------------------------------------------
+
+    pub fn is_playing(&self) -> bool {
+        self.play.is_some()
+    }
+
+    /// Runs the scene as a game inside the editor.
+    pub fn start_play(&mut self) {
+        if self.play.is_none() {
+            self.commit();
+            self.play = Some(PlaySession::start(&self.scene, self.undo.len()));
+            self.info("play");
+        }
+    }
+
+    /// Back to editing: changes made while playing are discarded, like Unity.
+    pub fn stop_play(&mut self) {
+        if let Some(session) = self.play.take() {
+            self.scene = session.saved.clone();
+            self.committed = session.saved;
+            self.undo.truncate(session.undo_len);
+            self.redo.clear();
+            self.scene_generation += 1;
+            self.info("stopped");
+        }
     }
 
     // --- undo ------------------------------------------------------------
@@ -556,5 +592,19 @@ mod tests {
         s.delete(b);
         assert!(s.scene.get(a).is_none());
         assert_eq!(s.children(Some(copy)).len(), 1);
+    }
+
+    #[test]
+    fn stopping_play_discards_play_time_edits() {
+        let mut s = state();
+        let id = s.create(NewEntity::Primitive(Shape::Cube), None);
+        s.end_frame(false);
+        s.start_play();
+        s.scene.get_mut(id).unwrap().position.x = 42.0;
+        s.end_frame(false);
+        s.stop_play();
+        assert_eq!(s.scene.get(id).unwrap().position.x, 0.0);
+        s.undo();
+        assert!(s.scene.get(id).is_none(), "undo continues from before Play");
     }
 }

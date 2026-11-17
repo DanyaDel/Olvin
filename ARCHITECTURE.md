@@ -19,6 +19,7 @@ crates/
   olvin_scene/        Transform, Camera — чистые данные на glam; feature serde: формат сцен
   olvin_csg/          CSG по выпуклым брашам: add/subtract/intersect в порядке иерархии, convex hull
   olvin_physics/      физика на Rapier 0.36: коллайдеры, Rigidbody, фиксированный шаг
+  olvin_transform/    иерархия: Parent, GlobalTransform, распространение в PostUpdate
   olvin_window/       winit: окно, Input, главный цикл (runner)
   olvin_render/       wgpu: меши, instancing, frustum culling, уровни железа
   olvin/              фасад: реэкспорты, DefaultPlugins, prelude, features window/render
@@ -57,10 +58,15 @@ hub/                  olvin-hub — отдельный инструмент, н�
 - `lib.rs`: `WindowPlugin { title, width, height, resizable }` ставит runner на winit 0.30 (`ApplicationHandler`). Окно создаётся в `resumed`, потому что так требует Android. Там же вставляется `SurfaceTarget` и вызывается `app.startup()`. Кадр — это `RedrawRequested → app.update()`. На Resize обновляется `SurfaceTarget.size`.
 - `input.rs`: `Input` хранит нажатые клавиши и кнопки мыши, `just_pressed/just_released`, позицию курсора и сырую `mouse_delta` из `DeviceEvent`. Сброс в `Stage::Last`, при потере фокуса всё отпускается.
 
+## olvin_transform
+
+`Parent(Entity)` и `GlobalTransform(Mat4)`. `TransformPlugin` в `Stage::PostUpdate` вызывает `propagate`: недостающие `GlobalTransform` добавляются, у корней глобальная матрица равна локальной, у потомков считается с кэшем, циклы обрезаются. `world_matrix(world, e)` даёт мировую матрицу сразу, ещё до распространения (её использует физика). Плагин включён в `DefaultPlugins` и `RenderPlugin`.
+
 ## olvin_render
 
 - `lib.rs`: `RenderPlugin { settings }`, `RenderSettings` (vsync, low_power, clear_color, light_dir, ambient), компонент `MeshRenderer { mesh, color }`, `Color` (линейный RGBA). Плагин добавляет `EcsPlugin`, ресурсы `Meshes` и `RenderStats`, системы `init` (Startup) и `render` (Render).
-- `renderer.rs`: `Renderer` создаёт wgpu Instance с display handle (для GLES/Wayland), surface, adapter и device с лимитами WebGL2. Определяет `RenderTier`, при vsync выбирает Fifo, иначе Mailbox или Immediate. Кадр: загрузка новых мешей → проход по `(Transform, MeshRenderer)` с отсечением по сфере → бакеты по мешу → один буфер инстансов (растёт до степени двойки) → `draw_indexed` на меш. Результат в `RenderStats { draw_calls, instances, culled }`, сведения об адаптере в `RenderInfo`.
+- `core.rs`: `RenderCore` — рендер без окна. Пайплайны создаются под конкретный формат цвета, MSAA и глубину. Если цель не sRGB (как в egui), гамма кодируется в шейдере. `GpuMeshes` — GPU-копии одного реестра `Meshes`, `ViewData` — данные одной камеры (uniform-буфер и инстансы). Методы: `upload`, `prepare(view, gpu, world, view_proj, settings)` (проход по `(GlobalTransform|Transform, MeshRenderer)` с отсечением по сфере, бакеты по мешу, один буфер инстансов) и `draw(view, gpu, pass)` в чужой проход рендера. `camera_view_proj(world, aspect)`. Пиксельный тест рисует куб в offscreen-текстуру (проверен на Vulkan и llvmpipe).
+- `renderer.rs`: оконный `Renderer` = `RenderCore` + surface. Создаёт instance с display handle (для GLES/Wayland), adapter и device с лимитами WebGL2, определяет `RenderTier` (`tier_of`). При vsync — Fifo, иначе Mailbox или Immediate. Также `begin_pass` и `create_depth`. Крейт реэкспортирует `wgpu`.
 - `mesh.rs`: `Vertex { position, normal }`, `MeshData` (`cube`, `plane`, `bounding_sphere`). `Meshes::add` возвращает `MeshHandle` ещё до появления GPU, загрузка ленивая.
 - `frustum.rs`: 6 плоскостей из view-proj (Gribb–Hartmann, глубина 0..1), тест сферы.
 - `mesh.wgsl`: instanced-шейдер в пределах WebGL2: один uniform, 7 атрибутов (матрица модели — 4 vec4 + цвет), Ламберт + ambient.
@@ -82,21 +88,24 @@ hub/                  olvin-hub — отдельный инструмент, н�
 
 ## olvin (фасад)
 
-Features `window` и `render` включены по умолчанию. `scene` добавляет `scene_file::{load, spawn}`: загрузка сцены редактора в `World` — только активные объекты; компоненты переносятся как данные (`LightDesc`, `ColliderDesc`, `RigidbodyDesc`, `AudioSourceDesc`, `Scripts`, `AudioListener`, `Name`, `Tag`); для Mesh Collider примитива добавляется `MeshGeometry`. Первый Directional Light задаёт `RenderSettings.light_dir/light_color`. CSG собирается при загрузке: меши по цвету граней плюс одна сущность «CSG Level» со статическим mesh-коллайдером. Иерархия разворачивается в мировые трансформы. `physics` подключает `olvin_physics` в `DefaultPlugins`. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
+Features `window` и `render` включены по умолчанию. `scene` добавляет `scene_file::{load, spawn}`: загрузка сцены редактора в `World` — только активные объекты; компоненты переносятся как данные (`LightDesc`, `ColliderDesc`, `RigidbodyDesc`, `AudioSourceDesc`, `Scripts`, `AudioListener`, `Name`, `Tag`); для Mesh Collider примитива добавляется `MeshGeometry`. Первый Directional Light задаёт `RenderSettings.light_dir/light_color`. CSG собирается при загрузке: меши по цвету граней плюс одна сущность «CSG Level» со статическим mesh-коллайдером. Иерархия сохраняется: `Transform` локальный, `Parent` связывает детей, `GlobalTransform` сразу задан мировой матрицей. `physics` подключает `olvin_physics` в `DefaultPlugins`. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
 
 ## editor (olvin-editor)
 
 Редактор сцен на egui 0.35 + egui_dock 0.20, стиль Blender + Unity, интерфейс на английском. Ставится отдельно, отдельные элементы подключаются к нему как крейты-плагины. Хаб генерирует крейт установки, в его `main.rs` перечислены плагины. Плагины линкуются статически, без dylib: так быстрее и без проблем с ABI.
 
-- `lib.rs`: `run(plugins)` — первый аргумент командной строки это папка проекта. Нативные опции: wgpu, depth 32, MSAA 4. Реэкспорт egui, egui_dock, glam, olvin_scene, чтобы плагины собирались строго на тех же версиях.
+- `lib.rs`: `run(plugins)` — первый аргумент командной строки это папка проекта. Нативные опции: wgpu, depth 32, MSAA 4. Редактор и движок работают на одном wgpu 30 (egui 0.36). Реэкспорт egui, egui_dock, glam, olvin_scene, чтобы плагины собирались строго на тех же версиях.
 - `registry.rs`: трейты `Panel` (`ui(ui, &mut EditorState)`, по экземпляру на вкладку) и `EditorPlugin` (`build(&mut Registry)`). `PanelKind`, `WorkspaceTemplate`, `TabAlloc`. Точки расширения: `add_viewport_extension`, `add_component`, `add_create_item`.
 - `ext.rs`: API для элементов. `Geometry` (мировые полигоны с флагами `GRID`/`SELECTED`, линии с глубиной и поверх всего, `raycast`), `ViewCamera` (project, ray, world_per_point, линия egui с клиппингом по near), `Ray` (плоскость, треугольник, ближайшая точка на прямой), `Snap`, `ToolDesc`, `ViewportCtx`, трейт `ViewportExtension` (`geometry`, `interact`, `tools`), `ComponentEditor`, `CreateItem` (путь вида «CSG/Box» даёт подменю).
-- `render.rs` + `viewport.wgsl`: GPU-вьюпорт рисует прямо в render pass egui через `egui_wgpu::CallbackTrait` (wgpu 29 от eframe), в общий буфер глубины. Конвейеры: меши (освещение, трипланарная сетка 1 м и ¼ м для `GRID`, подсветка выделения), бесконечная адаптивная сетка (полноэкранный треугольник, пересечение луча с плоскостью, `frag_depth`, затухание мелких линий по `fwidth`, оси X/Z), линии с глубиной и поверх всего. Буферы на вьюпорт растут до степени двойки.
+- `engine.rs`: движок внутри редактора. `EngineGpu` (в ресурсах callback egui): `RenderCore` на device egui, `GpuMeshes` для правки и для игры, `ViewData` на каждую панель. `ScenePreview` — ECS-мир, который раз в кадр собирается из сцены (меши и камеры). `prepare_view(state, id, frame, view_proj)` готовит вид: в Play — игровой мир, иначе превью. `PlaySession` — настоящий `App` с `EcsPlugin`, `TransformPlugin` и `PhysicsPlugin`, сцена грузится через `olvin::scene_file::spawn`. Есть пауза и шаг на кадр.
+- `render.rs` + `viewport.wgsl`: GPU-вьюпорт рисует прямо в render pass egui через `egui_wgpu::CallbackTrait`, в общий буфер глубины. Сначала меши рисует рендерер движка (`Frame.engine`), затем поверх идёт геометрия редактора. Конвейеры: меши (освещение, трипланарная сетка 1 м и ¼ м для `GRID`, подсветка выделения), бесконечная адаптивная сетка (полноэкранный треугольник, пересечение луча с плоскостью, `frag_depth`, затухание мелких линий по `fwidth`, оси X/Z), линии с глубиной и поверх всего. Буферы на вьюпорт растут до степени двойки.
 - `state.rs`: `EditorState` — сцена, путь, проект, выделение, `preview` (переопределение поз, не сохраняется), лог, `scene_generation`, активный инструмент (`tools::{VIEW, MOVE, ROTATE, SCALE}` или id элемента), `local_space`, `SnapSettings { enabled, step: Option (None = адаптивный), angle_deg }`, расширения. Undo/redo снимками: изменения коммитятся, когда отпущены мышь и клавиатура, так что перетаскивание = один шаг. Операции: `create/delete/duplicate/reparent/move_sibling`, `open/save/save_as/new_scene`, `request_open`.
 - `workspace.rs`: `Tab { kind, id }`, `Workspace { name, dock: DockState<Tab> }`, `Layout` (вкладки рабочих областей, сохраняется в `<config>/olvin-editor/layout.ron` при выходе). Дублирование выдаёт новые id вкладок, у копий независимое состояние панелей.
 - `app.rs`: меню (File/Edit/GameObject/Window). GameObject как в Unity: Create Empty, 3D Object/…, Light/…, Audio/…, Camera и пункты элементов. Примитивы создаются со своим коллайдером, камера с Audio Listener. Если инструмент выставил `state.tool_owns_keys`, Delete и Ctrl+D отдаются ему. вкладки рабочих областей как в браузере (клик, двойной клик — переименовать, СКМ или × — закрыть, ПКМ — дублировать или сдвинуть, «+» — шаблон, пустая или копия), DockArea (перетаскивание, разделение, всплывающие окна, «+» в каждой группе вкладок), горячие клавиши (Ctrl+S/N/Z/Shift+Z/Y/D, Del/X), подтверждение при несохранённых изменениях, статус-бар, заголовок окна.
 - `theme.rs`: серые тона Blender, синее выделение Unity, оранжевый для выбранного во вьюпорте, цвета осей.
 - `panels/viewport.rs`: камера как в Unity: СКМ — сдвиг, Alt+ЛКМ — орбита, Alt+ПКМ — приближение, ПКМ — обзор, с WASD/QE — полёт (Shift ускоряет, колесо при зажатой ПКМ меняет скорость), Hand(Q)+ЛКМ — сдвиг, колесо, F. Кликабельное гизмо вида: оси ±X/±Y/±Z дают вид по ним, центр переключает Persp/Iso (ортография). Примитивы из `olvin_scene::primitives` с гладкими нормалями, неактивные объекты скрыты, свет вьюпорта от Directional Light сцены. Гизмо компонентов выделенного: коллайдеры (зелёные), свет (лучи, сфера, конус), радиусы звука, Character Controller. Иконки света и звука кликабельны. Инструменты: Q/W/E/R и инструменты элементов, X переключает Global/Local. Гизмо: Move (оси по ближайшей точке луча, плоскости, свободная ручка в плоскости экрана), Rotate (кольца по осям с передней полуокружностью, кольцо вида, угол из экранного угла вокруг центра), Scale (оси с кубиками, равномерный). Перетаскивание считается от снимка начала: привязка позиции к абсолютной сетке на мировых осях и к шагу на локальных, угол 1–90°, масштаб 0.1. Ctrl инвертирует Snap. Шаг Auto — степень двойки от высоты камеры, совпадает с сеткой. Порядок кадра: расширения → гизмо → выбор лучом → сборка геометрии → callback в заранее зарезервированный слот painter'а (3D под оверлеями). Панель инструментов и индикатор осей сверху.
+- `panels/game.rs`: панель Game — вид из первой камеры сцены, в Play это живая игра.
+- Play Mode (`app.rs` и `state.rs`): ▶ ⏸ ⏭ в верхней панели, Ctrl+P. Во время игры интерфейс подкрашен. Stop возвращает сцену и историю undo к моменту старта (`start_play`/`stop_play`). Вьюпорт в Play показывает игровой мир, а геометрию элементов не рисует: CSG уже входит в мир игры.
 - `panels/hierarchy.rs`: дерево с drag&drop для смены родителя, поиск, контекстное меню (Create child с пунктами элементов, Rename, Duplicate, Move Up/Down — важно для порядка CSG, Unparent, Delete). `create_menu` общий с меню GameObject.
 - `panels/inspector.rs`: заголовок Active / имя / Tag / Layer. Сворачиваемые секции: Transform, Mesh Renderer (выбор меша), Camera, Light, Box/Sphere/Capsule/Mesh Collider, Rigidbody, Character Controller, Audio Source, Audio Listener, Scripts (имя + параметры ключ–значение), компоненты элементов. Add Component — всплывающее меню с поиском и категориями Rendering / Physics / Audio / Scripts / Elements.
 - `panels/assets.rs`: браузер `assets/` проекта: хлебные крошки, плитки, фильтр, создание папки или сцены, двойной клик открывает сцену.
@@ -120,8 +129,8 @@ Features `window` и `render` включены по умолчанию. `scene` 
 ## Зависимости
 
 wgpu 30, winit 0.30, hecs 0.11, glam 0.34 (проекции в `glam::camera`), bytemuck, pollster, log/env_logger.
-Хаб: toml_edit, toml, serde, clap, dirs, anyhow, eframe 0.35 (0.36+ требует rustc 1.95).
-Редактор: eframe/egui 0.35 (wgpu 29 внутри, отдельно от wgpu 30 движка), egui_dock 0.20 (0.21 требует egui 0.36), bytemuck, ron, dirs.
+Хаб: toml_edit, toml, serde, clap, dirs, anyhow, eframe 0.36.
+Редактор: eframe/egui 0.36 (wgpu 30, общий с движком), egui_dock 0.21, bytemuck, ron, dirs, `olvin` (render + scene + physics). Rust ≥ 1.95 (используется 1.100). В egui 0.36 headless-тесты обязаны чистить `textures_delta`.
 
 ## Проверено
 
@@ -131,7 +140,7 @@ wgpu 30, winit 0.30, hecs 0.11, glam 0.34 (проекции в `glam::camera`), 
 
 ## Дальше (план)
 
-1. Иерархия трансформов (Parent / GlobalTransform) и стадия пропагации.
+1. ~~Иерархия трансформов~~ — сделано (olvin_transform).
 2. Ассеты: загрузка glTF, текстуры и материалы, хэндлы с подсчётом ссылок.
 3. Тир Full: culling на compute и indirect draw. LOD через meshoptimizer.
 4. Параллельный планировщик (rayon) для систем с непересекающимися ресурсами.

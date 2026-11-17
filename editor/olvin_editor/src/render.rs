@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use eframe::egui_wgpu::{self, wgpu};
 
+use crate::engine::{EngineGpu, Source};
 use crate::ext::{GpuVertex, LineVertex};
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -38,6 +39,7 @@ pub struct Resources {
     lines: wgpu::RenderPipeline,
     overlay: wgpu::RenderPipeline,
     targets: HashMap<u64, Target>,
+    pub engine: EngineGpu,
 }
 
 pub fn init(render_state: &egui_wgpu::RenderState) {
@@ -126,6 +128,7 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
         overlay: pipeline("olvin overlay", "vs_line", "fs_line", &[Some(line_layout)], LineList, false, Always, premultiplied),
         layout,
         targets: HashMap::new(),
+        engine: EngineGpu::new(render_state),
     };
     render_state.renderer.write().callback_resources.insert(resources);
 }
@@ -138,6 +141,8 @@ pub struct Frame {
     pub lines: Vec<LineVertex>,
     pub overlay: Vec<LineVertex>,
     pub grid: bool,
+    /// Engine-rendered world prepared for this viewport id, drawn first.
+    pub engine: Option<Source>,
 }
 
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut (wgpu::Buffer, u64), data: &[u8]) {
@@ -207,6 +212,9 @@ impl egui_wgpu::CallbackTrait for Frame {
         resources: &egui_wgpu::CallbackResources,
     ) {
         let Some(res) = resources.get::<Resources>() else { return };
+        if let Some(source) = self.engine {
+            res.engine.draw(self.viewport, source, pass);
+        }
         let Some(t) = res.targets.get(&self.viewport) else { return };
         pass.set_bind_group(0, &t.bind, &[]);
         if t.counts[0] > 0 {

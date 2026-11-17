@@ -10,3 +10,7 @@ WGPU_BACKEND=gl cargo run -p sandbox --release # слабый путь (тир C
 ```
 
 Архитектура: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Лицензия
+
+На выбор: [MIT](LICENSE-MIT) или [Apache-2.0](LICENSE-APACHE).

@@ -16,7 +16,9 @@ pub struct GameView {
 
 impl Default for GameView {
     fn default() -> Self {
-        Self { id: NEXT_ID.fetch_add(1, Ordering::Relaxed) }
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        }
     }
 }
 
@@ -30,7 +32,9 @@ impl Panel for GameView {
         painter.rect_filled(rect, 0.0, Color32::BLACK);
         let aspect = rect.width() / rect.height();
         let frame = ui.ctx().cumulative_frame_nr();
-        match crate::engine::prepare_view(state, self.id, frame, |world| camera_view_proj(world, aspect)) {
+        match crate::engine::prepare_view(state, self.id, frame, |world| {
+            camera_view_proj(world, aspect)
+        }) {
             Some(source) => {
                 let frame = Frame {
                     viewport: self.id,
@@ -44,7 +48,13 @@ impl Panel for GameView {
                 painter.add(eframe::egui_wgpu::Callback::new_paint_callback(rect, frame));
             }
             None => {
-                painter.text(rect.center(), Align2::CENTER_CENTER, "No camera in the scene", FontId::proportional(14.0), Color32::GRAY);
+                painter.text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    "No camera in the scene",
+                    FontId::proportional(14.0),
+                    Color32::GRAY,
+                );
             }
         }
         if state.is_playing() {

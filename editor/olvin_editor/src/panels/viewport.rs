@@ -6,7 +6,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use egui::{Align2, Color32, FontId, Pos2, PointerButton, Sense, Stroke, Vec2, vec2};
+use egui::{Align2, Color32, FontId, PointerButton, Pos2, Sense, Stroke, Vec2, vec2};
 use glam::camera::rh::{proj::directx, view};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use olvin_scene::file::{ColliderShape, EntityDesc, LightKind, Shape};
@@ -24,11 +24,24 @@ const LIGHT: Vec3 = Vec3::new(-0.45, -1.0, -0.3);
 const GIZMO_POINTS: f32 = 95.0;
 const HOT: Color32 = Color32::from_rgb(255, 225, 70);
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
-const STEPS: [f32; 11] = [1.0 / 16.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
+const STEPS: [f32; 11] = [
+    1.0 / 16.0,
+    0.125,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0,
+];
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-static PRIMITIVES: LazyLock<Vec<Primitive>> = LazyLock::new(|| Shape::ALL.iter().map(|s| Primitive::new(*s)).collect());
+static PRIMITIVES: LazyLock<Vec<Primitive>> =
+    LazyLock::new(|| Shape::ALL.iter().map(|s| Primitive::new(*s)).collect());
 
 fn primitive(shape: Shape) -> &'static Primitive {
     &PRIMITIVES[Shape::ALL.iter().position(|s| *s == shape).unwrap_or(0)]
@@ -47,7 +60,11 @@ struct Orbit {
 
 impl Orbit {
     fn back(&self) -> Vec3 {
-        Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos())
+        Vec3::new(
+            self.pitch.cos() * self.yaw.sin(),
+            self.pitch.sin(),
+            self.pitch.cos() * self.yaw.cos(),
+        )
     }
 
     fn eye(&self) -> Vec3 {
@@ -101,7 +118,12 @@ impl Default for Viewport {
     fn default() -> Self {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            orbit: Orbit { target: Vec3::ZERO, yaw: 0.6, pitch: 0.45, distance: 14.0 },
+            orbit: Orbit {
+                target: Vec3::ZERO,
+                yaw: 0.6,
+                pitch: 0.45,
+                distance: 14.0,
+            },
             orthographic: false,
             fly_speed: 1.0,
             show_grid: true,
@@ -173,7 +195,8 @@ impl Panel for Viewport {
 
         // The engine draws meshes (the edited scene, or the game while playing).
         let frame_nr = ui.ctx().cumulative_frame_nr();
-        let engine = crate::engine::prepare_view(state, self.id, frame_nr, |_| Some(camera.view_proj));
+        let engine =
+            crate::engine::prepare_view(state, self.id, frame_nr, |_| Some(camera.view_proj));
 
         // Editor geometry for this frame, after edits.
         let worlds = state.world_matrices();
@@ -196,7 +219,14 @@ impl Panel for Viewport {
                 view_proj: camera.view_proj.to_cols_array_2d(),
                 inv_view_proj: inv.to_cols_array_2d(),
                 eye: camera.eye.extend(1.0).to_array(),
-                light: state.scene.sun().map(|(d, _, _)| d).unwrap_or(LIGHT).normalize().extend(0.0).to_array(),
+                light: state
+                    .scene
+                    .sun()
+                    .map(|(d, _, _)| d)
+                    .unwrap_or(LIGHT)
+                    .normalize()
+                    .extend(0.0)
+                    .to_array(),
                 grid: [snap.step, 8.0, self.fade_distance(), 0.0],
             },
             vertices: self.geometry.vertices.clone(),
@@ -205,7 +235,10 @@ impl Panel for Viewport {
             grid: self.show_grid,
             engine,
         };
-        painter.set(scene_slot, eframe::egui_wgpu::Callback::new_paint_callback(rect, frame));
+        painter.set(
+            scene_slot,
+            eframe::egui_wgpu::Callback::new_paint_callback(rect, frame),
+        );
 
         self.overlay(ui, rect, &camera, state, grid_step);
     }
@@ -213,7 +246,12 @@ impl Panel for Viewport {
 
 impl Viewport {
     fn eye_height(&self) -> f32 {
-        self.orbit.eye().y.abs().max(self.orbit.distance * 0.3).max(0.05)
+        self.orbit
+            .eye()
+            .y
+            .abs()
+            .max(self.orbit.distance * 0.3)
+            .max(0.05)
     }
 
     /// Power-of-two grid step that keeps roughly the same on-screen density.
@@ -251,7 +289,11 @@ impl Viewport {
 
     fn hotkeys(&mut self, ui: &egui::Ui, response: &egui::Response, state: &mut EditorState) {
         let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary));
-        if !response.hovered() || flying || ui.ctx().egui_wants_keyboard_input() || self.drag.is_some() {
+        if !response.hovered()
+            || flying
+            || ui.ctx().egui_wants_keyboard_input()
+            || self.drag.is_some()
+        {
             return;
         }
         let pressed = |k| ui.input(|i| i.key_pressed(k) && i.modifiers.is_none());
@@ -278,7 +320,6 @@ impl Viewport {
         if pressed(egui::Key::F) {
             state.frame_selection = true;
         }
-
     }
 
     /// Unity scene-view controls: MMB pan, Alt+LMB orbit, Alt+RMB zoom,
@@ -317,13 +358,20 @@ impl Viewport {
         let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary)) && !alt;
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if flying && (response.hovered() || right) {
-            let (dt, boost) = ui.input(|i| (i.stable_dt.min(0.1), if i.modifiers.shift { 4.0 } else { 1.0 }));
+            let (dt, boost) = ui.input(|i| {
+                (
+                    i.stable_dt.min(0.1),
+                    if i.modifiers.shift { 4.0 } else { 1.0 },
+                )
+            });
             if scroll != 0.0 {
                 self.fly_speed = (self.fly_speed * (scroll * 0.004).exp()).clamp(0.05, 50.0);
             }
             let forward = -self.orbit.back();
             let right_v = forward.cross(Vec3::Y).normalize_or_zero();
-            let axis = |a: egui::Key, b: egui::Key| ui.input(|i| i.key_down(a) as i32 as f32 - i.key_down(b) as i32 as f32);
+            let axis = |a: egui::Key, b: egui::Key| {
+                ui.input(|i| i.key_down(a) as i32 as f32 - i.key_down(b) as i32 as f32)
+            };
             let mv = forward * axis(egui::Key::W, egui::Key::S)
                 + right_v * axis(egui::Key::D, egui::Key::A)
                 + Vec3::Y * axis(egui::Key::E, egui::Key::Q);
@@ -351,24 +399,46 @@ impl Viewport {
     }
 
     /// `engine_meshes`: the engine renderer draws meshes; only make them pickable.
-    fn scene_geometry(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>, engine_meshes: bool) {
+    fn scene_geometry(
+        &mut self,
+        state: &EditorState,
+        worlds: &std::collections::HashMap<u64, Mat4>,
+        engine_meshes: bool,
+    ) {
         for e in &state.scene.entities {
             let Some(m) = worlds.get(&e.id) else { continue };
             if !state.scene.active_in_hierarchy(e.id) {
                 continue;
             }
-            if let Some(mesh) = &e.mesh {
+            if let Some(poly) = &e.poly {
+                let (pos, nrm, idx) = poly.triangulate();
+                let color = linear_color(e.mesh.as_ref().map_or([0.8; 4], |m| m.color));
+                for t in idx.as_chunks::<3>().0 {
+                    let p = t.map(|i| m.transform_point3(pos[i as usize]));
+                    if engine_meshes {
+                        self.geometry.pick_triangle(e.id, p);
+                    } else {
+                        let n = (m.transform_vector3(nrm[t[0] as usize])).normalize_or_zero();
+                        self.geometry.triangle(e.id, p, [n; 3], color, 0);
+                    }
+                }
+            } else if let Some(mesh) = &e.mesh {
                 let prim = primitive(mesh.shape);
                 let normal_matrix = glam::Mat3::from_mat4(*m).inverse().transpose();
                 let color = linear_color(mesh.color);
-                let f = if state.selection == Some(e.id) { flags::SELECTED } else { 0 };
+                let f = if state.selection == Some(e.id) {
+                    flags::SELECTED
+                } else {
+                    0
+                };
                 for t in prim.indices.as_chunks::<3>().0 {
                     let idx = [t[0], t[1], t[2]].map(|i| i as usize);
                     let pos = idx.map(|i| m.transform_point3(prim.positions[i]));
                     if engine_meshes {
                         self.geometry.pick_triangle(e.id, pos);
                     } else {
-                        let nrm = idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());
+                        let nrm =
+                            idx.map(|i| (normal_matrix * prim.normals[i]).normalize_or_zero());
                         self.geometry.triangle(e.id, pos, nrm, color, f);
                     }
                 }
@@ -376,7 +446,11 @@ impl Viewport {
             if e.camera.is_some() {
                 let (_, rot, pos) = m.to_scale_rotation_translation();
                 let cm = Mat4::from_rotation_translation(rot, pos);
-                let color = if state.selection == Some(e.id) { theme::SELECTED } else { Color32::from_gray(220) };
+                let color = if state.selection == Some(e.id) {
+                    theme::SELECTED
+                } else {
+                    Color32::from_gray(220)
+                };
                 let apex = cm.transform_point3(Vec3::ZERO);
                 let c = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
                     .map(|(x, y)| cm.transform_point3(Vec3::new(0.35 * x, 0.25 * y, -0.6)));
@@ -402,11 +476,32 @@ impl Viewport {
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) {
         for sel in state.selected_ids() {
-            let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else { continue };
-            let color = if Some(sel) == state.selection { theme::SELECTED } else { theme::SELECTED.gamma_multiply(0.6) };
-            if let Some(mesh) = &e.mesh {
+            let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else {
+                continue;
+            };
+            let color = if Some(sel) == state.selection {
+                theme::SELECTED
+            } else {
+                theme::SELECTED.gamma_multiply(0.6)
+            };
+            if let Some(poly) = &e.poly {
+                for [a, b] in poly.edges() {
+                    let (a, b) = (poly.positions[a as usize], poly.positions[b as usize]);
+                    camera.line(
+                        painter,
+                        m.transform_point3(a),
+                        m.transform_point3(b),
+                        (1.5, color),
+                    );
+                }
+            } else if let Some(mesh) = &e.mesh {
                 for [a, b] in &primitive(mesh.shape).outline {
-                    camera.line(painter, m.transform_point3(*a), m.transform_point3(*b), (1.5, color));
+                    camera.line(
+                        painter,
+                        m.transform_point3(*a),
+                        m.transform_point3(*b),
+                        (1.5, color),
+                    );
                 }
             }
         }
@@ -425,13 +520,22 @@ impl Viewport {
             .entities
             .iter()
             .filter(|e| has_icon(e) && state.scene.active_in_hierarchy(e.id))
-            .filter_map(|e| Some((e.id, camera.project(worlds.get(&e.id)?.w_axis.truncate())?.distance(pointer))))
+            .filter_map(|e| {
+                Some((
+                    e.id,
+                    camera
+                        .project(worlds.get(&e.id)?.w_axis.truncate())?
+                        .distance(pointer),
+                ))
+            })
             .filter(|(_, d)| *d < 16.0)
             .min_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((id, _)) = icon {
             return Some(id);
         }
-        self.geometry.raycast(&camera.ray(pointer)).and_then(|h| h.entity)
+        self.geometry
+            .raycast(&camera.ray(pointer))
+            .and_then(|h| h.entity)
     }
 
     // --- gizmo -----------------------------------------------------------------
@@ -451,7 +555,9 @@ impl Viewport {
             self.drag = None;
             return false;
         };
-        let Some(&world) = worlds.get(&sel) else { return false };
+        let Some(&world) = worlds.get(&sel) else {
+            return false;
+        };
         let (_, world_rotation, origin) = world.to_scale_rotation_translation();
         let tool = state.tool.as_str();
         let local = state.local_space || tool == tools::SCALE;
@@ -460,16 +566,23 @@ impl Viewport {
             None if local => AXES.map(|a| (world_rotation * a).normalize()),
             None => AXES,
         };
-        let Some(o) = camera.project(origin) else { return false };
+        let Some(o) = camera.project(origin) else {
+            return false;
+        };
         let len = camera.world_per_point(origin) * GIZMO_POINTS;
-        let tips: [Option<Pos2>; 3] = std::array::from_fn(|i| camera.project(origin + axes[i] * len));
+        let tips: [Option<Pos2>; 3] =
+            std::array::from_fn(|i| camera.project(origin + axes[i] * len));
         let to_eye = (camera.eye - origin).normalize();
 
         let hovered = match &self.drag {
             Some(d) => Some(d.handle),
-            None => response.hover_pos().and_then(|p| hit_handle(tool, p, camera, origin, axes, len, o, &tips)),
+            None => response
+                .hover_pos()
+                .and_then(|p| hit_handle(tool, p, camera, origin, axes, len, o, &tips)),
         };
-        draw_handles(painter, tool, camera, origin, axes, len, o, &tips, hovered, to_eye);
+        draw_handles(
+            painter, tool, camera, origin, axes, len, o, &tips, hovered, to_eye,
+        );
 
         if self.drag.is_none()
             && response.drag_started_by(PointerButton::Primary)
@@ -478,11 +591,24 @@ impl Viewport {
         {
             let mouse = ui.input(|i| i.pointer.press_origin()).unwrap_or(o);
             let ray = camera.ray(mouse);
-            let parent = e.parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
+            let parent = e
+                .parent
+                .and_then(|p| worlds.get(&p).copied())
+                .unwrap_or(Mat4::IDENTITY);
             let (param, hit) = match handle {
                 Handle::Axis(i) => (ray.closest_on_line(origin, axes[i]).unwrap_or(0.0), origin),
-                Handle::Plane(i) => (0.0, ray.plane(origin, axes[i]).map(|t| ray.at(t)).unwrap_or(origin)),
-                Handle::Free => (0.0, ray.plane(origin, camera.forward).map(|t| ray.at(t)).unwrap_or(origin)),
+                Handle::Plane(i) => (
+                    0.0,
+                    ray.plane(origin, axes[i])
+                        .map(|t| ray.at(t))
+                        .unwrap_or(origin),
+                ),
+                Handle::Free => (
+                    0.0,
+                    ray.plane(origin, camera.forward)
+                        .map(|t| ray.at(t))
+                        .unwrap_or(origin),
+                ),
                 _ => (0.0, origin),
             };
             let axis_screen = match handle {
@@ -495,7 +621,12 @@ impl Viewport {
                 .filter(|id| *id != sel)
                 .filter_map(|id| {
                     let start = worlds.get(&id)?.w_axis.truncate();
-                    let parent = state.scene.get(id)?.parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
+                    let parent = state
+                        .scene
+                        .get(id)?
+                        .parent
+                        .and_then(|p| worlds.get(&p).copied())
+                        .unwrap_or(Mat4::IDENTITY);
                     Some((id, start, parent.inverse()))
                 })
                 .collect();
@@ -548,7 +679,11 @@ impl Viewport {
         let response = ui.interact(area, egui::Id::new(("view-gizmo", self.id)), Sense::click());
         let pointer = response.hover_pos();
         let painter = ui.painter_at(rect);
-        painter.circle_filled(center, 40.0, Color32::from_black_alpha(if response.hovered() { 70 } else { 40 }));
+        painter.circle_filled(
+            center,
+            40.0,
+            Color32::from_black_alpha(if response.hovered() { 70 } else { 40 }),
+        );
 
         // (direction, axis index, positive); camera ends up on that side looking at the target.
         let mut tips: Vec<(Vec3, usize, bool, Vec3)> = Vec::new();
@@ -567,7 +702,13 @@ impl Viewport {
             if *positive {
                 painter.line_segment([center, tip], (2.0, color));
                 painter.circle_filled(tip, 8.5, color);
-                painter.text(tip, Align2::CENTER_CENTER, ["X", "Y", "Z"][*i], FontId::proportional(11.0), Color32::BLACK);
+                painter.text(
+                    tip,
+                    Align2::CENTER_CENTER,
+                    ["X", "Y", "Z"][*i],
+                    FontId::proportional(11.0),
+                    Color32::BLACK,
+                );
             } else {
                 painter.circle(tip, 6.0, Color32::from_gray(60), (1.5, color));
             }
@@ -576,11 +717,23 @@ impl Viewport {
             }
         }
         let center_hot = pointer.is_some_and(|p| p.distance(center) < 8.0);
-        painter.circle_filled(center, 6.0, if center_hot { HOT } else { Color32::from_gray(200) });
+        painter.circle_filled(
+            center,
+            6.0,
+            if center_hot {
+                HOT
+            } else {
+                Color32::from_gray(200)
+            },
+        );
         painter.text(
             center + vec2(0.0, 50.0),
             Align2::CENTER_CENTER,
-            if self.orthographic { "◀ Iso" } else { "◀ Persp" },
+            if self.orthographic {
+                "◀ Iso"
+            } else {
+                "◀ Persp"
+            },
             FontId::proportional(11.0),
             Color32::from_white_alpha(170),
         );
@@ -599,7 +752,14 @@ impl Viewport {
         }
     }
 
-    fn overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect, camera: &ViewCamera, state: &mut EditorState, grid_step: f32) {
+    fn overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        camera: &ViewCamera,
+        state: &mut EditorState,
+        grid_step: f32,
+    ) {
         let bar_rect = rect.shrink(6.0);
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
         egui::Frame::new()
@@ -614,11 +774,20 @@ impl Viewport {
                         (tools::ROTATE, "Rotate", "E"),
                         (tools::SCALE, "Scale", "R"),
                     ] {
-                        if ui.selectable_label(state.tool == id, label).on_hover_text(format!("{label} ({key})")).clicked() {
+                        if ui
+                            .selectable_label(state.tool == id, label)
+                            .on_hover_text(format!("{label} ({key})"))
+                            .clicked()
+                        {
                             state.tool = id.to_owned();
                         }
                     }
-                    let ext_tools: Vec<_> = state.ext.viewport.iter().flat_map(|e| e.tools().iter().copied()).collect();
+                    let ext_tools: Vec<_> = state
+                        .ext
+                        .viewport
+                        .iter()
+                        .flat_map(|e| e.tools().iter().copied())
+                        .collect();
                     if !ext_tools.is_empty() {
                         ui.separator();
                     }
@@ -627,7 +796,11 @@ impl Viewport {
                             Some(k) => format!("{} ({})", t.tooltip, k.name()),
                             None => t.tooltip.to_owned(),
                         };
-                        if ui.selectable_label(state.tool == t.id, t.label).on_hover_text(hint).clicked() {
+                        if ui
+                            .selectable_label(state.tool == t.id, t.label)
+                            .on_hover_text(hint)
+                            .clicked()
+                        {
                             state.tool = t.id.to_owned();
                         }
                     }
@@ -637,8 +810,15 @@ impl Viewport {
                         state.local_space = !state.local_space;
                     }
                     ui.separator();
-                    ui.toggle_value(&mut state.snap.enabled, "Snap").on_hover_text("Grid snapping (hold Ctrl to invert)");
-                    let step_label = |s: f32| if s < 1.0 { format!("1/{}", (1.0 / s).round()) } else { format!("{s}") };
+                    ui.toggle_value(&mut state.snap.enabled, "Snap")
+                        .on_hover_text("Grid snapping (hold Ctrl to invert)");
+                    let step_label = |s: f32| {
+                        if s < 1.0 {
+                            format!("1/{}", (1.0 / s).round())
+                        } else {
+                            format!("{s}")
+                        }
+                    };
                     egui::ComboBox::from_id_salt(("snap-step", self.id))
                         .width(78.0)
                         .selected_text(match state.snap.step {
@@ -662,7 +842,11 @@ impl Viewport {
                     ui.separator();
                     ui.toggle_value(&mut self.show_grid, "Grid");
                     ui.toggle_value(&mut self.wireframe, "Wire");
-                    if ui.button("Frame").on_hover_text("Frame selection (F)").clicked() {
+                    if ui
+                        .button("Frame")
+                        .on_hover_text("Frame selection (F)")
+                        .clicked()
+                    {
                         state.frame_selection = true;
                     }
                 });
@@ -681,7 +865,13 @@ impl Viewport {
             );
         }
         if !state.preview.is_empty() {
-            painter.text(rect.center_top() + vec2(0.0, 44.0), Align2::CENTER_CENTER, "• animation preview", FontId::proportional(13.0), theme::SELECTED);
+            painter.text(
+                rect.center_top() + vec2(0.0, 44.0),
+                Align2::CENTER_CENTER,
+                "• animation preview",
+                FontId::proportional(13.0),
+                theme::SELECTED,
+            );
         }
         painter.text(
             rect.left_bottom() + vec2(8.0, -8.0),
@@ -704,7 +894,11 @@ fn hit_handle(
     o: Pos2,
     tips: &[Option<Pos2>; 3],
 ) -> Option<Handle> {
-    let near_axis = |i: usize| tips[i].filter(|t| t.distance(o) > 6.0).map(|t| dist_to_segment(p, o, t));
+    let near_axis = |i: usize| {
+        tips[i]
+            .filter(|t| t.distance(o) > 6.0)
+            .map(|t| dist_to_segment(p, o, t))
+    };
     match tool {
         tools::MOVE => {
             if p.distance(o) < 9.0 {
@@ -746,23 +940,42 @@ fn hit_handle(
 }
 
 fn closest(candidates: impl Iterator<Item = (Handle, f32)>) -> Option<Handle> {
-    candidates.filter(|(_, d)| *d < 7.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
+    candidates
+        .filter(|(_, d)| *d < 7.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
 }
 
-fn plane_quad(camera: &ViewCamera, origin: Vec3, axes: [Vec3; 3], len: f32, normal: usize) -> Option<[Pos2; 4]> {
+fn plane_quad(
+    camera: &ViewCamera,
+    origin: Vec3,
+    axes: [Vec3; 3],
+    len: f32,
+    normal: usize,
+) -> Option<[Pos2; 4]> {
     let (j, k) = ((normal + 1) % 3, (normal + 2) % 3);
     let (a, b) = (0.18 * len, 0.42 * len);
-    let pts = [(a, a), (b, a), (b, b), (a, b)].map(|(u, v)| camera.project(origin + axes[j] * u + axes[k] * v));
+    let pts = [(a, a), (b, a), (b, b), (a, b)]
+        .map(|(u, v)| camera.project(origin + axes[j] * u + axes[k] * v));
     Some([pts[0]?, pts[1]?, pts[2]?, pts[3]?])
 }
 
 fn view_ring_radius(camera: &ViewCamera, origin: Vec3, len: f32, o: Pos2) -> f32 {
     let right = camera.view.row(0).truncate();
-    camera.project(origin + right * len).map(|p| p.distance(o) * 1.18).unwrap_or(100.0)
+    camera
+        .project(origin + right * len)
+        .map(|p| p.distance(o) * 1.18)
+        .unwrap_or(100.0)
 }
 
 /// Ring around `axis`; the flag marks the half facing the camera.
-fn ring(camera: &ViewCamera, origin: Vec3, axis: Vec3, len: f32, eye_dir: Vec3) -> Vec<(Pos2, bool)> {
+fn ring(
+    camera: &ViewCamera,
+    origin: Vec3,
+    axis: Vec3,
+    len: f32,
+    eye_dir: Vec3,
+) -> Vec<(Pos2, bool)> {
     let u = axis.any_orthonormal_vector();
     let v = axis.cross(u);
     (0..=64)
@@ -794,7 +1007,11 @@ fn draw_handles(
             for i in 0..3 {
                 if let Some(quad) = plane_quad(camera, origin, axes, len, i) {
                     let c = color(Handle::Plane(i), theme::AXES[i]);
-                    painter.add(egui::Shape::convex_polygon(quad.to_vec(), c.gamma_multiply(0.35), Stroke::new(1.0, c)));
+                    painter.add(egui::Shape::convex_polygon(
+                        quad.to_vec(),
+                        c.gamma_multiply(0.35),
+                        Stroke::new(1.0, c),
+                    ));
                 }
             }
             for (i, tip) in tips.iter().enumerate() {
@@ -810,7 +1027,12 @@ fn draw_handles(
                 ));
             }
             let c = color(Handle::Free, Color32::WHITE);
-            painter.rect_stroke(egui::Rect::from_center_size(o, vec2(10.0, 10.0)), 1.0, (1.5, c), egui::StrokeKind::Middle);
+            painter.rect_stroke(
+                egui::Rect::from_center_size(o, vec2(10.0, 10.0)),
+                1.0,
+                (1.5, c),
+                egui::StrokeKind::Middle,
+            );
         }
         tools::ROTATE => {
             for (i, axis) in axes.iter().enumerate() {
@@ -818,12 +1040,20 @@ fn draw_handles(
                 let pts = ring(camera, origin, *axis, len, eye_dir);
                 for w in pts.windows(2) {
                     let front = w[0].1 && w[1].1;
-                    let stroke = if front { Stroke::new(2.0, c) } else { Stroke::new(1.0, c.gamma_multiply(0.25)) };
+                    let stroke = if front {
+                        Stroke::new(2.0, c)
+                    } else {
+                        Stroke::new(1.0, c.gamma_multiply(0.25))
+                    };
                     painter.line_segment([w[0].0, w[1].0], stroke);
                 }
             }
             let r = view_ring_radius(camera, origin, len, o);
-            painter.circle_stroke(o, r, (1.5, color(Handle::RotateView, Color32::from_gray(210))));
+            painter.circle_stroke(
+                o,
+                r,
+                (1.5, color(Handle::RotateView, Color32::from_gray(210))),
+            );
             painter.circle_filled(o, 2.5, Color32::WHITE);
         }
         tools::SCALE => {
@@ -853,12 +1083,16 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
         }
         p
     };
-    let Some(e) = state.scene.get_mut(d.entity) else { return };
+    let Some(e) = state.scene.get_mut(d.entity) else {
+        return;
+    };
     let mut moved = None;
 
     match d.handle {
         Handle::Axis(i) => {
-            let Some(t) = ray.closest_on_line(d.origin, d.axes[i]) else { return };
+            let Some(t) = ray.closest_on_line(d.origin, d.axes[i]) else {
+                return;
+            };
             let mut delta = t - d.param;
             if !world_axes_aligned {
                 delta = snap.value(delta);
@@ -875,13 +1109,19 @@ fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state:
                 Handle::Plane(i) => d.axes[i],
                 _ => camera.forward,
             };
-            let Some(t) = ray.plane(d.origin, normal) else { return };
+            let Some(t) = ray.plane(d.origin, normal) else {
+                return;
+            };
             let delta = ray.at(t) - d.hit;
             let p = match d.handle {
-                Handle::Plane(i) if world_axes_aligned => snap_world(d.origin + delta, &[(i + 1) % 3, (i + 2) % 3]),
+                Handle::Plane(i) if world_axes_aligned => {
+                    snap_world(d.origin + delta, &[(i + 1) % 3, (i + 2) % 3])
+                }
                 Handle::Plane(i) => {
                     let (j, k) = ((i + 1) % 3, (i + 2) % 3);
-                    d.origin + d.axes[j] * snap.value(delta.dot(d.axes[j])) + d.axes[k] * snap.value(delta.dot(d.axes[k]))
+                    d.origin
+                        + d.axes[j] * snap.value(delta.dot(d.axes[j]))
+                        + d.axes[k] * snap.value(delta.dot(d.axes[k]))
                 }
                 _ => snap_world(d.origin + delta, &[0, 1, 2]),
             };
@@ -963,22 +1203,48 @@ fn draw_icons(painter: &egui::Painter, camera: &ViewCamera, state: &EditorState)
         if !has_icon(e) || e.camera.is_some() || !state.scene.active_in_hierarchy(e.id) {
             continue;
         }
-        let Some(p) = worlds.get(&e.id).and_then(|m| camera.project(m.w_axis.truncate())) else { continue };
+        let Some(p) = worlds
+            .get(&e.id)
+            .and_then(|m| camera.project(m.w_axis.truncate()))
+        else {
+            continue;
+        };
         let selected = state.selection == Some(e.id);
         if let Some(light) = &e.light {
-            let color = if selected { theme::SELECTED } else { LIGHT_GIZMO };
+            let color = if selected {
+                theme::SELECTED
+            } else {
+                LIGHT_GIZMO
+            };
             painter.circle(p, 6.0, color.gamma_multiply(0.3), (1.5, color));
-            let rays = if light.kind == LightKind::Directional { 8 } else { 4 };
+            let rays = if light.kind == LightKind::Directional {
+                8
+            } else {
+                4
+            };
             for i in 0..rays {
                 let a = i as f32 / rays as f32 * std::f32::consts::TAU;
                 let d = vec2(a.cos(), a.sin());
                 painter.line_segment([p + d * 9.0, p + d * 13.0], (1.5, color));
             }
         } else if e.audio_source.is_some() {
-            let color = if selected { theme::SELECTED } else { AUDIO_GIZMO };
-            painter.rect_filled(egui::Rect::from_center_size(p - vec2(4.0, 0.0), vec2(5.0, 7.0)), 1.0, color);
+            let color = if selected {
+                theme::SELECTED
+            } else {
+                AUDIO_GIZMO
+            };
+            painter.rect_filled(
+                egui::Rect::from_center_size(p - vec2(4.0, 0.0), vec2(5.0, 7.0)),
+                1.0,
+                color,
+            );
             painter.add(egui::Shape::convex_polygon(
-                vec![p + vec2(-2.0, -3.5), p + vec2(5.0, -8.0), p + vec2(5.0, 8.0), p + vec2(-2.0, 3.5)],
+                vec![
+                    p + vec2(-2.0, -3.5),
+                    p + vec2(5.0, -8.0),
+                    p + vec2(5.0, 8.0),
+                    p + vec2(-2.0, 3.5),
+                ],
                 color,
                 Stroke::NONE,
             ));
@@ -996,7 +1262,12 @@ fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
             ColliderShape::Box { size } => {
                 let local = Mat4::from_translation(c.center) * Mat4::from_scale(size);
                 for [a, b] in &primitive(Shape::Cube).outline {
-                    g.line((m * local).transform_point3(*a), (m * local).transform_point3(*b), COLLIDER, true);
+                    g.line(
+                        (m * local).transform_point3(*a),
+                        (m * local).transform_point3(*b),
+                        COLLIDER,
+                        true,
+                    );
                 }
             }
             ColliderShape::Sphere { radius } => {
@@ -1010,10 +1281,22 @@ fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
                 let half = (height * scale.y.abs() * 0.5 - r).max(0.0);
                 let up = axes[1];
                 for end in [-1.0, 1.0] {
-                    g.circle(center + up * half * end, axes[0], axes[2], r, COLLIDER, true);
+                    g.circle(
+                        center + up * half * end,
+                        axes[0],
+                        axes[2],
+                        r,
+                        COLLIDER,
+                        true,
+                    );
                 }
                 for side in [axes[0], -axes[0], axes[2], -axes[2]] {
-                    g.line(center + side * r - up * half, center + side * r + up * half, COLLIDER, true);
+                    g.line(
+                        center + side * r - up * half,
+                        center + side * r + up * half,
+                        COLLIDER,
+                        true,
+                    );
                 }
                 for side in [axes[0], axes[2]] {
                     // Cap arcs.
@@ -1034,7 +1317,12 @@ fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
             ColliderShape::Mesh => {
                 if let Some(mesh) = &e.mesh {
                     for [a, b] in &primitive(mesh.shape).outline {
-                        g.line(m.transform_point3(*a), m.transform_point3(*b), COLLIDER, true);
+                        g.line(
+                            m.transform_point3(*a),
+                            m.transform_point3(*b),
+                            COLLIDER,
+                            true,
+                        );
                     }
                 }
             }
@@ -1043,10 +1331,22 @@ fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
     if let Some(cc) = &e.character_controller {
         let half = (cc.height * 0.5 - cc.radius).max(0.0);
         for end in [-1.0, 1.0] {
-            g.circle(pos + axes[1] * half * end, axes[0], axes[2], cc.radius, COLLIDER, true);
+            g.circle(
+                pos + axes[1] * half * end,
+                axes[0],
+                axes[2],
+                cc.radius,
+                COLLIDER,
+                true,
+            );
         }
         for side in [axes[0], -axes[0], axes[2], -axes[2]] {
-            g.line(pos + side * cc.radius - axes[1] * half, pos + side * cc.radius + axes[1] * half, COLLIDER, true);
+            g.line(
+                pos + side * cc.radius - axes[1] * half,
+                pos + side * cc.radius + axes[1] * half,
+                COLLIDER,
+                true,
+            );
         }
     }
     if let Some(l) = &e.light {
@@ -1079,7 +1379,14 @@ fn component_gizmos(g: &mut Geometry, e: &EntityDesc, m: Mat4) {
     {
         for r in [a.min_distance, a.max_distance] {
             g.circle(pos, Vec3::X, Vec3::Z, r, AUDIO_GIZMO, true);
-            g.circle(pos, Vec3::X, Vec3::Y, r, AUDIO_GIZMO.gamma_multiply(0.5), true);
+            g.circle(
+                pos,
+                Vec3::X,
+                Vec3::Y,
+                r,
+                AUDIO_GIZMO.gamma_multiply(0.5),
+                true,
+            );
         }
     }
 }
@@ -1091,11 +1398,23 @@ mod tests {
 
     #[test]
     fn rays_hit_triangles_and_axes() {
-        let ray = Ray { origin: Vec3::new(0.2, 5.0, 0.2), dir: Vec3::NEG_Y };
-        let t = ray.triangle(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let ray = Ray {
+            origin: Vec3::new(0.2, 5.0, 0.2),
+            dir: Vec3::NEG_Y,
+        };
+        let t = ray
+            .triangle(
+                Vec3::ZERO,
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap();
         assert!((t - 5.0).abs() < 1e-5);
         // A ray crossing the X axis line at x = 3.
-        let ray = Ray { origin: Vec3::new(3.0, 1.0, 5.0), dir: Vec3::new(0.0, -0.2, -1.0).normalize() };
+        let ray = Ray {
+            origin: Vec3::new(3.0, 1.0, 5.0),
+            dir: Vec3::new(0.0, -0.2, -1.0).normalize(),
+        };
         let along = ray.closest_on_line(Vec3::ZERO, Vec3::X).unwrap();
         assert!((along - 3.0).abs() < 1e-4);
     }

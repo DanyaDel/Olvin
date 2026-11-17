@@ -1,0 +1,111 @@
+//! The Modeling panel: Edit Mode controls and every operation as a button.
+
+use olvin_editor::egui::{self, DragValue, RichText};
+use olvin_editor::{EditorState, Panel, tools};
+
+use crate::ops::{self, Op, make_editable};
+use crate::{EDIT_TOOL, Mode, shared};
+
+pub struct ModelingPanel;
+
+impl Panel for ModelingPanel {
+    fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
+        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            let editing = state.tool == EDIT_TOOL;
+            let has_mesh = state.selection.and_then(|id| state.scene.get(id)).is_some_and(|e| e.poly.is_some());
+            ui.horizontal(|ui| {
+                let label = if editing { "◀ Object Mode" } else { "◆ Edit Mode" };
+                if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(egui::vec2(130.0, 26.0))).on_hover_text("Tab").clicked() {
+                    if editing {
+                        state.tool = tools::MOVE.to_owned();
+                    } else if let Some(id) = state.selection {
+                        match make_editable(state, id) {
+                            Ok(()) => state.tool = EDIT_TOOL.to_owned(),
+                            Err(e) => state.warn(e),
+                        }
+                    }
+                }
+                if !has_mesh && state.selection.is_some() && ui.button("Convert to Editable Mesh").clicked() {
+                    let id = state.selection.unwrap();
+                    if let Err(e) = make_editable(state, id) {
+                        state.warn(e);
+                    }
+                }
+            });
+            ui.add_space(6.0);
+
+            section(ui, "Select", |ui| {
+                ui.horizontal(|ui| {
+                    shared(|s| {
+                        for (mode, label) in [(Mode::Vertex, "Vertex 1"), (Mode::Edge, "Edge 2"), (Mode::Face, "Face 3")] {
+                            ui.selectable_value(&mut s.mode, mode, label);
+                        }
+                    });
+                });
+                let n = shared(|s| s.verts.len());
+                ui.weak(format!("{n} vertices selected · Shift+click adds · A toggles all"));
+            });
+
+            let mut run = None;
+            section(ui, "Create", |ui| {
+                grid(ui, &mut run, &[Op::Fill]);
+                ui.weak("E extrude · I inset · K knife · Ctrl+R loop cut (in the viewport)");
+            });
+            section(ui, "Cut", |ui| {
+                ui.horizontal(|ui| {
+                    shared(|s| {
+                        ui.label("Cuts");
+                        ui.add(DragValue::new(&mut s.cuts).range(1..=16));
+                    });
+                });
+                grid(ui, &mut run, &[Op::LoopCutSelected, Op::Subdivide]);
+            });
+            section(ui, "Delete & Convert", |ui| {
+                grid(ui, &mut run, &[Op::Delete, Op::DeleteOnlyFaces, Op::DissolveEdges]);
+                ui.weak("Faces → Edges keeps the outline as edges; select edges and F to turn them back into a face.");
+            });
+            section(ui, "Clean Up", |ui| {
+                grid(ui, &mut run, &[Op::Merge, Op::MergeByDistance, Op::Flip, Op::RecalculateNormals, Op::Smooth]);
+            });
+            if let Some(op) = run {
+                if !editing {
+                    state.warn("enter Edit Mode first (Tab)");
+                } else if let Err(e) = ops::apply(state, op) {
+                    state.warn(e);
+                }
+            }
+
+            if let Some(poly) = state.selection.and_then(|id| state.scene.get(id)).and_then(|e| e.poly.as_ref()) {
+                section(ui, "Mesh", |ui| {
+                    ui.label(format!("{} vertices · {} edges · {} faces", poly.positions.len(), poly.edges().len(), poly.faces.len()));
+                    if !poly.wire.is_empty() {
+                        ui.weak(format!("{} loose edges", poly.wire.len()));
+                    }
+                });
+            }
+        });
+    }
+}
+
+fn grid(ui: &mut egui::Ui, run: &mut Option<Op>, ops: &[Op]) {
+    ui.horizontal_wrapped(|ui| {
+        for op in ops {
+            if ui.button(op.label()).clicked() {
+                *run = Some(*op);
+            }
+        }
+    });
+}
+
+fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .corner_radius(8.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).strong());
+            ui.add_space(2.0);
+            body(ui);
+        });
+    ui.add_space(4.0);
+}

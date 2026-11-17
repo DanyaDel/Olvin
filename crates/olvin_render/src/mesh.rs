@@ -50,6 +50,12 @@ impl MeshData {
         Self { vertices, indices: vec![0, 1, 2, 0, 2, 3] }
     }
 
+    /// Flat-shaded triangles of positions, normals and indices.
+    pub fn from_triangles(positions: &[glam::Vec3], normals: &[glam::Vec3], indices: Vec<u32>) -> Self {
+        let vertices = positions.iter().zip(normals).map(|(p, n)| Vertex { position: p.to_array(), normal: n.to_array() }).collect();
+        Self { vertices, indices }
+    }
+
     /// Unity-style built-in mesh (shared with the editor).
     pub fn primitive(shape: olvin_scene::primitives::Shape) -> Self {
         let p = olvin_scene::primitives::Primitive::new(shape);
@@ -98,6 +104,12 @@ impl Meshes {
         self.next += 1;
         self.pending.push((handle, mesh));
         handle
+    }
+
+    /// Replaces a mesh's geometry (re-uploaded into the same GPU slot).
+    pub fn set(&mut self, handle: MeshHandle, mesh: MeshData) {
+        self.pending.retain(|(h, _)| *h != handle);
+        self.pending.push((handle, mesh));
     }
 }
 

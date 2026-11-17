@@ -957,6 +957,7 @@ dependencies = [
  "olvin_editor_animator",
  "olvin_editor_console",
  "olvin_editor_csg",
+ "olvin_editor_modeling",
 ]
 
 [[package]]
@@ -2715,6 +2716,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "olvin_editor_modeling"
+version = "0.1.0"
+dependencies = [
+ "olvin_csg",
+ "olvin_editor",
+ "olvin_mesh",
+]
+
+[[package]]
 name = "olvin_hub"
 version = "0.1.0"
 dependencies = [
@@ -2786,6 +2796,7 @@ version = "0.1.0"
 dependencies = [
  "glam 0.34.3",
  "olvin_csg",
+ "olvin_mesh",
  "ron",
  "serde",
 ]

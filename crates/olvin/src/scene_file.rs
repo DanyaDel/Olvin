@@ -35,19 +35,50 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
     let mut spawned = 0;
 
     // Parents come before children in scene files, so parent entities exist already.
-    for e in scene.entities.iter().filter(|e| scene.active_in_hierarchy(e.id)) {
-        let matrix = worlds.get(&e.id).copied().unwrap_or_else(|| e.local_transform().matrix());
+    for e in scene
+        .entities
+        .iter()
+        .filter(|e| scene.active_in_hierarchy(e.id))
+    {
+        let matrix = worlds
+            .get(&e.id)
+            .copied()
+            .unwrap_or_else(|| e.local_transform().matrix());
         let mut b = EntityBuilder::new();
-        b.add(e.local_transform()).add(GlobalTransform(matrix)).add(Name(e.name.clone()));
+        b.add(e.local_transform())
+            .add(GlobalTransform(matrix))
+            .add(Name(e.name.clone()));
         if let Some(parent) = e.parent.and_then(|p| entities.get(&p)) {
             b.add(Parent(*parent));
         }
         if !e.tag.is_empty() {
             b.add(Tag(e.tag.clone()));
         }
-        if let Some(mesh) = &e.mesh {
-            let handle = *shapes.entry(mesh.shape).or_insert_with(|| meshes.add(MeshData::primitive(mesh.shape)));
-            b.add(MeshRenderer { mesh: handle, color: Color(mesh.color) });
+        if let Some(poly) = &e.poly {
+            // Edited mesh: its own geometry, and the triangles for a Mesh Collider.
+            let (positions, normals, indices) = poly.triangulate();
+            let color = e.mesh.as_ref().map_or([0.8; 4], |m| m.color);
+            let handle = meshes.add(MeshData::from_triangles(
+                &positions,
+                &normals,
+                indices.clone(),
+            ));
+            b.add(MeshRenderer {
+                mesh: handle,
+                color: Color(color),
+            });
+            b.add(MeshGeometry {
+                positions,
+                indices: indices.as_chunks::<3>().0.to_vec(),
+            });
+        } else if let Some(mesh) = &e.mesh {
+            let handle = *shapes
+                .entry(mesh.shape)
+                .or_insert_with(|| meshes.add(MeshData::primitive(mesh.shape)));
+            b.add(MeshRenderer {
+                mesh: handle,
+                color: Color(mesh.color),
+            });
         }
         if let Some(camera) = &e.camera {
             b.add(Camera::from(camera));
@@ -64,21 +95,42 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
                 vertices: brush.vertices.clone(),
             };
             let tri = olvin_csg::TriMesh::from_polygons(&olvin_csg::build(&[input]));
-            let vertices = tri.positions.iter().zip(&tri.normals).map(|(p, n)| Vertex { position: p.to_array(), normal: n.to_array() }).collect();
-            let mesh = meshes.add(MeshData { vertices, indices: tri.indices.clone() });
-            b.add(MeshRenderer { mesh, color: Color(brush.color) });
-            b.add(MeshGeometry { positions: tri.positions, indices: tri.indices.as_chunks::<3>().0.to_vec() });
+            let vertices = tri
+                .positions
+                .iter()
+                .zip(&tri.normals)
+                .map(|(p, n)| Vertex {
+                    position: p.to_array(),
+                    normal: n.to_array(),
+                })
+                .collect();
+            let mesh = meshes.add(MeshData {
+                vertices,
+                indices: tri.indices.clone(),
+            });
+            b.add(MeshRenderer {
+                mesh,
+                color: Color(brush.color),
+            });
+            b.add(MeshGeometry {
+                positions: tri.positions,
+                indices: tri.indices.as_chunks::<3>().0.to_vec(),
+            });
             if e.collider.is_none() {
                 b.add(ColliderDesc::new(ColliderShape::Mesh));
             }
         }
         if let Some(collider) = &e.collider {
             if collider.shape == ColliderShape::Mesh
+                && e.poly.is_none()
                 && let Some(mesh) = &e.mesh
             {
                 let p = Primitive::new(mesh.shape);
                 let indices = p.indices.as_chunks::<3>().0.to_vec();
-                b.add(MeshGeometry { positions: p.positions, indices });
+                b.add(MeshGeometry {
+                    positions: p.positions,
+                    indices,
+                });
             }
             b.add(collider.clone());
         }
@@ -108,19 +160,30 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         && let Some(mut settings) = res.get_mut::<RenderSettings>()
     {
         settings.light_dir = dir;
-        settings.light_color = Color([color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0]);
+        settings.light_color = Color([
+            color[0] * intensity,
+            color[1] * intensity,
+            color[2] * intensity,
+            1.0,
+        ]);
     }
 
     // CSG: one static mesh per face colour, and one mesh collider for the level.
     let brushes: Vec<_> = scene
         .csg_brushes()
         .into_iter()
-        .filter(|b| scene.active_in_hierarchy(b.id) && scene.get(b.id).is_some_and(|e| e.rigidbody.is_none()))
+        .filter(|b| {
+            scene.active_in_hierarchy(b.id)
+                && scene.get(b.id).is_some_and(|e| e.rigidbody.is_none())
+        })
         .collect();
     let polygons = olvin_csg::build(&brushes);
     let mut by_color: HashMap<[u32; 4], Vec<&olvin_csg::Polygon>> = HashMap::new();
     for p in &polygons {
-        by_color.entry(p.color.map(f32::to_bits)).or_default().push(p);
+        by_color
+            .entry(p.color.map(f32::to_bits))
+            .or_default()
+            .push(p);
     }
     for (color, polys) in by_color {
         let tri = olvin_csg::TriMesh::from_polygons(polys);
@@ -128,10 +191,22 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             .positions
             .iter()
             .zip(&tri.normals)
-            .map(|(p, n)| Vertex { position: p.to_array(), normal: n.to_array() })
+            .map(|(p, n)| Vertex {
+                position: p.to_array(),
+                normal: n.to_array(),
+            })
             .collect();
-        let mesh = meshes.add(MeshData { vertices, indices: tri.indices });
-        world.spawn((Transform::IDENTITY, MeshRenderer { mesh, color: Color(color.map(f32::from_bits)) }));
+        let mesh = meshes.add(MeshData {
+            vertices,
+            indices: tri.indices,
+        });
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer {
+                mesh,
+                color: Color(color.map(f32::from_bits)),
+            },
+        ));
     }
     if !polygons.is_empty() {
         let tri = olvin_csg::TriMesh::from_polygons(&polygons);
@@ -140,7 +215,10 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             Transform::IDENTITY,
             Name("CSG Level".into()),
             ColliderDesc::new(ColliderShape::Mesh),
-            MeshGeometry { positions: tri.positions, indices },
+            MeshGeometry {
+                positions: tri.positions,
+                indices,
+            },
         ));
     }
     spawned
@@ -184,7 +262,12 @@ mod tests {
         let brush = |id: u64, op: CsgOp, scale: Vec3, color: [f32; 4]| {
             let mut e = EntityDesc::new(id, "brush");
             e.scale = scale;
-            e.brush = Some(BrushDesc { shape: BrushShape::Box, op, color, ..Default::default() });
+            e.brush = Some(BrushDesc {
+                shape: BrushShape::Box,
+                op,
+                color,
+                ..Default::default()
+            });
             e
         };
         let scene = SceneFile {
@@ -199,7 +282,13 @@ mod tests {
         let world = res.fetch::<World>();
         assert_eq!(world.len(), 5);
         assert_eq!(world.query::<&MeshRenderer>().iter().count(), 2);
-        assert_eq!(world.query::<(&ColliderDesc, &MeshGeometry)>().iter().count(), 1);
+        assert_eq!(
+            world
+                .query::<(&ColliderDesc, &MeshGeometry)>()
+                .iter()
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -213,7 +302,10 @@ mod tests {
         sun.rotation = Vec3::new(-90.0, 0.0, 0.0);
         sun.light = Some(LightDesc::new(LightKind::Directional));
         let mut crate_ = EntityDesc::new(2, "Crate");
-        crate_.mesh = Some(MeshDesc { shape: Shape::Sphere, color: [1.0; 4] });
+        crate_.mesh = Some(MeshDesc {
+            shape: Shape::Sphere,
+            color: [1.0; 4],
+        });
         crate_.collider = Some(ColliderDesc::for_shape(Shape::Sphere));
         crate_.rigidbody = Some(RigidbodyDesc::default());
         crate_.tag = "Player".into();
@@ -221,14 +313,30 @@ mod tests {
         hidden.active = false;
         let mut child = EntityDesc::new(4, "Child of hidden");
         child.parent = Some(3);
-        let scene = SceneFile { entities: vec![sun, crate_, hidden, child], ..Default::default() };
+        let scene = SceneFile {
+            entities: vec![sun, crate_, hidden, child],
+            ..Default::default()
+        };
 
-        assert_eq!(spawn(&res, &scene), 2, "inactive parents hide their children");
+        assert_eq!(
+            spawn(&res, &scene),
+            2,
+            "inactive parents hide their children"
+        );
         assert_eq!(res.fetch::<World>().query::<&Parent>().iter().count(), 0);
         let world = res.fetch::<World>();
-        assert_eq!(world.query::<(&RigidbodyDesc, &ColliderDesc, &Tag)>().iter().count(), 1);
+        assert_eq!(
+            world
+                .query::<(&RigidbodyDesc, &ColliderDesc, &Tag)>()
+                .iter()
+                .count(),
+            1
+        );
         let dir = res.fetch::<RenderSettings>().light_dir;
-        assert!(dir.abs_diff_eq(Vec3::NEG_Y, 1e-4), "sun pitched -90° shines down: {dir}");
+        assert!(
+            dir.abs_diff_eq(Vec3::NEG_Y, 1e-4),
+            "sun pitched -90° shines down: {dir}"
+        );
     }
 
     #[test]
@@ -242,12 +350,28 @@ mod tests {
         let mut child = EntityDesc::new(2, "Child");
         child.parent = Some(1);
         child.position = Vec3::new(1.0, 0.0, 0.0);
-        spawn(&res, &SceneFile { entities: vec![parent, child], ..Default::default() });
+        spawn(
+            &res,
+            &SceneFile {
+                entities: vec![parent, child],
+                ..Default::default()
+            },
+        );
 
         let mut world = res.fetch_mut::<World>();
-        let find = |w: &World, name: &str| w.query::<(olvin_ecs::Entity, &Name)>().iter().find(|(_, n)| n.0 == name).map(|(e, _)| e).unwrap();
+        let find = |w: &World, name: &str| {
+            w.query::<(olvin_ecs::Entity, &Name)>()
+                .iter()
+                .find(|(_, n)| n.0 == name)
+                .map(|(e, _)| e)
+                .unwrap()
+        };
         let (p, c) = (find(&world, "Parent"), find(&world, "Child"));
-        assert_eq!(world.get::<&Transform>(c).unwrap().translation.x, 1.0, "child keeps its local transform");
+        assert_eq!(
+            world.get::<&Transform>(c).unwrap().translation.x,
+            1.0,
+            "child keeps its local transform"
+        );
         world.get::<&mut Transform>(p).unwrap().translation.x = 20.0;
         olvin_transform::propagate(&mut world);
         let x = world.get::<&GlobalTransform>(c).unwrap().0.w_axis.x;
@@ -267,12 +391,30 @@ mod tests {
         crate_.position = Vec3::new(0.0, 3.0, 0.0);
         crate_.brush = Some(BrushDesc::default());
         crate_.rigidbody = Some(RigidbodyDesc::default());
-        spawn(&res, &SceneFile { entities: vec![floor, crate_], ..Default::default() });
+        spawn(
+            &res,
+            &SceneFile {
+                entities: vec![floor, crate_],
+                ..Default::default()
+            },
+        );
 
         let world = res.fetch::<World>();
-        let crate_ = world.query::<(&Name, &MeshRenderer, &ColliderDesc, &RigidbodyDesc)>().iter().filter(|(n, ..)| n.0 == "Crate").count();
-        assert_eq!(crate_, 1, "the crate brush is its own rendered, colliding body");
-        let level = world.query::<(&Name, &MeshGeometry)>().iter().find(|(n, _)| n.0 == "CSG Level").map(|(_, m)| m.indices.len()).unwrap();
+        let crate_ = world
+            .query::<(&Name, &MeshRenderer, &ColliderDesc, &RigidbodyDesc)>()
+            .iter()
+            .filter(|(n, ..)| n.0 == "Crate")
+            .count();
+        assert_eq!(
+            crate_, 1,
+            "the crate brush is its own rendered, colliding body"
+        );
+        let level = world
+            .query::<(&Name, &MeshGeometry)>()
+            .iter()
+            .find(|(n, _)| n.0 == "CSG Level")
+            .map(|(_, m)| m.indices.len())
+            .unwrap();
         assert_eq!(level, 12, "the level is only the floor box (6 quads)");
     }
 }

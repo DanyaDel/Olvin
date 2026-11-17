@@ -29,7 +29,10 @@ pub struct TabAlloc(pub(crate) u32);
 impl TabAlloc {
     pub fn tab(&mut self, kind: &str) -> Tab {
         self.0 += 1;
-        Tab { kind: kind.to_owned(), id: self.0 }
+        Tab {
+            kind: kind.to_owned(),
+            id: self.0,
+        }
     }
 }
 
@@ -62,7 +65,10 @@ impl Registry {
     }
 
     /// One shared instance serves every viewport (cache what's expensive).
-    pub fn add_viewport_extension(&mut self, factory: fn() -> Box<dyn ViewportExtension>) -> &mut Self {
+    pub fn add_viewport_extension(
+        &mut self,
+        factory: fn() -> Box<dyn ViewportExtension>,
+    ) -> &mut Self {
         self.viewport_extensions.push(factory);
         self
     }

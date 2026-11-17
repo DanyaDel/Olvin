@@ -57,27 +57,57 @@ pub fn linear_color(c: [f32; 4]) -> Color32 {
 
 impl Geometry {
     /// A convex polygon (fan-triangulated); in wireframe mode only its edges.
-    pub fn polygon(&mut self, entity: u64, vertices: &[Vec3], normal: Vec3, color: Color32, flags: u32) {
+    pub fn polygon(
+        &mut self,
+        entity: u64,
+        vertices: &[Vec3],
+        normal: Vec3,
+        color: Color32,
+        flags: u32,
+    ) {
         if vertices.len() < 3 {
             return;
         }
         if self.wireframe {
             for i in 0..vertices.len() {
-                self.line(vertices[i], vertices[(i + 1) % vertices.len()], Color32::from_gray(200), false);
+                self.line(
+                    vertices[i],
+                    vertices[(i + 1) % vertices.len()],
+                    Color32::from_gray(200),
+                    false,
+                );
             }
         }
-        let v = |p: Vec3| GpuVertex { position: p.to_array(), normal: normal.to_array(), color: rgba8(color), flags };
+        let v = |p: Vec3| GpuVertex {
+            position: p.to_array(),
+            normal: normal.to_array(),
+            color: rgba8(color),
+            flags,
+        };
         for i in 1..vertices.len() - 1 {
-            self.vertices.extend([v(vertices[0]), v(vertices[i]), v(vertices[i + 1])]);
+            self.vertices
+                .extend([v(vertices[0]), v(vertices[i]), v(vertices[i + 1])]);
             self.tri_entity.push(entity);
         }
     }
 
     /// A triangle with per-vertex normals (smooth shading).
-    pub fn triangle(&mut self, entity: u64, positions: [Vec3; 3], normals: [Vec3; 3], color: Color32, flags: u32) {
+    pub fn triangle(
+        &mut self,
+        entity: u64,
+        positions: [Vec3; 3],
+        normals: [Vec3; 3],
+        color: Color32,
+        flags: u32,
+    ) {
         if self.wireframe {
             for i in 0..3 {
-                self.line(positions[i], positions[(i + 1) % 3], Color32::from_gray(200), false);
+                self.line(
+                    positions[i],
+                    positions[(i + 1) % 3],
+                    Color32::from_gray(200),
+                    false,
+                );
             }
         }
         for i in 0..3 {
@@ -92,7 +122,15 @@ impl Geometry {
     }
 
     /// A circle of line segments around `center` in the plane spanned by `u`, `v`.
-    pub fn circle(&mut self, center: Vec3, u: Vec3, v: Vec3, radius: f32, color: Color32, on_top: bool) {
+    pub fn circle(
+        &mut self,
+        center: Vec3,
+        u: Vec3,
+        v: Vec3,
+        radius: f32,
+        color: Color32,
+        on_top: bool,
+    ) {
         const N: usize = 48;
         let p = |i: usize| {
             let a = i as f32 / N as f32 * std::f32::consts::TAU;
@@ -105,16 +143,31 @@ impl Geometry {
 
     /// A line; `on_top` lines ignore depth (outlines of hidden things).
     pub fn line(&mut self, a: Vec3, b: Vec3, color: Color32, on_top: bool) {
-        let target = if on_top { &mut self.overlay_lines } else { &mut self.lines };
-        target.push(LineVertex { position: a.to_array(), color: rgba8(color) });
-        target.push(LineVertex { position: b.to_array(), color: rgba8(color) });
+        let target = if on_top {
+            &mut self.overlay_lines
+        } else {
+            &mut self.lines
+        };
+        target.push(LineVertex {
+            position: a.to_array(),
+            color: rgba8(color),
+        });
+        target.push(LineVertex {
+            position: b.to_array(),
+            color: rgba8(color),
+        });
     }
 
     /// A triangle that can be clicked but is drawn elsewhere (engine meshes).
     pub fn pick_triangle(&mut self, entity: u64, positions: [Vec3; 3]) {
         if self.wireframe {
             for i in 0..3 {
-                self.line(positions[i], positions[(i + 1) % 3], Color32::from_gray(200), false);
+                self.line(
+                    positions[i],
+                    positions[(i + 1) % 3],
+                    Color32::from_gray(200),
+                    false,
+                );
             }
         }
         self.pick.push((positions, entity));
@@ -137,7 +190,12 @@ impl Geometry {
             .0
             .iter()
             .enumerate()
-            .map(|(i, tri)| ([0, 1, 2].map(|k| Vec3::from(tri[k].position)), self.tri_entity[i]));
+            .map(|(i, tri)| {
+                (
+                    [0, 1, 2].map(|k| Vec3::from(tri[k].position)),
+                    self.tri_entity[i],
+                )
+            });
         let picked = self.pick.iter().copied();
         for ([a, b, c], entity) in drawn.chain(picked) {
             if let Some(t) = ray.triangle(a, b, c)
@@ -147,7 +205,12 @@ impl Geometry {
                 if normal.dot(ray.dir) > 0.0 {
                     normal = -normal;
                 }
-                best = Some(Hit { point: ray.at(t), normal, distance: t, entity: Some(entity) });
+                best = Some(Hit {
+                    point: ray.at(t),
+                    normal,
+                    distance: t,
+                    entity: Some(entity),
+                });
             }
         }
         best
@@ -254,7 +317,10 @@ impl ViewCamera {
         let inv = self.view_proj.inverse();
         let near = inv.project_point3(Vec3::new(x, y, 0.0));
         let far = inv.project_point3(Vec3::new(x, y, 1.0));
-        Ray { origin: near, dir: (far - near).normalize() }
+        Ray {
+            origin: near,
+            dir: (far - near).normalize(),
+        }
     }
 
     /// World units covered by one screen point at `p`.
@@ -293,7 +359,11 @@ pub struct Snap {
 
 impl Snap {
     pub fn value(&self, v: f32) -> f32 {
-        if self.enabled { (v / self.step).round() * self.step } else { v }
+        if self.enabled {
+            (v / self.step).round() * self.step
+        } else {
+            v
+        }
     }
 
     pub fn vec(&self, v: Vec3) -> Vec3 {
@@ -339,7 +409,12 @@ impl ViewportCtx<'_> {
         let ray = self.camera.ray(screen);
         self.geometry.raycast(&ray).or_else(|| {
             let t = ray.plane(Vec3::ZERO, Vec3::Y)?;
-            Some(Hit { point: ray.at(t), normal: Vec3::Y, distance: t, entity: None })
+            Some(Hit {
+                point: ray.at(t),
+                normal: Vec3::Y,
+                distance: t,
+                entity: None,
+            })
         })
     }
 }

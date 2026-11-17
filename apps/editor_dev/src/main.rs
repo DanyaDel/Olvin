@@ -6,5 +6,6 @@ fn main() {
         Box::new(olvin_editor_console::ConsolePlugin),
         Box::new(olvin_editor_animator::AnimatorPlugin),
         Box::new(olvin_editor_csg::CsgPlugin),
+        Box::new(olvin_editor_modeling::ModelingPlugin),
     ]);
 }

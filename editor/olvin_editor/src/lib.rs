@@ -24,9 +24,10 @@ pub use olvin_scene;
 
 /// Starts the editor. The first command-line argument is the project folder.
 pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
-    let project = std::env::args_os().nth(1).map(std::path::PathBuf::from).map(|p| {
-        p.canonicalize().unwrap_or(p)
-    });
+    let project = std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .map(|p| p.canonicalize().unwrap_or(p));
 
     let mut registry = Registry::default();
     panels::register(&mut registry);
@@ -52,9 +53,16 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            let gpu = cc.wgpu_render_state.as_ref().ok_or("olvin-editor needs the wgpu renderer")?;
+            let gpu = cc
+                .wgpu_render_state
+                .as_ref()
+                .ok_or("olvin-editor needs the wgpu renderer")?;
             render::init(gpu);
-            Ok(Box::new(app::EditorApp::new(registry, project, Some(gpu.clone()))))
+            Ok(Box::new(app::EditorApp::new(
+                registry,
+                project,
+                Some(gpu.clone()),
+            )))
         }),
     );
     if let Err(err) = result {

@@ -1,0 +1,12 @@
+[package]
+name = "olvin_editor_modeling"
+description = "Olvin editor element: Blender-style Edit Mode for polygon meshes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true
+olvin_mesh.workspace = true
+olvin_csg.workspace = true

@@ -6,14 +6,14 @@
 pub use glam as math;
 pub use olvin_core as core;
 pub use olvin_ecs as ecs;
+#[cfg(feature = "physics")]
+pub use olvin_physics as physics;
 #[cfg(feature = "render")]
 pub use olvin_render as render;
 pub use olvin_scene as scene;
 pub use olvin_transform as transform;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
-#[cfg(feature = "physics")]
-pub use olvin_physics as physics;
 
 #[cfg(feature = "scene")]
 pub mod scene_file;
@@ -34,13 +34,18 @@ pub struct DefaultPlugins {
 
 impl Plugin for DefaultPlugins {
     fn build(&self, app: &mut App) {
-        app.add_plugin(olvin_ecs::EcsPlugin).add_plugin(olvin_transform::TransformPlugin);
+        app.add_plugin(olvin_ecs::EcsPlugin)
+            .add_plugin(olvin_transform::TransformPlugin);
         #[cfg(feature = "window")]
         app.add_plugin(self.window.clone());
         #[cfg(feature = "render")]
-        app.add_plugin(olvin_render::RenderPlugin { settings: self.render.settings.clone() });
+        app.add_plugin(olvin_render::RenderPlugin {
+            settings: self.render.settings.clone(),
+        });
         #[cfg(feature = "physics")]
-        app.add_plugin(olvin_physics::PhysicsPlugin { gravity: self.physics.gravity });
+        app.add_plugin(olvin_physics::PhysicsPlugin {
+            gravity: self.physics.gravity,
+        });
     }
 }
 

@@ -9,7 +9,10 @@ use glam::Mat4;
 use olvin::core::App;
 use olvin::ecs::{EcsPlugin, World};
 use olvin::physics::PhysicsPlugin;
-use olvin::render::{Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, RenderCore, RenderSettings, ViewData};
+use olvin::render::{
+    Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, RenderCore, RenderSettings,
+    ViewData,
+};
 use olvin::scene::file::{SceneFile, Shape};
 use olvin::scene::{Camera, Transform};
 use olvin::transform::{GlobalTransform, TransformPlugin};
@@ -35,8 +38,19 @@ pub struct EngineGpu {
 
 impl EngineGpu {
     pub fn new(state: &egui_wgpu::RenderState) -> Self {
-        let core = RenderCore::new(state.device.clone(), state.queue.clone(), state.target_format, MSAA, DEPTH_FORMAT);
-        Self { core, edit: GpuMeshes::default(), play: GpuMeshes::default(), views: HashMap::new() }
+        let core = RenderCore::new(
+            state.device.clone(),
+            state.queue.clone(),
+            state.target_format,
+            MSAA,
+            DEPTH_FORMAT,
+        );
+        Self {
+            core,
+            edit: GpuMeshes::default(),
+            play: GpuMeshes::default(),
+            views: HashMap::new(),
+        }
     }
 
     pub fn reset_play(&mut self) {
@@ -44,18 +58,34 @@ impl EngineGpu {
     }
 
     /// Uploads new meshes and prepares view `id`; draw it later with [`Self::draw`].
-    pub fn prepare(&mut self, id: u64, source: Source, world: &World, meshes: &mut Meshes, view_proj: Mat4, settings: &RenderSettings) {
+    pub fn prepare(
+        &mut self,
+        id: u64,
+        source: Source,
+        world: &World,
+        meshes: &mut Meshes,
+        view_proj: Mat4,
+        settings: &RenderSettings,
+    ) {
         let gpu = match source {
             Source::Edit => &mut self.edit,
             Source::Play => &mut self.play,
         };
         self.core.upload(gpu, meshes);
-        let view = self.views.entry(id).or_insert_with(|| self.core.create_view());
+        let view = self
+            .views
+            .entry(id)
+            .or_insert_with(|| self.core.create_view());
         self.core.prepare(view, gpu, world, view_proj, settings);
     }
 
     /// Shadow pass for view `id`; record it before the pass `draw` goes into.
-    pub fn render_shadows(&self, id: u64, source: Source, encoder: &mut eframe::wgpu::CommandEncoder) {
+    pub fn render_shadows(
+        &self,
+        id: u64,
+        source: Source,
+        encoder: &mut eframe::wgpu::CommandEncoder,
+    ) {
         let gpu = match source {
             Source::Edit => &self.edit,
             Source::Play => &self.play,
@@ -82,6 +112,8 @@ pub struct ScenePreview {
     pub world: World,
     pub meshes: Meshes,
     shapes: HashMap<Shape, MeshHandle>,
+    /// Edited meshes: entity -> (handle, geometry it was uploaded from).
+    polys: HashMap<u64, (MeshHandle, olvin::scene::file::PolyMesh)>,
     frame: Option<u64>,
 }
 
@@ -93,18 +125,67 @@ impl ScenePreview {
         self.frame = Some(frame);
         self.world.clear();
         let worlds = scene.world_matrices();
-        for e in scene.entities.iter().filter(|e| scene.active_in_hierarchy(e.id)) {
+        for e in scene
+            .entities
+            .iter()
+            .filter(|e| scene.active_in_hierarchy(e.id))
+        {
             let Some(m) = worlds.get(&e.id) else { continue };
-            if let Some(mesh) = &e.mesh {
+            if let Some(poly) = &e.poly {
+                let color = e.mesh.as_ref().map_or([0.8; 4], |m| m.color);
+                let handle = match self.polys.get(&e.id) {
+                    Some((h, uploaded)) if uploaded == poly => *h,
+                    cached => {
+                        let (p, n, i) = poly.triangulate();
+                        let data = MeshData::from_triangles(&p, &n, i);
+                        let h = match cached {
+                            Some((h, _)) => {
+                                let h = *h;
+                                self.meshes.set(h, data);
+                                h
+                            }
+                            None => self.meshes.add(data),
+                        };
+                        self.polys.insert(e.id, (h, poly.clone()));
+                        h
+                    }
+                };
+                self.world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(*m),
+                    MeshRenderer {
+                        mesh: handle,
+                        color: Color(color),
+                    },
+                ));
+            } else if let Some(mesh) = &e.mesh {
                 let meshes = &mut self.meshes;
-                let handle = *self.shapes.entry(mesh.shape).or_insert_with(|| meshes.add(MeshData::primitive(mesh.shape)));
-                self.world.spawn((Transform::IDENTITY, GlobalTransform(*m), MeshRenderer { mesh: handle, color: Color(mesh.color) }));
+                let handle = *self
+                    .shapes
+                    .entry(mesh.shape)
+                    .or_insert_with(|| meshes.add(MeshData::primitive(mesh.shape)));
+                self.world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(*m),
+                    MeshRenderer {
+                        mesh: handle,
+                        color: Color(mesh.color),
+                    },
+                ));
             }
             if let Some(camera) = &e.camera {
-                self.world.spawn((Transform::IDENTITY, GlobalTransform(*m), Camera::from(camera)));
+                self.world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(*m),
+                    Camera::from(camera),
+                ));
             }
             if let Some(light) = &e.light {
-                self.world.spawn((Transform::IDENTITY, GlobalTransform(*m), olvin::scene_file::runtime_light(light)));
+                self.world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(*m),
+                    olvin::scene_file::runtime_light(light),
+                ));
             }
         }
     }
@@ -115,11 +196,15 @@ pub fn settings_for(scene: &SceneFile) -> RenderSettings {
     let mut settings = RenderSettings::default();
     if let Some((dir, color, intensity)) = scene.sun() {
         settings.light_dir = dir;
-        settings.light_color = Color([color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0]);
+        settings.light_color = Color([
+            color[0] * intensity,
+            color[1] * intensity,
+            color[2] * intensity,
+            1.0,
+        ]);
     }
     settings
 }
-
 
 /// Prepares engine view `id` for this frame: the running game while playing,
 /// otherwise the edited scene. Returns what to draw, or `None` without a GPU
@@ -132,19 +217,34 @@ pub(crate) fn prepare_view(
 ) -> Option<Source> {
     let gpu = state.gpu.clone()?;
     let mut renderer = gpu.renderer.write();
-    let res = renderer.callback_resources.get_mut::<crate::render::Resources>()?;
+    let res = renderer
+        .callback_resources
+        .get_mut::<crate::render::Resources>()?;
     if let Some(play) = &state.play {
         let world = play.app.resources.fetch::<World>();
         let mut meshes = play.app.resources.fetch_mut::<Meshes>();
-        let settings = play.app.resources.get::<RenderSettings>().map(|s| s.clone()).unwrap_or_default();
+        let settings = play
+            .app
+            .resources
+            .get::<RenderSettings>()
+            .map(|s| s.clone())
+            .unwrap_or_default();
         let vp = view_proj(&world)?;
-        res.engine.prepare(id, Source::Play, &world, &mut meshes, vp, &settings);
+        res.engine
+            .prepare(id, Source::Play, &world, &mut meshes, vp, &settings);
         Some(Source::Play)
     } else {
         state.engine_scene.sync(&state.scene, frame);
         let vp = view_proj(&state.engine_scene.world)?;
         let settings = settings_for(&state.scene);
-        res.engine.prepare(id, Source::Edit, &state.engine_scene.world, &mut state.engine_scene.meshes, vp, &settings);
+        res.engine.prepare(
+            id,
+            Source::Edit,
+            &state.engine_scene.world,
+            &mut state.engine_scene.meshes,
+            vp,
+            &settings,
+        );
         Some(Source::Edit)
     }
 }
@@ -152,7 +252,11 @@ pub(crate) fn prepare_view(
 /// Forgets GPU meshes of the previous game (a new session restarts mesh handles).
 pub(crate) fn reset_play_gpu(state: &crate::EditorState) {
     if let Some(gpu) = &state.gpu
-        && let Some(res) = gpu.renderer.write().callback_resources.get_mut::<crate::render::Resources>()
+        && let Some(res) = gpu
+            .renderer
+            .write()
+            .callback_resources
+            .get_mut::<crate::render::Resources>()
     {
         res.engine.reset_play();
     }
@@ -170,11 +274,20 @@ pub struct PlaySession {
 impl PlaySession {
     pub fn start(scene: &SceneFile, undo_len: usize) -> Self {
         let mut app = App::new();
-        app.add_plugin(EcsPlugin).add_plugin(TransformPlugin).add_plugin(PhysicsPlugin::default());
-        app.insert_resource(Meshes::default()).insert_resource(settings_for(scene));
+        app.add_plugin(EcsPlugin)
+            .add_plugin(TransformPlugin)
+            .add_plugin(PhysicsPlugin::default());
+        app.insert_resource(Meshes::default())
+            .insert_resource(settings_for(scene));
         olvin::scene_file::spawn(&app.resources, scene);
         app.startup();
-        Self { app, paused: false, step: false, saved: scene.clone(), undo_len }
+        Self {
+            app,
+            paused: false,
+            step: false,
+            saved: scene.clone(),
+            undo_len,
+        }
     }
 
     pub fn step_once(&mut self) {
@@ -198,15 +311,24 @@ mod tests {
     #[test]
     fn play_session_runs_physics_and_leaves_the_scene_alone() {
         let mut ground = EntityDesc::new(1, "Ground");
-        ground.mesh = Some(MeshDesc { shape: Shape::Cube, color: [1.0; 4] });
+        ground.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
         ground.collider = Some(ColliderDesc::for_shape(Shape::Cube));
         ground.scale = Vec3::new(10.0, 1.0, 10.0);
         let mut ball = EntityDesc::new(2, "Ball");
-        ball.mesh = Some(MeshDesc { shape: Shape::Sphere, color: [1.0; 4] });
+        ball.mesh = Some(MeshDesc {
+            shape: Shape::Sphere,
+            color: [1.0; 4],
+        });
         ball.collider = Some(ColliderDesc::for_shape(Shape::Sphere));
         ball.rigidbody = Some(RigidbodyDesc::default());
         ball.position = Vec3::new(0.0, 5.0, 0.0);
-        let scene = SceneFile { entities: vec![ground, ball], ..Default::default() };
+        let scene = SceneFile {
+            entities: vec![ground, ball],
+            ..Default::default()
+        };
 
         let mut play = PlaySession::start(&scene, 0);
         // Physics runs on game time; push fixed steps directly to keep the test fast.
@@ -221,20 +343,32 @@ mod tests {
             .find(|(n, _)| n.0 == "Ball")
             .map(|(_, t)| t.translation.y)
             .unwrap();
-        assert!((y - 1.0).abs() < 0.1, "ball rests on the 1 m thick ground: {y}");
+        assert!(
+            (y - 1.0).abs() < 0.1,
+            "ball rests on the 1 m thick ground: {y}"
+        );
         assert_eq!(play.saved, scene);
     }
 
     #[test]
     fn preview_mirrors_meshes_and_cameras() {
         let mut cube = EntityDesc::new(1, "Cube");
-        cube.mesh = Some(MeshDesc { shape: Shape::Cube, color: [1.0; 4] });
+        cube.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
         let mut cam = EntityDesc::new(2, "Camera");
         cam.camera = Some(Default::default());
         let mut hidden = EntityDesc::new(3, "Hidden");
-        hidden.mesh = Some(MeshDesc { shape: Shape::Cube, color: [1.0; 4] });
+        hidden.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
         hidden.active = false;
-        let scene = SceneFile { entities: vec![cube, cam, hidden], ..Default::default() };
+        let scene = SceneFile {
+            entities: vec![cube, cam, hidden],
+            ..Default::default()
+        };
         let mut preview = ScenePreview::default();
         preview.sync(&scene, 1);
         assert_eq!(preview.world.query::<&MeshRenderer>().iter().count(), 1);

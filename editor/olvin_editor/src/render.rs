@@ -68,7 +68,8 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
         immediate_size: 0,
     });
 
-    let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Uint32];
+    let mesh_attrs =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Uint32];
     let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
     let premultiplied = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
 
@@ -89,7 +90,11 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
                 compilation_options: Default::default(),
                 buffers,
             },
-            primitive: wgpu::PrimitiveState { topology, cull_mode: None, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(depth_write),
@@ -97,12 +102,19 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState { count: MSAA, ..Default::default() },
+            multisample: wgpu::MultisampleState {
+                count: MSAA,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some(fs),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -122,15 +134,55 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
     use wgpu::CompareFunction::{Always, Less, LessEqual};
     use wgpu::PrimitiveTopology::{LineList, TriangleList};
     let resources = Resources {
-        mesh: pipeline("olvin mesh", "vs_mesh", "fs_mesh", &[Some(mesh_layout)], TriangleList, true, Less, None),
-        grid: pipeline("olvin grid", "vs_grid", "fs_grid", &[], TriangleList, false, LessEqual, premultiplied),
-        lines: pipeline("olvin lines", "vs_line", "fs_line", &[Some(line_layout.clone())], LineList, false, LessEqual, premultiplied),
-        overlay: pipeline("olvin overlay", "vs_line", "fs_line", &[Some(line_layout)], LineList, false, Always, premultiplied),
+        mesh: pipeline(
+            "olvin mesh",
+            "vs_mesh",
+            "fs_mesh",
+            &[Some(mesh_layout)],
+            TriangleList,
+            true,
+            Less,
+            None,
+        ),
+        grid: pipeline(
+            "olvin grid",
+            "vs_grid",
+            "fs_grid",
+            &[],
+            TriangleList,
+            false,
+            LessEqual,
+            premultiplied,
+        ),
+        lines: pipeline(
+            "olvin lines",
+            "vs_line",
+            "fs_line",
+            &[Some(line_layout.clone())],
+            LineList,
+            false,
+            LessEqual,
+            premultiplied,
+        ),
+        overlay: pipeline(
+            "olvin overlay",
+            "vs_line",
+            "fs_line",
+            &[Some(line_layout)],
+            LineList,
+            false,
+            Always,
+            premultiplied,
+        ),
         layout,
         targets: HashMap::new(),
         engine: EngineGpu::new(render_state),
     };
-    render_state.renderer.write().callback_resources.insert(resources);
+    render_state
+        .renderer
+        .write()
+        .callback_resources
+        .insert(resources);
 }
 
 /// One viewport's frame, handed to egui as a paint callback.
@@ -171,7 +223,9 @@ impl egui_wgpu::CallbackTrait for Frame {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        let Some(res) = resources.get_mut::<Resources>() else {
+            return Vec::new();
+        };
         // The engine view was prepared during UI; its shadow map renders here,
         // before egui's pass samples it.
         if let Some(source) = self.engine {
@@ -188,7 +242,10 @@ impl egui_wgpu::CallbackTrait for Frame {
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("olvin viewport"),
                 layout,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                }],
             });
             let empty = || {
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -199,13 +256,38 @@ impl egui_wgpu::CallbackTrait for Frame {
                 });
                 (buffer, 4096)
             };
-            Target { uniforms, bind, buffers: [empty(), empty(), empty()], counts: [0; 3], grid: false }
+            Target {
+                uniforms,
+                bind,
+                buffers: [empty(), empty(), empty()],
+                counts: [0; 3],
+                grid: false,
+            }
         });
         queue.write_buffer(&target.uniforms, 0, bytemuck::bytes_of(&self.uniforms));
-        upload(device, queue, &mut target.buffers[0], bytemuck::cast_slice(&self.vertices));
-        upload(device, queue, &mut target.buffers[1], bytemuck::cast_slice(&self.lines));
-        upload(device, queue, &mut target.buffers[2], bytemuck::cast_slice(&self.overlay));
-        target.counts = [self.vertices.len() as u32, self.lines.len() as u32, self.overlay.len() as u32];
+        upload(
+            device,
+            queue,
+            &mut target.buffers[0],
+            bytemuck::cast_slice(&self.vertices),
+        );
+        upload(
+            device,
+            queue,
+            &mut target.buffers[1],
+            bytemuck::cast_slice(&self.lines),
+        );
+        upload(
+            device,
+            queue,
+            &mut target.buffers[2],
+            bytemuck::cast_slice(&self.overlay),
+        );
+        target.counts = [
+            self.vertices.len() as u32,
+            self.lines.len() as u32,
+            self.overlay.len() as u32,
+        ];
         target.grid = self.grid;
         Vec::new()
     }
@@ -216,11 +298,15 @@ impl egui_wgpu::CallbackTrait for Frame {
         pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        let Some(res) = resources.get::<Resources>() else { return };
+        let Some(res) = resources.get::<Resources>() else {
+            return;
+        };
         if let Some(source) = self.engine {
             res.engine.draw(self.viewport, source, pass);
         }
-        let Some(t) = res.targets.get(&self.viewport) else { return };
+        let Some(t) = res.targets.get(&self.viewport) else {
+            return;
+        };
         pass.set_bind_group(0, &t.bind, &[]);
         if t.counts[0] > 0 {
             pass.set_pipeline(&res.mesh);

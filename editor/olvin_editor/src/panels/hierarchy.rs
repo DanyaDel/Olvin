@@ -95,7 +95,11 @@ impl Panel for Hierarchy {
         let mut actions = Vec::new();
         ui.horizontal(|ui| {
             ui.menu_button("+", |ui| create_actions(ui, state, None, &mut actions));
-            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Search").desired_width(f32::INFINITY));
+            ui.add(
+                TextEdit::singleline(&mut self.filter)
+                    .hint_text("🔍 Search")
+                    .desired_width(f32::INFINITY),
+            );
         });
         ui.separator();
 
@@ -125,7 +129,12 @@ impl Panel for Hierarchy {
                 actions.push(Action::Reparent(*dragged, None));
             }
             if rest.dnd_hover_payload::<u64>().is_some() {
-                ui.painter().rect_stroke(rect.shrink(1.0), 3.0, (1.0, theme::ACCENT), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect.shrink(1.0),
+                    3.0,
+                    (1.0, theme::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
             }
             if rest.clicked() {
                 actions.push(Action::Select(None));
@@ -138,7 +147,12 @@ impl Panel for Hierarchy {
                 Action::Select(id) => state.select(id),
                 Action::Toggle(id) => state.toggle_selected(id),
                 Action::Range(id) => {
-                    let order: Vec<u64> = state.scene.hierarchy_order().into_iter().map(|i| state.scene.entities[i].id).collect();
+                    let order: Vec<u64> = state
+                        .scene
+                        .hierarchy_order()
+                        .into_iter()
+                        .map(|i| state.scene.entities[i].id)
+                        .collect();
                     state.select_range(id, &order);
                 }
                 Action::Create(creation, parent) => {
@@ -160,7 +174,11 @@ impl Panel for Hierarchy {
                     }
                 }
                 Action::StartRename(id) => {
-                    let name = state.scene.get(id).map(|e| e.name.clone()).unwrap_or_default();
+                    let name = state
+                        .scene
+                        .get(id)
+                        .map(|e| e.name.clone())
+                        .unwrap_or_default();
                     self.renaming = Some((id, name));
                 }
             }
@@ -192,7 +210,9 @@ impl Hierarchy {
     }
 
     fn row(&mut self, ui: &mut egui::Ui, state: &EditorState, id: u64, actions: &mut Vec<Action>) {
-        let Some(entity) = state.scene.get(id) else { return };
+        let Some(entity) = state.scene.get(id) else {
+            return;
+        };
 
         if let Some((rid, name)) = &mut self.renaming
             && *rid == id
@@ -228,8 +248,17 @@ impl Hierarchy {
         if label.dragged() {
             label.dnd_set_drag_payload(id);
             if let Some(p) = ui.ctx().pointer_interact_pos() {
-                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("hier-drag")));
-                painter.text(p + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, &entity.name, egui::FontId::proportional(13.0), theme::SELECTED);
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    Id::new("hier-drag"),
+                ));
+                painter.text(
+                    p + egui::vec2(12.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    &entity.name,
+                    egui::FontId::proportional(13.0),
+                    theme::SELECTED,
+                );
             }
         }
         if label.clicked() {
@@ -244,14 +273,20 @@ impl Hierarchy {
             actions.push(Action::StartRename(id));
         }
         label.context_menu(|ui| {
-            ui.menu_button("Create child", |ui| create_actions(ui, state, Some(id), actions));
+            ui.menu_button("Create child", |ui| {
+                create_actions(ui, state, Some(id), actions)
+            });
             if ui.button("Rename").clicked() {
                 actions.push(Action::StartRename(id));
             }
             if ui.button("Duplicate  Ctrl+D").clicked() {
                 actions.push(Action::Duplicate(id));
             }
-            if ui.button("Move Up").on_hover_text("Earlier in order (CSG brushes apply top to bottom)").clicked() {
+            if ui
+                .button("Move Up")
+                .on_hover_text("Earlier in order (CSG brushes apply top to bottom)")
+                .clicked()
+            {
                 actions.push(Action::MoveSibling(id, -1));
             }
             if ui.button("Move Down").clicked() {
@@ -272,13 +307,26 @@ impl Hierarchy {
         {
             actions.push(Action::Reparent(*dragged, Some(id)));
         }
-        if response.dnd_hover_payload::<u64>().is_some_and(|d| *d != id) {
-            ui.painter().rect_stroke(response.rect, 3.0, (1.5, theme::ACCENT), egui::StrokeKind::Outside);
+        if response
+            .dnd_hover_payload::<u64>()
+            .is_some_and(|d| *d != id)
+        {
+            ui.painter().rect_stroke(
+                response.rect,
+                3.0,
+                (1.5, theme::ACCENT),
+                egui::StrokeKind::Outside,
+            );
         }
     }
 }
 
-fn create_actions(ui: &mut egui::Ui, state: &EditorState, parent: Option<u64>, actions: &mut Vec<Action>) {
+fn create_actions(
+    ui: &mut egui::Ui,
+    state: &EditorState,
+    parent: Option<u64>,
+    actions: &mut Vec<Action>,
+) {
     if let Some(creation) = create_menu(ui, &state.ext.create) {
         actions.push(Action::Create(creation, parent));
     }

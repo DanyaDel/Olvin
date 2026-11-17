@@ -6,6 +6,7 @@ use std::path::Path;
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
 pub use olvin_csg::{BrushShape, CsgOp};
+pub use olvin_mesh::PolyMesh;
 use serde::{Deserialize, Serialize};
 
 pub use crate::primitives::Shape;
@@ -50,6 +51,9 @@ pub struct EntityDesc {
     pub mesh: Option<MeshDesc>,
     #[serde(default)]
     pub camera: Option<CameraDesc>,
+    /// Editable polygon mesh (Edit Mode); replaces `mesh.shape` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poly: Option<PolyMesh>,
     /// CSG brush: its geometry is the unit cube scaled by the transform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brush: Option<BrushDesc>,
@@ -278,6 +282,7 @@ impl EntityDesc {
             mesh: None,
             camera: None,
             brush: None,
+            poly: None,
             light: None,
             collider: None,
             rigidbody: None,

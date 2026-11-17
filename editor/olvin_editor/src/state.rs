@@ -5,7 +5,8 @@ use std::time::Instant;
 use glam::{EulerRot, Mat4, Vec3};
 use olvin_scene::Transform;
 use olvin_scene::file::{
-    AudioSourceDesc, CameraDesc, ColliderDesc, EntityDesc, LightDesc, LightKind, MeshDesc, SceneFile, Shape,
+    AudioSourceDesc, CameraDesc, ColliderDesc, EntityDesc, LightDesc, LightKind, MeshDesc,
+    SceneFile, Shape,
 };
 
 use crate::engine::{PlaySession, ScenePreview};
@@ -31,7 +32,11 @@ pub struct SnapSettings {
 
 impl Default for SnapSettings {
     fn default() -> Self {
-        Self { enabled: true, step: None, angle_deg: 15.0 }
+        Self {
+            enabled: true,
+            step: None,
+            angle_deg: 15.0,
+        }
     }
 }
 
@@ -134,6 +139,9 @@ pub struct EditorState {
     /// vertices); the editor then won't delete or duplicate the object.
     /// Cleared every frame.
     pub tool_owns_keys: bool,
+    /// Set every frame by a tool in a modal operation (grab, inset...): the
+    /// whole operation becomes one undo step. Cleared every frame.
+    pub busy: bool,
     pub(crate) ext: Extensions,
     /// egui's GPU context; the engine renderer draws through the same device.
     pub(crate) gpu: Option<eframe::egui_wgpu::RenderState>,
@@ -164,6 +172,7 @@ impl EditorState {
             local_space: false,
             snap: SnapSettings::default(),
             tool_owns_keys: false,
+            busy: false,
             ext: Extensions::default(),
             gpu: None,
             engine_scene: ScenePreview::default(),
@@ -200,7 +209,11 @@ impl EditorState {
 
     pub fn log(&mut self, level: LogLevel, text: impl Into<String>) {
         let time = self.started.elapsed().as_secs_f64();
-        self.log.push(LogLine { level, time, text: text.into() });
+        self.log.push(LogLine {
+            level,
+            time,
+            text: text.into(),
+        });
     }
 
     pub fn info(&mut self, text: impl Into<String>) {
@@ -230,7 +243,10 @@ impl EditorState {
         match SceneFile::load(path) {
             Ok(scene) => {
                 self.replace_scene(scene, Some(path.to_path_buf()), true);
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 self.info(format!("opened scene {name}"));
             }
             Err(err) => self.error(format!("could not open scene: {err}")),
@@ -238,7 +254,9 @@ impl EditorState {
     }
 
     pub fn new_scene(&mut self) {
-        let path = self.default_scene_path().map(|p| p.with_file_name("untitled.scene.ron"));
+        let path = self
+            .default_scene_path()
+            .map(|p| p.with_file_name("untitled.scene.ron"));
         self.replace_scene(starter_scene(), path, false);
         self.info("new scene");
     }
@@ -268,7 +286,11 @@ impl EditorState {
     }
 
     fn replace_scene(&mut self, scene: SceneFile, path: Option<PathBuf>, saved: bool) {
-        self.saved = if saved { scene.clone() } else { SceneFile::default() };
+        self.saved = if saved {
+            scene.clone()
+        } else {
+            SceneFile::default()
+        };
         self.committed = scene.clone();
         self.scene = scene;
         self.scene_path = path;
@@ -291,7 +313,8 @@ impl EditorState {
     }
 
     pub fn is_selected(&self, id: u64) -> bool {
-        self.selection == Some(id) || (self.selection.is_some_and(|p| self.multi.contains(&p)) && self.multi.contains(&id))
+        self.selection == Some(id)
+            || (self.selection.is_some_and(|p| self.multi.contains(&p)) && self.multi.contains(&id))
     }
 
     pub fn select(&mut self, id: Option<u64>) {
@@ -314,8 +337,13 @@ impl EditorState {
 
     /// Shift+click: everything between the active object and `id`, in `order`.
     pub fn select_range(&mut self, id: u64, order: &[u64]) {
-        let Some(anchor) = self.selection else { return self.select(Some(id)) };
-        let (Some(a), Some(b)) = (order.iter().position(|x| *x == anchor), order.iter().position(|x| *x == id)) else {
+        let Some(anchor) = self.selection else {
+            return self.select(Some(id));
+        };
+        let (Some(a), Some(b)) = (
+            order.iter().position(|x| *x == anchor),
+            order.iter().position(|x| *x == id),
+        ) else {
             return self.select(Some(id));
         };
         let (lo, hi) = (a.min(b), a.max(b));
@@ -362,7 +390,8 @@ impl EditorState {
 
     fn commit(&mut self) {
         if self.scene != self.committed {
-            self.undo.push(std::mem::replace(&mut self.committed, self.scene.clone()));
+            self.undo
+                .push(std::mem::replace(&mut self.committed, self.scene.clone()));
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
             }
@@ -396,7 +425,10 @@ impl EditorState {
     }
 
     fn after_history_jump(&mut self) {
-        if self.selection.is_some_and(|id| self.scene.get(id).is_none()) {
+        if self
+            .selection
+            .is_some_and(|id| self.scene.get(id).is_none())
+        {
             self.selection = None;
         }
         self.scene_generation += 1;
@@ -405,7 +437,12 @@ impl EditorState {
     // --- hierarchy -------------------------------------------------------
 
     pub fn children(&self, parent: Option<u64>) -> Vec<u64> {
-        self.scene.entities.iter().filter(|e| e.parent == parent).map(|e| e.id).collect()
+        self.scene
+            .entities
+            .iter()
+            .filter(|e| e.parent == parent)
+            .map(|e| e.id)
+            .collect()
     }
 
     pub fn is_descendant(&self, id: u64, ancestor: u64) -> bool {
@@ -431,7 +468,10 @@ impl EditorState {
             NewEntity::Empty => {}
             NewEntity::Primitive(shape) => {
                 // Like Unity: primitives come with their matching collider.
-                e.mesh = Some(MeshDesc { shape, color: [0.8, 0.8, 0.8, 1.0] });
+                e.mesh = Some(MeshDesc {
+                    shape,
+                    color: [0.8, 0.8, 0.8, 1.0],
+                });
                 e.collider = Some(ColliderDesc::for_shape(shape));
             }
             NewEntity::Camera => {
@@ -498,15 +538,25 @@ impl EditorState {
     /// Moves an entity up (-1) or down (+1) among its siblings. Order matters
     /// for CSG brushes.
     pub fn move_sibling(&mut self, id: u64, dir: i32) -> bool {
-        let Some(parent) = self.scene.get(id).map(|e| e.parent) else { return false };
-        let siblings: Vec<usize> =
-            (0..self.scene.entities.len()).filter(|&i| self.scene.entities[i].parent == parent).collect();
-        let Some(pos) = siblings.iter().position(|&i| self.scene.entities[i].id == id) else { return false };
+        let Some(parent) = self.scene.get(id).map(|e| e.parent) else {
+            return false;
+        };
+        let siblings: Vec<usize> = (0..self.scene.entities.len())
+            .filter(|&i| self.scene.entities[i].parent == parent)
+            .collect();
+        let Some(pos) = siblings
+            .iter()
+            .position(|&i| self.scene.entities[i].id == id)
+        else {
+            return false;
+        };
         let other = pos as i32 + dir;
         if other < 0 || other as usize >= siblings.len() {
             return false;
         }
-        self.scene.entities.swap(siblings[pos], siblings[other as usize]);
+        self.scene
+            .entities
+            .swap(siblings[pos], siblings[other as usize]);
         // Swapping may put a subtree before its parent; restore the invariant.
         self.fix_order();
         true
@@ -518,9 +568,14 @@ impl EditorState {
             return false;
         }
         let worlds = self.scene.world_matrices();
-        let Some(&world) = worlds.get(&id) else { return false };
-        let parent_world = parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
-        let (scale, rotation, translation) = (parent_world.inverse() * world).to_scale_rotation_translation();
+        let Some(&world) = worlds.get(&id) else {
+            return false;
+        };
+        let parent_world = parent
+            .and_then(|p| worlds.get(&p).copied())
+            .unwrap_or(Mat4::IDENTITY);
+        let (scale, rotation, translation) =
+            (parent_world.inverse() * world).to_scale_rotation_translation();
         let (y, x, z) = rotation.to_euler(EulerRot::YXZ);
 
         let e = self.scene.get_mut(id).unwrap();
@@ -563,7 +618,10 @@ impl EditorState {
     /// World matrices with preview overrides applied.
     pub fn world_matrices(&self) -> HashMap<u64, Mat4> {
         self.scene.world_matrices_with(|e| {
-            self.preview.get(&e.id).copied().unwrap_or_else(|| e.local_transform())
+            self.preview
+                .get(&e.id)
+                .copied()
+                .unwrap_or_else(|| e.local_transform())
         })
     }
 }
@@ -577,11 +635,17 @@ fn starter_scene() -> SceneFile {
     let mut ground = EntityDesc::new(2, "Ground");
     ground.scale = Vec3::splat(2.0);
     ground.collider = Some(ColliderDesc::for_shape(Shape::Plane));
-    ground.mesh = Some(MeshDesc { shape: Shape::Plane, color: [0.18, 0.2, 0.22, 1.0] });
+    ground.mesh = Some(MeshDesc {
+        shape: Shape::Plane,
+        color: [0.18, 0.2, 0.22, 1.0],
+    });
 
     let mut cube = EntityDesc::new(3, "Cube");
     cube.position = Vec3::new(0.0, 0.5, 0.0);
-    cube.mesh = Some(MeshDesc { shape: Shape::Cube, color: [0.9, 0.45, 0.15, 1.0] });
+    cube.mesh = Some(MeshDesc {
+        shape: Shape::Cube,
+        color: [0.9, 0.45, 0.15, 1.0],
+    });
     cube.collider = Some(ColliderDesc::for_shape(Shape::Cube));
 
     let mut sun = EntityDesc::new(4, "Directional Light");
@@ -589,7 +653,10 @@ fn starter_scene() -> SceneFile {
     sun.rotation = Vec3::new(-50.0, -30.0, 0.0);
     sun.light = Some(LightDesc::new(LightKind::Directional));
 
-    SceneFile { entities: vec![camera, sun, ground, cube], ..Default::default() }
+    SceneFile {
+        entities: vec![camera, sun, ground, cube],
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]

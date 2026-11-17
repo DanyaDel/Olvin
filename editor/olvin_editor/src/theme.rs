@@ -35,8 +35,18 @@ pub fn apply(ctx: &egui::Context) {
     v.window_corner_radius = CornerRadius::same(10);
     v.menu_corner_radius = CornerRadius::same(8);
     v.window_stroke = Stroke::new(1.0, Color32::from_rgb(52, 58, 70));
-    v.window_shadow = Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(110) };
-    v.popup_shadow = Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(100) };
+    v.window_shadow = Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: Color32::from_black_alpha(110),
+    };
+    v.popup_shadow = Shadow {
+        offset: [0, 6],
+        blur: 18,
+        spread: 0,
+        color: Color32::from_black_alpha(100),
+    };
     v.warn_fg_color = Color32::from_rgb(255, 196, 92);
     v.error_fg_color = Color32::from_rgb(255, 110, 110);
 
@@ -47,7 +57,11 @@ pub fn apply(ctx: &egui::Context) {
     w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
     let states = [
         (&mut w.inactive, Color32::from_rgb(44, 49, 60), TEXT),
-        (&mut w.hovered, Color32::from_rgb(56, 63, 78), Color32::WHITE),
+        (
+            &mut w.hovered,
+            Color32::from_rgb(56, 63, 78),
+            Color32::WHITE,
+        ),
         (&mut w.active, Color32::from_rgb(68, 78, 98), Color32::WHITE),
         (&mut w.open, Color32::from_rgb(50, 57, 70), Color32::WHITE),
     ];
@@ -97,7 +111,12 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
 
     let tab = |bg: Color32, text: Color32| egui_dock::TabInteractionStyle {
         outline_color: Color32::TRANSPARENT,
-        corner_radius: CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
+        corner_radius: CornerRadius {
+            nw: 8,
+            ne: 8,
+            sw: 0,
+            se: 0,
+        },
         bg_fill: bg,
         text_color: text,
     };
@@ -112,7 +131,12 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     d.tab.spacing = 2.0;
     d.tab.tab_body.bg_fill = SURFACE;
     d.tab.tab_body.stroke = Stroke::NONE;
-    d.tab.tab_body.corner_radius = CornerRadius { nw: 0, ne: 8, sw: 8, se: 8 };
+    d.tab.tab_body.corner_radius = CornerRadius {
+        nw: 0,
+        ne: 8,
+        sw: 8,
+        se: 8,
+    };
     d.tab.tab_body.inner_margin = egui::Margin::same(6);
 
     d.buttons.close_tab_color = TEXT_WEAK;

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use egui::{Id, Key, KeyboardShortcut, Modifiers, RichText, TextEdit, ViewportCommand};
 use egui_dock::{DockArea, DockState, NodePath, TabViewer};
 
-use crate::workspace::Layout;
 use crate::panels::hierarchy::create_menu;
+use crate::workspace::Layout;
 use crate::{EditorState, LogLevel, Panel, Registry, Tab, theme};
 
 /// Waiting for "save changes?" before doing something destructive.
@@ -38,13 +38,20 @@ pub struct EditorApp {
 }
 
 impl EditorApp {
-    pub fn new(registry: Registry, project: Option<PathBuf>, gpu: Option<eframe::egui_wgpu::RenderState>) -> Self {
+    pub fn new(
+        registry: Registry,
+        project: Option<PathBuf>,
+        gpu: Option<eframe::egui_wgpu::RenderState>,
+    ) -> Self {
         let layout = Layout::load(&registry);
         let mut state = EditorState::new(project);
         state.ext = registry.instantiate_extensions();
         state.gpu = gpu;
         if !registry.plugins().is_empty() {
-            state.info(format!("installed elements: {}", registry.plugins().join(", ")));
+            state.info(format!(
+                "installed elements: {}",
+                registry.plugins().join(", ")
+            ));
         }
         Self {
             registry,
@@ -99,7 +106,10 @@ impl EditorApp {
         }
         let selected = self.state.selected_ids();
         if duplicate && !selected.is_empty() {
-            let copies: Vec<u64> = selected.iter().filter_map(|id| self.state.duplicate(*id)).collect();
+            let copies: Vec<u64> = selected
+                .iter()
+                .filter_map(|id| self.state.duplicate(*id))
+                .collect();
             self.state.multi = copies.clone();
             self.state.selection = copies.last().copied();
         }
@@ -152,18 +162,36 @@ impl EditorApp {
             }
         });
         ui.menu_button("Edit", |ui| {
-            if ui.add_enabled(self.state.can_undo(), egui::Button::new("Undo            Ctrl+Z")).clicked() {
+            if ui
+                .add_enabled(
+                    self.state.can_undo(),
+                    egui::Button::new("Undo            Ctrl+Z"),
+                )
+                .clicked()
+            {
                 self.state.undo();
             }
-            if ui.add_enabled(self.state.can_redo(), egui::Button::new("Redo            Ctrl+Shift+Z")).clicked() {
+            if ui
+                .add_enabled(
+                    self.state.can_redo(),
+                    egui::Button::new("Redo            Ctrl+Shift+Z"),
+                )
+                .clicked()
+            {
                 self.state.redo();
             }
             ui.separator();
             let sel = self.state.selection;
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Duplicate     Ctrl+D")).clicked() {
+            if ui
+                .add_enabled(sel.is_some(), egui::Button::new("Duplicate     Ctrl+D"))
+                .clicked()
+            {
                 self.state.duplicate(sel.unwrap());
             }
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Delete           Del")).clicked() {
+            if ui
+                .add_enabled(sel.is_some(), egui::Button::new("Delete           Del"))
+                .clicked()
+            {
                 self.state.delete(sel.unwrap());
             }
         });
@@ -242,8 +270,14 @@ impl EditorApp {
             }
             let active = self.layout.active == i;
             let name = &self.layout.workspaces[i].name;
-            let text = if active { RichText::new(name).strong() } else { RichText::new(name) };
-            let tab = ui.selectable_label(active, text).on_hover_text("Double-click to rename, middle-click to close");
+            let text = if active {
+                RichText::new(name).strong()
+            } else {
+                RichText::new(name)
+            };
+            let tab = ui
+                .selectable_label(active, text)
+                .on_hover_text("Double-click to rename, middle-click to close");
             if tab.clicked() {
                 action = Some(WsAction::Activate(i));
             }
@@ -267,15 +301,26 @@ impl EditorApp {
                     action = Some(WsAction::Move(i, i + 1));
                 }
                 ui.separator();
-                if ui.add_enabled(count > 1, egui::Button::new("Close")).clicked() {
+                if ui
+                    .add_enabled(count > 1, egui::Button::new("Close"))
+                    .clicked()
+                {
                     action = Some(WsAction::Close(i));
                 }
             });
-            if active && count > 1 && ui.small_button("×").on_hover_text("Close workspace").clicked() {
+            if active
+                && count > 1
+                && ui
+                    .small_button("×")
+                    .on_hover_text("Close workspace")
+                    .clicked()
+            {
                 action = Some(WsAction::Close(i));
             }
         }
-        ui.menu_button("+", |ui| self.new_workspace_menu(ui)).response.on_hover_text("New Workspace");
+        ui.menu_button("+", |ui| self.new_workspace_menu(ui))
+            .response
+            .on_hover_text("New Workspace");
         if let Some(action) = action {
             self.apply_ws(action);
         }
@@ -285,15 +330,19 @@ impl EditorApp {
         match action {
             WsAction::Activate(i) => self.layout.active = i,
             WsAction::Close(i) => self.layout.close(i),
-            WsAction::StartRename(i) => self.renaming = Some((i, self.layout.workspaces[i].name.clone())),
+            WsAction::StartRename(i) => {
+                self.renaming = Some((i, self.layout.workspaces[i].name.clone()))
+            }
             WsAction::Duplicate(i) => self.layout.duplicate(i),
             WsAction::Move(from, to) => self.layout.move_workspace(from, to),
             WsAction::Add(Some(t)) => {
                 let template = self.registry.templates()[t];
-                self.layout.add_workspace(template.name.to_owned(), template.build);
+                self.layout
+                    .add_workspace(template.name.to_owned(), template.build);
             }
             WsAction::Add(None) => {
-                self.layout.add_workspace("New".to_owned(), |_| DockState::new(Vec::new()));
+                self.layout
+                    .add_workspace("New".to_owned(), |_| DockState::new(Vec::new()));
                 self.renaming = Some((self.layout.active, "New".to_owned()));
             }
         }
@@ -319,19 +368,34 @@ impl EditorApp {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let icon = |text: &str, on: bool| {
-                    let color = if on { egui::Color32::WHITE } else { theme::TEXT };
-                    egui::Button::selectable(on, RichText::new(text).size(15.0).color(color)).min_size(egui::vec2(34.0, 24.0))
+                    let color = if on {
+                        egui::Color32::WHITE
+                    } else {
+                        theme::TEXT
+                    };
+                    egui::Button::selectable(on, RichText::new(text).size(15.0).color(color))
+                        .min_size(egui::vec2(34.0, 24.0))
                 };
-                let play = ui.add(icon("▶", playing)).on_hover_text(if playing { "Stop (Ctrl+P)" } else { "Play (Ctrl+P)" });
+                let play = ui.add(icon("▶", playing)).on_hover_text(if playing {
+                    "Stop (Ctrl+P)"
+                } else {
+                    "Play (Ctrl+P)"
+                });
                 if play.clicked() {
                     self.toggle_play();
                 }
-                if ui.add_enabled(playing, icon("⏸", paused)).on_hover_text("Pause").clicked()
+                if ui
+                    .add_enabled(playing, icon("⏸", paused))
+                    .on_hover_text("Pause")
+                    .clicked()
                     && let Some(p) = &mut self.state.play
                 {
                     p.paused = !p.paused;
                 }
-                if ui.add_enabled(playing, icon("⏭", false)).on_hover_text("Step one frame").clicked()
+                if ui
+                    .add_enabled(playing, icon("⏭", false))
+                    .on_hover_text("Step one frame")
+                    .clicked()
                     && let Some(p) = &mut self.state.play
                 {
                     p.paused = true;
@@ -351,7 +415,13 @@ impl EditorApp {
         if playing {
             ctx.all_styles_mut(|style| {
                 let v = &mut style.visuals;
-                let tint = |c: egui::Color32| egui::Color32::from_rgb(c.r().saturating_sub(4), c.g().saturating_sub(2), c.b().saturating_add(14));
+                let tint = |c: egui::Color32| {
+                    egui::Color32::from_rgb(
+                        c.r().saturating_sub(4),
+                        c.g().saturating_sub(2),
+                        c.b().saturating_add(14),
+                    )
+                };
                 v.panel_fill = tint(v.panel_fill);
                 v.window_fill = tint(v.window_fill);
                 v.extreme_bg_color = tint(v.extreme_bg_color);
@@ -370,7 +440,8 @@ impl EditorApp {
                 .unwrap_or_else(|| "untitled".into());
             ui.label(name);
             if self.state.is_dirty() {
-                ui.colored_label(theme::SELECTED, "•").on_hover_text("Unsaved changes");
+                ui.colored_label(theme::SELECTED, "•")
+                    .on_hover_text("Unsaved changes");
             }
             ui.separator();
             ui.weak(format!("{} objects", self.state.scene.entities.len()));
@@ -510,7 +581,11 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match self.registry.panel(&tab.kind) {
-            Some(kind) => self.panels.entry(tab.id).or_insert_with(kind.factory).ui(ui, self.state),
+            Some(kind) => self
+                .panels
+                .entry(tab.id)
+                .or_insert_with(kind.factory)
+                .ui(ui, self.state),
             None => {
                 ui.centered_and_justified(|ui| {
                     ui.label(format!(
@@ -544,7 +619,10 @@ impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        if ctx.input(|i| i.viewport().close_requested()) && self.state.is_dirty() && !self.allow_close {
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.state.is_dirty()
+            && !self.allow_close
+        {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
@@ -552,7 +630,8 @@ impl eframe::App for EditorApp {
             self.request(Confirm::Open(path));
         }
         self.shortcuts(&ctx);
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P))) {
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P)))
+        {
             self.toggle_play();
         }
         if let Some(play) = &mut self.state.play {
@@ -562,13 +641,17 @@ impl eframe::App for EditorApp {
         self.tint(&ctx);
         self.state.tool_owns_keys = false;
 
-        let bar = egui::Frame::new().fill(theme::BACKDROP).inner_margin(egui::Margin::symmetric(10, 6));
+        let bar = egui::Frame::new()
+            .fill(theme::BACKDROP)
+            .inner_margin(egui::Margin::symmetric(10, 6));
         egui::Panel::top("top").frame(bar).show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 // Logo: a small accent tile and the name.
-                let (tile, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                let (tile, _) =
+                    ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                 ui.painter().rect_filled(tile, 5.0, theme::ACCENT);
-                ui.painter().rect_filled(tile.shrink(5.0), 2.0, theme::SELECTED);
+                ui.painter()
+                    .rect_filled(tile.shrink(5.0), 2.0, theme::SELECTED);
                 ui.label(RichText::new("Olvin").strong().size(15.0));
                 ui.add_space(6.0);
                 self.menus(ui);
@@ -576,38 +659,48 @@ impl eframe::App for EditorApp {
                 self.workspace_tabs(ui);
             });
             // Play controls centred over the window, like Unity.
-            let center = egui::Rect::from_center_size(ui.max_rect().center(), egui::vec2(124.0, ui.max_rect().height()));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(center).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                self.play_controls(ui)
-            });
+            let center = egui::Rect::from_center_size(
+                ui.max_rect().center(),
+                egui::vec2(124.0, ui.max_rect().height()),
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(center)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| self.play_controls(ui),
+            );
         });
-        let status = egui::Frame::new().fill(theme::BACKDROP).inner_margin(egui::Margin::symmetric(12, 4));
-        egui::Panel::bottom("status").frame(status).show(ui, |ui| self.status_bar(ui));
+        let status = egui::Frame::new()
+            .fill(theme::BACKDROP)
+            .inner_margin(egui::Margin::symmetric(12, 4));
+        egui::Panel::bottom("status")
+            .frame(status)
+            .show(ui, |ui| self.status_bar(ui));
 
         let active = self.layout.active;
         let mut added = Vec::new();
-        egui::CentralPanel::default_margins().frame(egui::Frame::new().fill(theme::BACKDROP)).show(ui, |ui| {
-            let mut viewer = Viewer {
-                registry: &self.registry,
-                panels: &mut self.panels,
-                state: &mut self.state,
-                added: Vec::new(),
-            };
-            let dock = &mut self.layout.workspaces[active].dock;
-            if dock.iter_all_tabs().next().is_none() {
-                ui.centered_and_justified(|ui| {
-                    ui.weak("Empty workspace. Window → Add Panel")
-                });
-            }
-            DockArea::new(dock)
-                .id(Id::new(("olvin-dock", active)))
-                .style(theme::dock_style(ui.style()))
-                .show_add_buttons(true)
-                .show_add_popup(true)
-                .show_leaf_collapse_buttons(false)
-                .show_inside(ui, &mut viewer);
-            added = viewer.added;
-        });
+        egui::CentralPanel::default_margins()
+            .frame(egui::Frame::new().fill(theme::BACKDROP))
+            .show(ui, |ui| {
+                let mut viewer = Viewer {
+                    registry: &self.registry,
+                    panels: &mut self.panels,
+                    state: &mut self.state,
+                    added: Vec::new(),
+                };
+                let dock = &mut self.layout.workspaces[active].dock;
+                if dock.iter_all_tabs().next().is_none() {
+                    ui.centered_and_justified(|ui| ui.weak("Empty workspace. Window → Add Panel"));
+                }
+                DockArea::new(dock)
+                    .id(Id::new(("olvin-dock", active)))
+                    .style(theme::dock_style(ui.style()))
+                    .show_add_buttons(true)
+                    .show_add_popup(true)
+                    .show_leaf_collapse_buttons(false)
+                    .show_inside(ui, &mut viewer);
+                added = viewer.added;
+            });
         for (path, kind) in added {
             let mut alloc = self.layout.alloc();
             let tab = alloc.tab(kind);
@@ -624,8 +717,11 @@ impl eframe::App for EditorApp {
         let live: HashSet<u32> = self.layout.all_tab_ids().collect();
         self.panels.retain(|id, _| live.contains(id));
 
-        let interacting = ctx.input(|i| i.pointer.any_down()) || ctx.egui_wants_keyboard_input();
+        let interacting = ctx.input(|i| i.pointer.any_down())
+            || ctx.egui_wants_keyboard_input()
+            || self.state.busy;
         self.state.end_frame(interacting);
+        self.state.busy = false;
     }
 
     fn on_exit(&mut self) {

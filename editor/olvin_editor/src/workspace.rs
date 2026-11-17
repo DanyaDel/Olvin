@@ -33,9 +33,16 @@ impl Layout {
         let workspaces = registry
             .templates()
             .iter()
-            .map(|t| Workspace { name: t.name.to_owned(), dock: (t.build)(&mut alloc) })
+            .map(|t| Workspace {
+                name: t.name.to_owned(),
+                dock: (t.build)(&mut alloc),
+            })
             .collect();
-        Self { workspaces, active: 0, next_tab: alloc.0 }
+        Self {
+            workspaces,
+            active: 0,
+            next_tab: alloc.0,
+        }
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -60,7 +67,8 @@ impl Layout {
     pub fn save(&self) -> Result<(), String> {
         let path = Self::path().ok_or("no config directory")?;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        let text = ron::ser::to_string_pretty(self, Default::default()).map_err(|e| e.to_string())?;
+        let text =
+            ron::ser::to_string_pretty(self, Default::default()).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| e.to_string())
     }
 
@@ -72,7 +80,11 @@ impl Layout {
         self.next_tab = self.next_tab.max(alloc.0);
     }
 
-    pub fn add_workspace(&mut self, name: String, build: impl FnOnce(&mut TabAlloc) -> DockState<Tab>) {
+    pub fn add_workspace(
+        &mut self,
+        name: String,
+        build: impl FnOnce(&mut TabAlloc) -> DockState<Tab>,
+    ) {
         let mut alloc = self.alloc();
         let dock = build(&mut alloc);
         self.finish_alloc(alloc);
@@ -84,7 +96,9 @@ impl Layout {
     pub fn duplicate(&mut self, index: usize) {
         let mut alloc = self.alloc();
         let source = &self.workspaces[index];
-        let dock = source.dock.filter_map_tabs(|tab| Some(alloc.tab(&tab.kind)));
+        let dock = source
+            .dock
+            .filter_map_tabs(|tab| Some(alloc.tab(&tab.kind)));
         let name = format!("{} (copy)", source.name);
         self.finish_alloc(alloc);
         self.workspaces.insert(index + 1, Workspace { name, dock });
@@ -111,6 +125,8 @@ impl Layout {
     }
 
     pub fn all_tab_ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.workspaces.iter().flat_map(|w| w.dock.iter_all_tabs().map(|(_, t)| t.id))
+        self.workspaces
+            .iter()
+            .flat_map(|w| w.dock.iter_all_tabs().map(|(_, t)| t.id))
     }
 }

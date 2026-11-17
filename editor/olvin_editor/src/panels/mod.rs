@@ -18,12 +18,35 @@ pub const GAME: &str = "olvin.game";
 
 pub(crate) fn register(registry: &mut Registry) {
     registry
-        .add_panel(PanelKind { id: VIEWPORT, title: "🎥 Scene", factory: || Box::<viewport::Viewport>::default() })
-        .add_panel(PanelKind { id: HIERARCHY, title: "☰ Hierarchy", factory: || Box::<hierarchy::Hierarchy>::default() })
-        .add_panel(PanelKind { id: INSPECTOR, title: "ℹ Inspector", factory: || Box::<inspector::Inspector>::default() })
-        .add_panel(PanelKind { id: ASSETS, title: "📁 Assets", factory: || Box::<assets::Assets>::default() })
-        .add_panel(PanelKind { id: GAME, title: "🎮 Game", factory: || Box::<game::GameView>::default() })
-        .add_workspace_template(WorkspaceTemplate { name: "Layout", build: scene_layout });
+        .add_panel(PanelKind {
+            id: VIEWPORT,
+            title: "🎥 Scene",
+            factory: || Box::<viewport::Viewport>::default(),
+        })
+        .add_panel(PanelKind {
+            id: HIERARCHY,
+            title: "☰ Hierarchy",
+            factory: || Box::<hierarchy::Hierarchy>::default(),
+        })
+        .add_panel(PanelKind {
+            id: INSPECTOR,
+            title: "ℹ Inspector",
+            factory: || Box::<inspector::Inspector>::default(),
+        })
+        .add_panel(PanelKind {
+            id: ASSETS,
+            title: "📁 Assets",
+            factory: || Box::<assets::Assets>::default(),
+        })
+        .add_panel(PanelKind {
+            id: GAME,
+            title: "🎮 Game",
+            factory: || Box::<game::GameView>::default(),
+        })
+        .add_workspace_template(WorkspaceTemplate {
+            name: "Layout",
+            build: scene_layout,
+        });
 }
 
 /// Unity-style: hierarchy left, scene center, inspector right, assets bottom.

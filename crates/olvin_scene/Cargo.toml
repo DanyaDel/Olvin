@@ -8,10 +8,11 @@ repository.workspace = true
 
 [features]
 # Scene files (.scene.ron) shared by the editor and games.
-serde = ["dep:serde", "dep:ron", "dep:olvin_csg"]
+serde = ["dep:serde", "dep:ron", "dep:olvin_csg", "dep:olvin_mesh"]
 
 [dependencies]
 glam.workspace = true
 serde = { workspace = true, optional = true }
 ron = { workspace = true, optional = true }
 olvin_csg = { workspace = true, optional = true, features = ["serde"] }
+olvin_mesh = { workspace = true, optional = true, features = ["serde"] }

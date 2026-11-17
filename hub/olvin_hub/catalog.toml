@@ -116,3 +116,12 @@ crate = "olvin_editor_csg"
 path = "editor/olvin_editor_csg"
 plugin = "olvin_editor_csg::CsgPlugin"
 default = true
+
+[[editor_module]]
+id = "modeling"
+name = "Моделирование (Edit Mode)"
+description = "Редактирование мешей как в Blender: вершины/рёбра/грани, extrude, inset, loop cut, нож, заполнение, слияние, сглаживание"
+crate = "olvin_editor_modeling"
+path = "editor/olvin_editor_modeling"
+plugin = "olvin_editor_modeling::ModelingPlugin"
+default = true

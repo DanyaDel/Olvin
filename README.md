@@ -27,12 +27,14 @@ olvin-hub run --release
 Редактор сцен ставится отдельно, его элементы (консоль, аниматор и т.д.) докачиваются по одному:
 
 ```sh
-olvin-hub editor install          # база: сцена, иерархия, инспектор, ассеты (+ консоль)
-olvin-hub editor add animator     # элемент «Аниматор» и рабочая область «Анимация»
+olvin-hub editor install          # база: сцена, иерархия, инспектор, ассеты (+ консоль, CSG)
+olvin-hub editor add animator     # элемент Animator и рабочая область Animation
 cd my_game && olvin-hub editor open
 ```
 
-Сцена сохраняется в `assets/scenes/main.scene.ron`, игра загружает её при запуске.
+Сцена сохраняется в `assets/scenes/main.scene.ron`, игра загружает её при запуске, вместе с геометрией CSG.
+
+Для разработки редактора: `cargo run -p editor_dev -- <папка проекта>` (все элементы сразу).
 
 Архитектура: [ARCHITECTURE.md](ARCHITECTURE.md).
 

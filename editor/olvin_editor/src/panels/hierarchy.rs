@@ -1,10 +1,70 @@
 use egui::{Id, Sense, TextEdit};
 
+use crate::ext::CreateItem;
 use crate::{EditorState, NewEntity, Panel, theme};
+
+/// What a create menu produced.
+#[derive(Clone, Copy)]
+pub(crate) enum Creation {
+    Builtin(NewEntity),
+    Element(usize),
+}
+
+impl Creation {
+    pub(crate) fn apply(self, state: &mut EditorState, parent: Option<u64>) -> u64 {
+        match self {
+            Creation::Builtin(kind) => state.create(kind, parent),
+            Creation::Element(i) => {
+                let create = state.ext.create[i].create;
+                create(state, parent)
+            }
+        }
+    }
+}
+
+/// Built-in objects, then element items grouped by their "Group/Item" path.
+pub(crate) fn create_menu(ui: &mut egui::Ui, items: &[CreateItem]) -> Option<Creation> {
+    let mut chosen = None;
+    for kind in NewEntity::ALL {
+        if ui.button(kind.label()).clicked() {
+            chosen = Some(Creation::Builtin(kind));
+        }
+    }
+    let mut groups: Vec<&str> = Vec::new();
+    for item in items {
+        if let Some((group, _)) = item.path.split_once('/')
+            && !groups.contains(&group)
+        {
+            groups.push(group);
+        }
+    }
+    if !items.is_empty() {
+        ui.separator();
+    }
+    for (i, item) in items.iter().enumerate() {
+        if !item.path.contains('/') && ui.button(item.path).clicked() {
+            chosen = Some(Creation::Element(i));
+        }
+    }
+    for group in groups {
+        ui.menu_button(group, |ui| {
+            for (i, item) in items.iter().enumerate() {
+                if let Some((g, name)) = item.path.split_once('/')
+                    && g == group
+                    && ui.button(name).clicked()
+                {
+                    chosen = Some(Creation::Element(i));
+                }
+            }
+        });
+    }
+    chosen
+}
 
 enum Action {
     Select(Option<u64>),
-    Create(NewEntity, Option<u64>),
+    Create(Creation, Option<u64>),
+    MoveSibling(u64, i32),
     Duplicate(u64),
     Delete(u64),
     Reparent(u64, Option<u64>),
@@ -22,8 +82,8 @@ impl Panel for Hierarchy {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let mut actions = Vec::new();
         ui.horizontal(|ui| {
-            ui.menu_button("+", |ui| create_menu(ui, None, &mut actions));
-            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Поиск").desired_width(f32::INFINITY));
+            ui.menu_button("+", |ui| create_actions(ui, state, None, &mut actions));
+            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Search").desired_width(f32::INFINITY));
         });
         ui.separator();
 
@@ -58,14 +118,17 @@ impl Panel for Hierarchy {
             if rest.clicked() {
                 actions.push(Action::Select(None));
             }
-            rest.context_menu(|ui| create_menu(ui, None, &mut actions));
+            rest.context_menu(|ui| create_actions(ui, state, None, &mut actions));
         });
 
         for action in actions {
             match action {
                 Action::Select(id) => state.selection = id,
-                Action::Create(kind, parent) => {
-                    state.create(kind, parent);
+                Action::Create(creation, parent) => {
+                    creation.apply(state, parent);
+                }
+                Action::MoveSibling(id, dir) => {
+                    state.move_sibling(id, dir);
                 }
                 Action::Duplicate(id) => {
                     state.duplicate(id);
@@ -148,18 +211,24 @@ impl Hierarchy {
             actions.push(Action::StartRename(id));
         }
         label.context_menu(|ui| {
-            ui.menu_button("Создать дочерний", |ui| create_menu(ui, Some(id), actions));
-            if ui.button("Переименовать").clicked() {
+            ui.menu_button("Create child", |ui| create_actions(ui, state, Some(id), actions));
+            if ui.button("Rename").clicked() {
                 actions.push(Action::StartRename(id));
             }
-            if ui.button("Дублировать  Ctrl+D").clicked() {
+            if ui.button("Duplicate  Ctrl+D").clicked() {
                 actions.push(Action::Duplicate(id));
             }
-            if entity.parent.is_some() && ui.button("Вынести в корень").clicked() {
+            if ui.button("Move Up").on_hover_text("Earlier in order (CSG brushes apply top to bottom)").clicked() {
+                actions.push(Action::MoveSibling(id, -1));
+            }
+            if ui.button("Move Down").clicked() {
+                actions.push(Action::MoveSibling(id, 1));
+            }
+            if entity.parent.is_some() && ui.button("Unparent").clicked() {
                 actions.push(Action::Reparent(id, None));
             }
             ui.separator();
-            if ui.button("Удалить  Del").clicked() {
+            if ui.button("Delete  Del").clicked() {
                 actions.push(Action::Delete(id));
             }
         });
@@ -176,10 +245,8 @@ impl Hierarchy {
     }
 }
 
-fn create_menu(ui: &mut egui::Ui, parent: Option<u64>, actions: &mut Vec<Action>) {
-    for kind in NewEntity::ALL {
-        if ui.button(kind.label()).clicked() {
-            actions.push(Action::Create(kind, parent));
-        }
+fn create_actions(ui: &mut egui::Ui, state: &EditorState, parent: Option<u64>, actions: &mut Vec<Action>) {
+    if let Some(creation) = create_menu(ui, &state.ext.create) {
+        actions.push(Action::Create(creation, parent));
     }
 }

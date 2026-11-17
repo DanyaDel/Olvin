@@ -16,16 +16,19 @@ Cargo.toml            workspace, общие версии зависимосте�
 crates/
   olvin_core/         App, Plugin, Resources, Schedule/Stage, Time, SurfaceTarget
   olvin_ecs/          фасад над hecs + EcsPlugin (ресурс World)
-  olvin_scene/        Transform, Camera — чистые данные на glam
+  olvin_scene/        Transform, Camera — чистые данные на glam; feature serde: формат сцен
+  olvin_csg/          CSG по выпуклым брашам: add/subtract/intersect в порядке иерархии
   olvin_window/       winit: окно, Input, главный цикл (runner)
   olvin_render/       wgpu: меши, instancing, frustum culling, уровни железа
   olvin/              фасад: реэкспорты, DefaultPlugins, prelude, features window/render
 apps/
   sandbox/            стресс-демо: N вращающихся кубов + свободная камера
-editor/               olvin-editor — ставится отдельно через хаб
-  olvin_editor/        ядро редактора: оболочка, рабочие области, докинг, базовые панели
-  olvin_editor_console/  элемент «Консоль»
-  olvin_editor_animator/ элемент «Аниматор»
+  editor_dev/         `olvin-editor-dev`: редактор со всеми элементами, для разработки
+editor/               olvin-editor — ставится отдельно через хаб, интерфейс на английском
+  olvin_editor/        ядро редактора: оболочка, рабочие области, докинг, GPU-вьюпорт, базовые панели
+  olvin_editor_console/  элемент Console
+  olvin_editor_animator/ элемент Animator
+  olvin_editor_csg/      элемент CSG: маппинг уровней в духе Realtime CSG
 hub/                  olvin-hub — отдельный инструмент, не часть движка
   olvin_hub/          ядро: каталог модулей, проекты игр, правка Cargo.toml, конфиг
   olvin_hub_cli/      бинарник `olvin-hub` (clap)
@@ -61,30 +64,39 @@ hub/                  olvin-hub — отдельный инструмент, н�
 - `frustum.rs`: 6 плоскостей из view-proj (Gribb–Hartmann, глубина 0..1), тест сферы.
 - `mesh.wgsl`: instanced-шейдер в пределах WebGL2: один uniform, 7 атрибутов (матрица модели — 4 vec4 + цвет), Ламберт + ambient.
 
+## olvin_csg
+
+Классический CSG редакторов уровней (Hammer, Realtime CSG) по выпуклым брашам.
+- `shapes.rs`: `BrushShape` (Box, Wedge, Cylinder{sides}, Pyramid{sides}, Stairs{steps}) в локальном единичном кубе `[-0.5, 0.5]³`, поэтому размер браша — это его scale. Каждая форма — это набор выпуклых кусков (у лестницы кусок на ступень).
+- `lib.rs`: `build(&[BrushInput]) -> Vec<Polygon>`. Каждая грань дробится плоскостями пересекающихся кусков (AABB-отсев), так что каждый фрагмент целиком внутри или снаружи каждого браша. Фрагмент остаётся, если твёрдость по разные стороны от него различается: точки берутся на ±2 мм по нормали, а операции `CsgOp::{Add, Subtract, Intersect}` применяются по порядку. Совпадающие сонаправленные грани оставляет только последний кусок. Метод устойчив к касающимся и совпадающим граням, где BSP-подходы ломаются. Зеркальные трансформы переориентируются. Есть `brush_edges` для контуров и `TriMesh::from_polygons`. 8 тестов: комната, туннель, порядок операций, пересечение, замкнутость всех форм.
+
 ## olvin_scene::file (feature `serde`)
 
-Формат сцен `*.scene.ron`, общий для редактора и игр. `SceneFile { entities, extensions }`, `EntityDesc` (стабильный `id`, `parent`, позиция, поворот в градусах по Эйлеру YXZ, масштаб, `mesh: Shape+цвет`, `camera`). Родители в списке всегда идут раньше детей. `world_matrices[_with]` разворачивает иерархию в мировые матрицы. `extensions` — данные элементов редактора (клипы аниматора).
+Формат сцен `*.scene.ron`, общий для редактора и игр. `SceneFile { entities, extensions }`, `EntityDesc` (стабильный `id`, `parent`, позиция, поворот в градусах по Эйлеру YXZ, масштаб, `mesh: Shape+цвет`, `camera`, `brush: BrushDesc { shape, op, color }`). Родители в списке всегда идут раньше детей. `world_matrices[_with]` разворачивает иерархию в мировые матрицы, `hierarchy_order()` даёт порядок DFS, как в панели иерархии, `csg_brushes()` — браши в порядке операций. `extensions` — данные элементов редактора (клипы аниматора).
 
 ## olvin (фасад)
 
-Features `window` и `render` включены по умолчанию. `scene` добавляет `scene_file::{load, spawn}`: загрузка сцены редактора в `World`. Иерархия при загрузке разворачивается в мировые трансформы, иерархии в рантайме пока нет. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
+Features `window` и `render` включены по умолчанию. `scene` добавляет `scene_file::{load, spawn}`: загрузка сцены редактора в `World`. Иерархия при загрузке разворачивается в мировые трансформы, иерархии в рантайме пока нет. CSG собирается при загрузке и раскладывается на статические меши, по одному на цвет граней. Без них получается чистое ядро + ECS (сервер, инструменты). `DefaultPlugins` добавляет всё включённое. Для игр есть `prelude`.
 
 ## editor (olvin-editor)
 
-Редактор сцен на egui 0.35 + egui_dock 0.20, стиль Blender + Unity. Ставится отдельно, отдельные элементы подключаются к нему как крейты-плагины. Хаб генерирует крейт установки, в его `main.rs` перечислены плагины. Плагины линкуются статически, без dylib: так быстрее и без проблем с ABI.
+Редактор сцен на egui 0.35 + egui_dock 0.20, стиль Blender + Unity, интерфейс на английском. Ставится отдельно, отдельные элементы подключаются к нему как крейты-плагины. Хаб генерирует крейт установки, в его `main.rs` перечислены плагины. Плагины линкуются статически, без dylib: так быстрее и без проблем с ABI.
 
-- `lib.rs`: `run(plugins)` — первый аргумент командной строки это папка проекта. Реэкспорт egui, egui_dock, glam, olvin_scene, чтобы плагины собирались строго на тех же версиях.
-- `registry.rs`: трейты `Panel` (`ui(ui, &mut EditorState)`, по экземпляру на вкладку) и `EditorPlugin` (`build(&mut Registry)`). `PanelKind { id, title, factory }`, `WorkspaceTemplate { name, build }`, `TabAlloc`.
-- `state.rs`: `EditorState` — сцена, путь, проект, выделение, `preview` (переопределение поз, не сохраняется), лог, `scene_generation`. Undo/redo снимками: изменения коммитятся, когда отпущены мышь и клавиатура, так что перетаскивание = один шаг. Операции: `create/delete/duplicate/reparent` (reparent сохраняет мировую позицию и запрещает циклы), `open/save/save_as/new_scene`, `request_open`.
+- `lib.rs`: `run(plugins)` — первый аргумент командной строки это папка проекта. Нативные опции: wgpu, depth 32, MSAA 4. Реэкспорт egui, egui_dock, glam, olvin_scene, чтобы плагины собирались строго на тех же версиях.
+- `registry.rs`: трейты `Panel` (`ui(ui, &mut EditorState)`, по экземпляру на вкладку) и `EditorPlugin` (`build(&mut Registry)`). `PanelKind`, `WorkspaceTemplate`, `TabAlloc`. Точки расширения: `add_viewport_extension`, `add_component`, `add_create_item`.
+- `ext.rs`: API для элементов. `Geometry` (мировые полигоны с флагами `GRID`/`SELECTED`, линии с глубиной и поверх всего, `raycast`), `ViewCamera` (project, ray, world_per_point, линия egui с клиппингом по near), `Ray` (плоскость, треугольник, ближайшая точка на прямой), `Snap`, `ToolDesc`, `ViewportCtx`, трейт `ViewportExtension` (`geometry`, `interact`, `tools`), `ComponentEditor`, `CreateItem` (путь вида «CSG/Box» даёт подменю).
+- `render.rs` + `viewport.wgsl`: GPU-вьюпорт рисует прямо в render pass egui через `egui_wgpu::CallbackTrait` (wgpu 29 от eframe), в общий буфер глубины. Конвейеры: меши (освещение, трипланарная сетка 1 м и ¼ м для `GRID`, подсветка выделения), бесконечная адаптивная сетка (полноэкранный треугольник, пересечение луча с плоскостью, `frag_depth`, затухание мелких линий по `fwidth`, оси X/Z), линии с глубиной и поверх всего. Буферы на вьюпорт растут до степени двойки.
+- `state.rs`: `EditorState` — сцена, путь, проект, выделение, `preview` (переопределение поз, не сохраняется), лог, `scene_generation`, активный инструмент (`tools::{VIEW, MOVE, ROTATE, SCALE}` или id элемента), `local_space`, `SnapSettings { enabled, step: Option (None = адаптивный), angle_deg }`, расширения. Undo/redo снимками: изменения коммитятся, когда отпущены мышь и клавиатура, так что перетаскивание = один шаг. Операции: `create/delete/duplicate/reparent/move_sibling`, `open/save/save_as/new_scene`, `request_open`.
 - `workspace.rs`: `Tab { kind, id }`, `Workspace { name, dock: DockState<Tab> }`, `Layout` (вкладки рабочих областей, сохраняется в `<config>/olvin-editor/layout.ron` при выходе). Дублирование выдаёт новые id вкладок, у копий независимое состояние панелей.
-- `app.rs`: меню (Файл/Правка/Объект/Окно), вкладки рабочих областей как в браузере (клик, двойной клик — переименовать, СКМ или × — закрыть, ПКМ — дублировать или сдвинуть, «+» — шаблон, пустая или копия), DockArea (перетаскивание, разделение, всплывающие окна, «+» в каждой группе вкладок), горячие клавиши (Ctrl+S/N/Z/Shift+Z/Y/D, Del/X), подтверждение при несохранённых изменениях, статус-бар, заголовок окна.
+- `app.rs`: меню (File/Edit/GameObject/Window, в GameObject и пункты элементов), вкладки рабочих областей как в браузере (клик, двойной клик — переименовать, СКМ или × — закрыть, ПКМ — дублировать или сдвинуть, «+» — шаблон, пустая или копия), DockArea (перетаскивание, разделение, всплывающие окна, «+» в каждой группе вкладок), горячие клавиши (Ctrl+S/N/Z/Shift+Z/Y/D, Del/X), подтверждение при несохранённых изменениях, статус-бар, заголовок окна.
 - `theme.rs`: серые тона Blender, синее выделение Unity, оранжевый для выбранного во вьюпорте, цвета осей.
-- `panels/viewport.rs`: программная отрисовка средствами egui: трансформ на CPU, клиппинг по near (Sutherland–Hodgman), сортировка по дальней вершине, плоскость бьётся на тайлы 8×8. Орбитальная камера (СКМ/ПКМ вращать, Shift — сдвиг, колесо, F, 1/3/7), сетка, каркас, контур выделения, иконки камер, стрелки перемещения (с учётом родителя), выбор кликом, индикатор осей. На GPU не переведён, потому что eframe 0.35 сидит на wgpu 29, а движок на 30.
-- `panels/hierarchy.rs`: дерево с drag&drop для смены родителя, поиск, контекстное меню, двойной клик — переименование.
-- `panels/inspector.rs`: имя, Transform (XYZ в цветах осей), Mesh Renderer, Камера, добавить или убрать компонент.
+- `panels/viewport.rs`: камера: СКМ — орбита, Shift+СКМ — сдвиг, ПКМ — обзор и WASD/QE-полёт (Shift ускоряет), Alt+ЛКМ — орбита, Hand(Q)+ЛКМ — сдвиг, колесо, F, 1/3/7. Инструменты: Q/W/E/R и инструменты элементов, X переключает Global/Local. Гизмо: Move (оси по ближайшей точке луча, плоскости, свободная ручка в плоскости экрана), Rotate (кольца по осям с передней полуокружностью, кольцо вида, угол из экранного угла вокруг центра), Scale (оси с кубиками, равномерный). Перетаскивание считается от снимка начала: привязка позиции к абсолютной сетке на мировых осях и к шагу на локальных, угол 1–90°, масштаб 0.1. Ctrl инвертирует Snap. Шаг Auto — степень двойки от высоты камеры, совпадает с сеткой. Порядок кадра: расширения → гизмо → выбор лучом → сборка геометрии → callback в заранее зарезервированный слот painter'а (3D под оверлеями). Панель инструментов и индикатор осей сверху.
+- `panels/hierarchy.rs`: дерево с drag&drop для смены родителя, поиск, контекстное меню (Create child с пунктами элементов, Rename, Duplicate, Move Up/Down — важно для порядка CSG, Unparent, Delete). `create_menu` общий с меню GameObject.
+- `panels/inspector.rs`: имя, Transform (XYZ в цветах осей), Mesh Renderer, Camera, секции `ComponentEditor` от элементов, Add Component.
 - `panels/assets.rs`: браузер `assets/` проекта: хлебные крошки, плитки, фильтр, создание папки или сцены, двойной клик открывает сцену.
 - `olvin_editor_console`: панель лога с фильтрами по уровню.
-- `olvin_editor_animator`: таймлайн. Клип `{ length, tracks: entity id → ключи }` хранится в `scene.extensions["animator"]`. Есть ключ по кнопке, перетаскивание ключей, ПКМ — удалить, скраб, play/loop, превью через `state.preview`. Добавляет шаблон рабочей области «Анимация».
+- `olvin_editor_csg` (элемент CSG): `CsgViewport` пересобирает CSG, только когда изменился набор брашей (сравнение `BrushInput`), рисует полигоны с сеткой и подсветкой выделения, контуры брашей по цвету операции (с глубиной и бледно поверх — вычитания видны в стенах). Инструмент Draw Brush (B): по лучу выбирается осевая плоскость поверхности, прямоугольник по сетке, затем высота по ближайшей точке луча к нормали; вниз — вычитание, Shift — вычитание всегда, Esc/ПКМ отменяют. Получается браш выбранной формы с размерами по рамке. Edit Brush (T): 6 ручек граней, грань двигается по своей оси и встаёт точно на линию сетки, противоположная остаётся на месте (scale и position пересчитываются в пространстве родителя). Панель CSG: настройки новых брашей (операция, форма, цвет), Hollow (вычитающий потомок со стенами заданной толщины), Rotate 90°, Flip X/Z, Earlier/Later, отображение, статистика сборки (браши → полигоны → треугольники, мс). Компонент CSG Brush в инспекторе, GameObject → CSG/{Box, Wedge, Cylinder, Pyramid, Stairs, Room}, рабочая область Level Design. Общие настройки лежат в thread_local `Shared`.
+- `olvin_editor_animator`: таймлайн. Клип `{ length, tracks: entity id → ключи }` хранится в `scene.extensions["animator"]`. Есть ключ по кнопке, перетаскивание ключей, ПКМ — удалить, скраб, play/loop, превью через `state.preview`. Добавляет шаблон рабочей области Animation.
 
 ## hub (olvin-hub, рабочее имя)
 
@@ -92,18 +104,18 @@ Features `window` и `render` включены по умолчанию. `scene` 
 
 - `olvin_hub/catalog.toml`: встроенный каталог. `kind = "olvin"` — фича фасада `olvin` (плагин подключит `DefaultPlugins`). `kind = "crate"` — зависимость с crates.io (rapier3d, kira, gltf, rand, serde, ron). Поле `requires` ставит модули вместе.
 - `catalog.rs`: `Catalog` (парсинг, проверка `requires`, `resolve` — сначала зависимости, ловит циклы, `categories`), `Module`, `Source`.
-- `project.rs`: `Project::create` (шаблон + модули с `default = true`), `open`, `discover` (ищет вверх по папкам), `add` (вместе с requires), `remove` (не даёт удалить то, от чего зависят другие, если нет `force`), `save`. Правки через `toml_edit`, комментарии и форматирование пользователя сохраняются. `olvin` подключается с `default-features = false`, список модулей Olvin = `features`.
+- `project.rs`: `Project::create` (модули с `default = true`) и `create_with(modules)` для шаблонов, `modified()`, `open`, `discover` (ищет вверх по папкам), `add` (вместе с requires), `remove` (не даёт удалить то, от чего зависят другие, если нет `force`), `save`. Правки через `toml_edit`, комментарии и форматирование пользователя сохраняются. `olvin` подключается с `default-features = false`, список модулей Olvin = `features`.
 - `config.rs`: `HubConfig` в `<config_dir>/olvin-hub/config.toml` (на Linux учитывает `XDG_CONFIG_HOME`): список проектов и `EngineSource` (`path` к checkout'у или `git`). По умолчанию это папка, из которой собран хаб, если её нет — GitHub.
-- `template.rs`: Cargo.toml (deps всегда -O3), `src/main.rs` (вращающийся куб, Esc выход), README, .gitignore.
+- `template.rs`: Cargo.toml (deps всегда -O3), `src/main.rs` — графический (грузит `assets/scenes/main.scene.ron`, иначе куб) или headless, если нет window+render+scenes; README, .gitignore.
 - `editor.rs`: `EditorInstall` в `<data_dir>/olvin-hub/editor` — сгенерированный крейт (`Cargo.toml` + `main.rs` с плагинами, бинарник `olvin-editor`). Источник правды — его `Cargo.toml`. Методы: `write`, `build_command` (`cargo build --release`), `launch(project)`. Элементы редактора описаны в каталоге как `[[editor_module]]`.
 - CLI: `new`, `list`, `add`, `remove [--force]`, `run [--release]`, `projects`, `register`, `forget`, `engine [--path|--git]`, `editor install|list|add|remove|open [проект]`.
-- GUI: слева проекты, создание и добавление существующего, раздел «Редактор» (элементы галочками, установить или пересобрать, открыть); справа каталог с галочками по категориям, «Открыть в редакторе», запуск или остановка `cargo run`, статус-бар.
+- GUI (как Unity Hub, на русском): боковая навигация «Проекты» / «Редактор». Проекты — таблица (иконка, имя, путь, «изменён N мин назад», чипы модулей, меню «⋯»: открыть в редакторе, запустить, release, модули, показать в папке, убрать). Клик по строке открывает проект в редакторе. Модальные окна: «Новый проект» (шаблоны 3D / 3D + физика / Пустой, имя, расположение), «Добавить», «Модули», «Элементы редактора». Страница «Редактор» — карточка установки (статус, элементы, Открыть / Элементы… / Пересобрать) и журнал сборки: stderr cargo читается в фоновом потоке.
 
 ## Зависимости
 
 wgpu 30, winit 0.30, hecs 0.11, glam 0.34 (проекции в `glam::camera`), bytemuck, pollster, log/env_logger.
 Хаб: toml_edit, toml, serde, clap, dirs, anyhow, eframe 0.35 (0.36+ требует rustc 1.95).
-Редактор: eframe/egui 0.35, egui_dock 0.20 (0.21 требует egui 0.36), ron, dirs.
+Редактор: eframe/egui 0.35 (wgpu 29 внутри, отдельно от wgpu 30 движка), egui_dock 0.20 (0.21 требует egui 0.36), bytemuck, ron, dirs.
 
 ## Проверено
 

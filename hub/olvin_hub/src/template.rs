@@ -22,9 +22,11 @@ lto = "thin"
     )
 }
 
-pub fn files(name: &str) -> [(&'static str, String); 3] {
+/// `graphical`: window + render + scenes; otherwise a headless app.
+pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
+    let main = if graphical { MAIN_RS } else { HEADLESS_RS };
     [
-        ("src/main.rs", MAIN_RS.replace("{name}", name)),
+        ("src/main.rs", main.replace("{name}", name)),
         (".gitignore", "/target\n".into()),
         (
             "README.md",
@@ -87,5 +89,22 @@ fn spin(res: &mut Resources) {
     for (transform, spin) in res.fetch_mut::<World>().query_mut::<(&mut Transform, &Spin)>() {
         transform.rotation *= Quat::from_rotation_y(spin.0 * dt);
     }
+}
+"#;
+
+const HEADLESS_RS: &str = r#"//! Headless Olvin app: core + ECS, no window. Add modules with olvin-hub.
+
+use olvin::prelude::*;
+
+fn main() {
+    env_logger::init();
+    let mut app = App::new();
+    app.add_plugin(olvin::ecs::EcsPlugin).add_system(Stage::Update, |res| {
+        if res.fetch::<Time>().frame() >= 3 {
+            println!("{name}: headless app is running");
+            res.fetch_mut::<AppExit>().requested = true;
+        }
+    });
+    app.run();
 }
 "#;

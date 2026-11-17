@@ -29,7 +29,7 @@ impl Panel for Assets {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let Some(root) = state.assets_dir() else {
             ui.centered_and_justified(|ui| {
-                ui.weak("Проект не открыт: запусти olvin-editor <папка проекта> или открой из хаба")
+                ui.weak("No project open: run olvin-editor <project folder> or open it from the hub")
             });
             return;
         };
@@ -46,7 +46,7 @@ impl Panel for Assets {
         let mut open = None;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             if self.entries.is_empty() {
-                ui.weak("Папка пуста. ПКМ или «+» — создать папку или сцену");
+                ui.weak("Empty folder. Right-click or \"+\" to create a folder or a scene");
             }
             ui.horizontal_wrapped(|ui| {
                 for entry in self.entries.iter().filter(|e| filter.is_empty() || e.name.to_lowercase().contains(&filter)) {
@@ -59,10 +59,10 @@ impl Panel for Assets {
                         open = Some((entry.path.clone(), entry.is_dir));
                     }
                     response.context_menu(|ui| {
-                        if is_scene(&entry.path) && ui.button("Открыть сцену").clicked() {
+                        if is_scene(&entry.path) && ui.button("Open scene").clicked() {
                             state.request_open(entry.path.clone());
                         }
-                        if ui.button("Показать в файловом менеджере").clicked() {
+                        if ui.button("Show in file manager").clicked() {
                             reveal(entry.path.parent().unwrap_or(&entry.path));
                         }
                     });
@@ -108,7 +108,7 @@ impl Assets {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, state: &mut EditorState, dir: &Path) {
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.current.as_os_str().is_empty(), egui::Button::new("⬆")).on_hover_text("Наверх").clicked() {
+            if ui.add_enabled(!self.current.as_os_str().is_empty(), egui::Button::new("⬆")).on_hover_text("Up").clicked() {
                 self.current.pop();
             }
             // Breadcrumbs: assets / a / b
@@ -125,17 +125,17 @@ impl Assets {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button("+", |ui| create_menu(ui, &mut self.creating));
-                if ui.button("⟳").on_hover_text("Обновить").clicked() {
+                if ui.button("⟳").on_hover_text("Refresh").clicked() {
                     self.scanned = None;
                 }
-                ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Фильтр").desired_width(140.0));
+                ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Filter").desired_width(140.0));
             });
         });
 
         if let Some((is_folder, mut name)) = self.creating.take() {
             let mut keep = true;
             ui.horizontal(|ui| {
-                ui.label(if is_folder { "Новая папка:" } else { "Новая сцена:" });
+                ui.label(if is_folder { "New folder:" } else { "New scene:" });
                 let edit = ui.add(TextEdit::singleline(&mut name).desired_width(180.0));
                 edit.request_focus();
                 let submit = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -144,13 +144,13 @@ impl Assets {
                     let name = name.trim().to_owned();
                     if is_folder {
                         if let Err(e) = std::fs::create_dir_all(dir.join(&name)) {
-                            state.error(format!("не удалось создать папку: {e}"));
+                            state.error(format!("could not create folder: {e}"));
                         }
                     } else {
                         let file = if name.ends_with(".scene.ron") { name } else { format!("{name}.scene.ron") };
                         let path = dir.join(file);
                         if path.exists() {
-                            state.error(format!("{} уже существует", path.display()));
+                            state.error(format!("{} already exists", path.display()));
                         } else if olvin_scene::file::SceneFile::default().save(&path).is_ok() {
                             state.request_open(path);
                         }
@@ -170,10 +170,10 @@ impl Assets {
 }
 
 fn create_menu(ui: &mut egui::Ui, creating: &mut Option<(bool, String)>) {
-    if ui.button("📁 Папка").clicked() {
+    if ui.button("📁 Folder").clicked() {
         *creating = Some((true, String::new()));
     }
-    if ui.button("🎬 Сцена").clicked() {
+    if ui.button("🎬 Scene").clicked() {
         *creating = Some((false, String::new()));
     }
 }

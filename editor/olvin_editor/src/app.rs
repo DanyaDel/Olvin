@@ -5,7 +5,8 @@ use egui::{Id, Key, KeyboardShortcut, Modifiers, RichText, TextEdit, ViewportCom
 use egui_dock::{DockArea, DockState, NodePath, TabViewer};
 
 use crate::workspace::Layout;
-use crate::{EditorState, LogLevel, NewEntity, Panel, Registry, Tab, theme};
+use crate::panels::hierarchy::create_menu;
+use crate::{EditorState, LogLevel, Panel, Registry, Tab, theme};
 
 /// Waiting for "save changes?" before doing something destructive.
 enum Confirm {
@@ -39,8 +40,9 @@ impl EditorApp {
     pub fn new(registry: Registry, project: Option<PathBuf>) -> Self {
         let layout = Layout::load(&registry);
         let mut state = EditorState::new(project);
+        state.ext = registry.instantiate_extensions();
         if !registry.plugins().is_empty() {
-            state.info(format!("установленные элементы: {}", registry.plugins().join(", ")));
+            state.info(format!("installed elements: {}", registry.plugins().join(", ")));
         }
         Self {
             registry,
@@ -124,47 +126,45 @@ impl EditorApp {
     }
 
     fn menus(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Файл", |ui| {
-            if ui.button("Новая сцена        Ctrl+N").clicked() {
+        ui.menu_button("File", |ui| {
+            if ui.button("New Scene        Ctrl+N").clicked() {
                 self.request(Confirm::NewScene);
             }
-            if ui.button("Сохранить           Ctrl+S").clicked() {
+            if ui.button("Save                    Ctrl+S").clicked() {
                 self.save();
             }
-            if ui.button("Сохранить как…").clicked() {
+            if ui.button("Save As…").clicked() {
                 self.save_as = Some(String::from("scenes/new.scene.ron"));
             }
-            ui.weak("Открыть: двойной клик по сцене в «Ассетах»");
+            ui.weak("Open: double-click a scene in Assets");
             ui.separator();
-            if ui.button("Выход").clicked() {
+            if ui.button("Quit").clicked() {
                 ui.ctx().send_viewport_cmd(ViewportCommand::Close);
             }
         });
-        ui.menu_button("Правка", |ui| {
-            if ui.add_enabled(self.state.can_undo(), egui::Button::new("Отменить        Ctrl+Z")).clicked() {
+        ui.menu_button("Edit", |ui| {
+            if ui.add_enabled(self.state.can_undo(), egui::Button::new("Undo            Ctrl+Z")).clicked() {
                 self.state.undo();
             }
-            if ui.add_enabled(self.state.can_redo(), egui::Button::new("Повторить      Ctrl+Shift+Z")).clicked() {
+            if ui.add_enabled(self.state.can_redo(), egui::Button::new("Redo            Ctrl+Shift+Z")).clicked() {
                 self.state.redo();
             }
             ui.separator();
             let sel = self.state.selection;
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Дублировать    Ctrl+D")).clicked() {
+            if ui.add_enabled(sel.is_some(), egui::Button::new("Duplicate     Ctrl+D")).clicked() {
                 self.state.duplicate(sel.unwrap());
             }
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Удалить            Del")).clicked() {
+            if ui.add_enabled(sel.is_some(), egui::Button::new("Delete           Del")).clicked() {
                 self.state.delete(sel.unwrap());
             }
         });
-        ui.menu_button("Объект", |ui| {
-            for kind in NewEntity::ALL {
-                if ui.button(kind.label()).clicked() {
-                    self.state.create(kind, None);
-                }
+        ui.menu_button("GameObject", |ui| {
+            if let Some(creation) = create_menu(ui, &self.state.ext.create) {
+                creation.apply(&mut self.state, None);
             }
         });
-        ui.menu_button("Окно", |ui| {
-            ui.menu_button("Добавить панель", |ui| {
+        ui.menu_button("Window", |ui| {
+            ui.menu_button("Add Panel", |ui| {
                 for kind in self.registry.panels() {
                     if ui.button(kind.title).clicked() {
                         let mut alloc = self.layout.alloc();
@@ -179,17 +179,17 @@ impl EditorApp {
                     }
                 }
             });
-            ui.menu_button("Новая рабочая область", |ui| self.new_workspace_menu(ui));
-            if ui.button("Сбросить раскладку").clicked() {
+            ui.menu_button("New Workspace", |ui| self.new_workspace_menu(ui));
+            if ui.button("Reset Layout").clicked() {
                 self.layout = Layout::default_for(&self.registry);
                 self.panels.clear();
             }
             ui.separator();
             let plugins = self.registry.plugins();
             ui.weak(if plugins.is_empty() {
-                "Доп. элементов нет. Ставь через хаб: olvin-hub editor add …".to_owned()
+                "No extra elements. Install them from the hub".to_owned()
             } else {
-                format!("Элементы: {}", plugins.join(", "))
+                format!("Elements: {}", plugins.join(", "))
             });
         });
     }
@@ -201,11 +201,11 @@ impl EditorApp {
                 add = Some(Some(i));
             }
         }
-        if ui.button("Пустая").clicked() {
+        if ui.button("Empty").clicked() {
             add = Some(None);
         }
         ui.separator();
-        if ui.button("Копия текущей").clicked() {
+        if ui.button("Duplicate Current").clicked() {
             self.layout.duplicate(self.layout.active);
         }
         if let Some(template) = add {
@@ -234,7 +234,7 @@ impl EditorApp {
             let active = self.layout.active == i;
             let name = &self.layout.workspaces[i].name;
             let text = if active { RichText::new(name).strong() } else { RichText::new(name) };
-            let tab = ui.selectable_label(active, text).on_hover_text("Двойной клик — переименовать, СКМ — закрыть");
+            let tab = ui.selectable_label(active, text).on_hover_text("Double-click to rename, middle-click to close");
             if tab.clicked() {
                 action = Some(WsAction::Activate(i));
             }
@@ -245,28 +245,28 @@ impl EditorApp {
                 action = Some(WsAction::Close(i));
             }
             tab.context_menu(|ui| {
-                if ui.button("Переименовать").clicked() {
+                if ui.button("Rename").clicked() {
                     action = Some(WsAction::StartRename(i));
                 }
-                if ui.button("Дублировать").clicked() {
+                if ui.button("Duplicate").clicked() {
                     action = Some(WsAction::Duplicate(i));
                 }
-                if i > 0 && ui.button("◀ Сдвинуть влево").clicked() {
+                if i > 0 && ui.button("◀ Move Left").clicked() {
                     action = Some(WsAction::Move(i, i - 1));
                 }
-                if i + 1 < count && ui.button("Сдвинуть вправо ▶").clicked() {
+                if i + 1 < count && ui.button("Move Right ▶").clicked() {
                     action = Some(WsAction::Move(i, i + 1));
                 }
                 ui.separator();
-                if ui.add_enabled(count > 1, egui::Button::new("Закрыть")).clicked() {
+                if ui.add_enabled(count > 1, egui::Button::new("Close")).clicked() {
                     action = Some(WsAction::Close(i));
                 }
             });
-            if active && count > 1 && ui.small_button("×").on_hover_text("Закрыть рабочую область").clicked() {
+            if active && count > 1 && ui.small_button("×").on_hover_text("Close workspace").clicked() {
                 action = Some(WsAction::Close(i));
             }
         }
-        ui.menu_button("+", |ui| self.new_workspace_menu(ui)).response.on_hover_text("Новая рабочая область");
+        ui.menu_button("+", |ui| self.new_workspace_menu(ui)).response.on_hover_text("New Workspace");
         if let Some(action) = action {
             self.apply_ws(action);
         }
@@ -284,8 +284,8 @@ impl EditorApp {
                 self.layout.add_workspace(template.name.to_owned(), template.build);
             }
             WsAction::Add(None) => {
-                self.layout.add_workspace("Новая".to_owned(), |_| DockState::new(Vec::new()));
-                self.renaming = Some((self.layout.active, "Новая".to_owned()));
+                self.layout.add_workspace("New".to_owned(), |_| DockState::new(Vec::new()));
+                self.renaming = Some((self.layout.active, "New".to_owned()));
             }
         }
     }
@@ -298,16 +298,16 @@ impl EditorApp {
                 .as_ref()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "без имени".into());
+                .unwrap_or_else(|| "untitled".into());
             ui.label(name);
             if self.state.is_dirty() {
-                ui.colored_label(theme::SELECTED, "•").on_hover_text("Есть несохранённые изменения");
+                ui.colored_label(theme::SELECTED, "•").on_hover_text("Unsaved changes");
             }
             ui.separator();
-            ui.weak(format!("объектов: {}", self.state.scene.entities.len()));
+            ui.weak(format!("{} objects", self.state.scene.entities.len()));
             if let Some(e) = self.state.selection.and_then(|id| self.state.scene.get(id)) {
                 ui.separator();
-                ui.label(format!("выбран: {}", e.name));
+                ui.label(format!("selected: {}", e.name));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(line) = self.state.log.last() {
@@ -327,15 +327,15 @@ impl EditorApp {
             let mut close = false;
             let mut target = None;
             egui::Modal::new(Id::new("save-as")).show(ctx, |ui| {
-                ui.heading("Сохранить сцену как");
-                ui.label("Путь внутри assets/ (или абсолютный):");
+                ui.heading("Save Scene As");
+                ui.label("Path inside assets/ (or absolute):");
                 let edit = ui.add(TextEdit::singleline(path).desired_width(360.0));
                 let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {
-                    if ui.button("Сохранить").clicked() || enter {
+                    if ui.button("Save").clicked() || enter {
                         target = Some(path.clone());
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button("Cancel").clicked() {
                         close = true;
                     }
                 });
@@ -359,23 +359,23 @@ impl EditorApp {
 
         if let Some(confirm) = &self.confirm {
             let what = match confirm {
-                Confirm::Open(_) => "открыть другую сцену",
-                Confirm::NewScene => "создать новую сцену",
-                Confirm::Quit => "выйти",
+                Confirm::Open(_) => "opening another scene",
+                Confirm::NewScene => "creating a new scene",
+                Confirm::Quit => "quitting",
             };
             let mut choice = None;
             egui::Modal::new(Id::new("confirm")).show(ctx, |ui| {
-                ui.heading("Несохранённые изменения");
-                ui.label(format!("Сохранить сцену, прежде чем {what}?"));
+                ui.heading("Unsaved Changes");
+                ui.label(format!("Save the scene before {what}?"));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Сохранить").clicked() {
+                    if ui.button("Save").clicked() {
                         choice = Some(1);
                     }
-                    if ui.button("Не сохранять").clicked() {
+                    if ui.button("Don't Save").clicked() {
                         choice = Some(2);
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button("Cancel").clicked() {
                         choice = Some(0);
                     }
                 });
@@ -405,7 +405,7 @@ impl EditorApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "без имени".into());
+            .unwrap_or_else(|| "untitled".into());
         let project = self
             .state
             .project
@@ -445,7 +445,7 @@ impl TabViewer for Viewer<'_> {
             None => {
                 ui.centered_and_justified(|ui| {
                     ui.label(format!(
-                        "Элемент «{}» не установлен.\nПоставь его через хаб: olvin-hub editor add …",
+                        "Element \"{}\" is not installed.\nAdd it in the hub (Editor → Elements).",
                         tab.kind
                     ))
                 });
@@ -507,7 +507,7 @@ impl eframe::App for EditorApp {
             let dock = &mut self.layout.workspaces[active].dock;
             if dock.iter_all_tabs().next().is_none() {
                 ui.centered_and_justified(|ui| {
-                    ui.weak("Пустая рабочая область. Окно → Добавить панель")
+                    ui.weak("Empty workspace. Window → Add Panel")
                 });
             }
             DockArea::new(dock)
@@ -541,7 +541,7 @@ impl eframe::App for EditorApp {
 
     fn on_exit(&mut self) {
         if let Err(err) = self.layout.save() {
-            eprintln!("olvin-editor: раскладка не сохранена: {err}");
+            eprintln!("olvin-editor: layout not saved: {err}");
         }
     }
 }

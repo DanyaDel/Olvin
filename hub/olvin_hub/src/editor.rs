@@ -153,7 +153,7 @@ mod tests {
         let catalog = Catalog::builtin();
         let engine = EngineSource::default();
 
-        assert_eq!(install.initial_selection(&catalog), ["console"]);
+        assert_eq!(install.initial_selection(&catalog), ["console", "csg"]);
         install.write(&engine, &catalog, &["animator".into(), "console".into()]).unwrap();
         assert_eq!(install.installed(&catalog), ["console", "animator"]);
         let main = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();

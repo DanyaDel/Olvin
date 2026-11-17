@@ -1,30 +1,38 @@
-//! Scene view drawn with egui shapes: CPU transform, near-plane clipping,
-//! painter's-algorithm sorting, one mesh per frame. Independent of the GPU
-//! renderer, so the editor runs anywhere egui does.
+//! Scene view. Rendered on the GPU inside egui's render pass (depth buffer,
+//! MSAA), with an infinite adaptive grid, raycast picking and Unity-style
+//! transform tools. Elements extend it through `ViewportExtension`.
 
 use std::f32::consts::FRAC_PI_2;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use egui::{Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Align2, Color32, FontId, Pos2, PointerButton, Sense, Stroke, Vec2, vec2};
 use glam::camera::rh::{proj::directx, view};
-use glam::{Mat4, Vec3, Vec4Swizzles};
+use glam::{EulerRot, Mat4, Quat, Vec3};
 use olvin_scene::file::Shape;
 
+use crate::ext::{Geometry, Snap, ViewCamera, ViewportCtx, flags, linear_color};
+use crate::render::{Frame, Uniforms};
+use crate::state::tools;
 use crate::{EditorState, Panel, theme};
 
 const NEAR: f32 = 0.05;
-const FAR: f32 = 5000.0;
-const FOV_DEG: f32 = 50.0;
-const LIGHT: Vec3 = Vec3::new(-0.4, -1.0, -0.3);
-const AXIS_VECS: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
+const FAR: f32 = 4000.0;
+const FOV_DEG: f32 = 55.0;
+const LIGHT: Vec3 = Vec3::new(-0.45, -1.0, -0.3);
+const GIZMO_POINTS: f32 = 95.0;
+const HOT: Color32 = Color32::from_rgb(255, 225, 70);
+const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
+const STEPS: [f32; 11] = [1.0 / 16.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
 
-struct Geometry {
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+struct ShapeGeometry {
     tris: Vec<[Vec3; 3]>,
     edges: Vec<[Vec3; 2]>,
-    double_sided: bool,
 }
 
-static CUBE: LazyLock<Geometry> = LazyLock::new(|| {
+static CUBE: LazyLock<ShapeGeometry> = LazyLock::new(|| {
     let corner = |i: usize| {
         Vec3::new(
             if i & 1 != 0 { 0.5 } else { -0.5 },
@@ -51,32 +59,23 @@ static CUBE: LazyLock<Geometry> = LazyLock::new(|| {
             }
         }
     }
-    Geometry { tris, edges, double_sided: false }
+    ShapeGeometry { tris, edges }
 });
 
-/// Split into tiles: big floors sort poorly against small objects as a single quad.
-const PLANE_TILES: usize = 8;
-
-static PLANE: LazyLock<Geometry> = LazyLock::new(|| {
-    let at = |i: usize, j: usize| {
-        let step = 1.0 / PLANE_TILES as f32;
-        Vec3::new(-0.5 + i as f32 * step, 0.0, -0.5 + j as f32 * step)
-    };
-    let mut tris = Vec::new();
-    for i in 0..PLANE_TILES {
-        for j in 0..PLANE_TILES {
-            let (a, b, c, d) = (at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j));
-            tris.push([a, b, c]);
-            tris.push([a, c, d]);
-        }
+static PLANE: LazyLock<ShapeGeometry> = LazyLock::new(|| {
+    let c = [
+        Vec3::new(-0.5, 0.0, -0.5),
+        Vec3::new(-0.5, 0.0, 0.5),
+        Vec3::new(0.5, 0.0, 0.5),
+        Vec3::new(0.5, 0.0, -0.5),
+    ];
+    ShapeGeometry {
+        tris: vec![[c[0], c[1], c[2]], [c[0], c[2], c[3]]],
+        edges: vec![[c[0], c[1]], [c[1], c[2]], [c[2], c[3]], [c[3], c[0]]],
     }
-    let n = PLANE_TILES;
-    let corners = [at(0, 0), at(0, n), at(n, n), at(n, 0)];
-    let edges = (0..4).map(|i| [corners[i], corners[(i + 1) % 4]]).collect();
-    Geometry { tris, edges, double_sided: true }
 });
 
-fn geometry(shape: Shape) -> &'static Geometry {
+fn shape_geometry(shape: Shape) -> &'static ShapeGeometry {
     match shape {
         Shape::Cube => &CUBE,
         Shape::Plane => &PLANE,
@@ -91,81 +90,61 @@ struct Orbit {
 }
 
 impl Orbit {
+    fn back(&self) -> Vec3 {
+        Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos())
+    }
+
     fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(
-            self.pitch.cos() * self.yaw.sin(),
-            self.pitch.sin(),
-            self.pitch.cos() * self.yaw.cos(),
-        );
-        self.target + dir * self.distance
-    }
-
-    fn view(&self) -> Mat4 {
-        view::look_at_mat4(self.eye(), self.target, Vec3::Y)
+        self.target + self.back() * self.distance
     }
 }
 
-struct Projector {
-    view: Mat4,
-    proj: Mat4,
-    rect: Rect,
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Handle {
+    Axis(usize),
+    Plane(usize),
+    Free,
+    Rotate(usize),
+    RotateView,
+    Scale(usize),
+    ScaleAll,
 }
 
-impl Projector {
-    fn to_view(&self, world: Vec3) -> Vec3 {
-        self.view.transform_point3(world)
-    }
-
-    fn view_to_screen(&self, v: Vec3) -> Pos2 {
-        let clip = self.proj * v.extend(1.0);
-        let ndc = clip.xyz() / clip.w;
-        pos2(
-            self.rect.left() + (ndc.x * 0.5 + 0.5) * self.rect.width(),
-            self.rect.top() + (0.5 - ndc.y * 0.5) * self.rect.height(),
-        )
-    }
-
-    fn project(&self, world: Vec3) -> Option<Pos2> {
-        let v = self.to_view(world);
-        (v.z < -NEAR).then(|| self.view_to_screen(v))
-    }
-
-    /// Draws a world-space segment, clipped against the near plane.
-    fn line(&self, painter: &egui::Painter, a: Vec3, b: Vec3, stroke: impl Into<Stroke>) {
-        if let Some((a, b)) = clip_segment(self.to_view(a), self.to_view(b)) {
-            painter.line_segment([self.view_to_screen(a), self.view_to_screen(b)], stroke);
-        }
-    }
-}
-
-struct Tri {
-    pts: [Pos2; 3],
-    /// Flat double-sided shapes (floors, walls) draw first, below volumes.
-    layer: u8,
-    depth: f32,
-    color: Color32,
+struct Drag {
+    handle: Handle,
     entity: u64,
+    scale: Vec3,
+    world_rotation: Quat,
+    parent: Mat4,
+    origin: Vec3,
+    axes: [Vec3; 3],
+    param: f32,
+    hit: Vec3,
+    mouse: Pos2,
+    origin_screen: Pos2,
+    axis_screen: Vec2,
+    angle: f32,
 }
 
 pub struct Viewport {
+    id: u64,
     orbit: Orbit,
     show_grid: bool,
     wireframe: bool,
-    drag_axis: Option<usize>,
-    // Per-frame scratch, kept to avoid reallocating.
-    tris: Vec<Tri>,
-    poly: Vec<Vec3>,
+    drag: Option<Drag>,
+    /// Last frame's geometry: raycasts and the GPU upload.
+    geometry: Geometry,
 }
 
 impl Default for Viewport {
     fn default() -> Self {
         Self {
-            orbit: Orbit { target: Vec3::ZERO, yaw: 0.6, pitch: 0.45, distance: 12.0 },
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            orbit: Orbit { target: Vec3::ZERO, yaw: 0.6, pitch: 0.45, distance: 14.0 },
             show_grid: true,
             wireframe: false,
-            drag_axis: None,
-            tris: Vec::new(),
-            poly: Vec::new(),
+            drag: None,
+            geometry: Geometry::default(),
         }
     }
 }
@@ -173,71 +152,148 @@ impl Default for Viewport {
 impl Panel for Viewport {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        if rect.width() < 4.0 || rect.height() < 4.0 {
+        if rect.width() < 8.0 || rect.height() < 8.0 {
             return;
         }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::VIEWPORT_BG);
+        // The 3D image goes here, under everything drawn later this frame.
+        let scene_slot = painter.add(egui::Shape::Noop);
 
         let worlds = state.world_matrices();
+        self.hotkeys(ui, &response, state);
         self.navigate(ui, &response, state, &worlds);
-
-        let aspect = rect.width() / rect.height();
-        let p = Projector {
-            view: self.orbit.view(),
-            proj: directx::perspective(FOV_DEG.to_radians(), aspect, NEAR, FAR),
-            rect,
+        let camera = self.camera(rect);
+        let grid_step = self.grid_step();
+        let ctrl = ui.input(|i| i.modifiers.command);
+        let snap = Snap {
+            enabled: state.snap.enabled != ctrl,
+            step: state.snap.step.unwrap_or(grid_step),
+            angle_deg: state.snap.angle_deg,
         };
 
-        if self.show_grid {
-            self.draw_grid(&painter, &p);
+        // Element tools see the pointer first, then the gizmo, then selection.
+        let mut extensions = std::mem::take(&mut state.ext.viewport);
+        let tool = state.tool.clone();
+        let mut consumed = false;
+        for ext in &mut extensions {
+            let mut ctx = ViewportCtx {
+                ui,
+                response: &response,
+                painter: &painter,
+                camera: &camera,
+                snap,
+                state,
+                tool: &tool,
+                geometry: &self.geometry,
+            };
+            consumed |= ext.interact(&mut ctx);
         }
-        self.build_tris(state, &worlds, &p);
-        if self.wireframe {
-            for e in &state.scene.entities {
-                if let (Some(mesh), Some(m)) = (&e.mesh, worlds.get(&e.id)) {
-                    for [a, b] in &geometry(mesh.shape).edges {
-                        p.line(&painter, m.transform_point3(*a), m.transform_point3(*b), (1.0, Color32::from_gray(190)));
-                    }
-                }
-            }
+        let transform_tool = [tools::MOVE, tools::ROTATE, tools::SCALE].contains(&tool.as_str());
+        let mut gizmo_hot = false;
+        if !consumed && transform_tool {
+            gizmo_hot = self.gizmo(ui, &response, &painter, &camera, snap, state, &worlds);
         } else {
-            let mut mesh = egui::Mesh::default();
-            for t in &self.tris {
-                let i = mesh.vertices.len() as u32;
-                for pt in t.pts {
-                    mesh.colored_vertex(pt, t.color);
-                }
-                mesh.add_triangle(i, i + 1, i + 2);
-            }
-            painter.add(egui::Shape::mesh(mesh));
+            self.drag = None;
         }
-
-        // Selection outline.
-        if let Some(sel) = state.selection
-            && let Some(e) = state.scene.get(sel)
-            && let (Some(mesh), Some(m)) = (&e.mesh, worlds.get(&sel))
-        {
-            for [a, b] in &geometry(mesh.shape).edges {
-                p.line(&painter, m.transform_point3(*a), m.transform_point3(*b), (2.0, theme::SELECTED));
-            }
-        }
-
-        let camera_icons = self.draw_cameras(&painter, &p, state, &worlds);
-        let hovered_axis = self.gizmo(&painter, &p, &response, state, &worlds);
-
-        if response.clicked_by(egui::PointerButton::Primary)
-            && hovered_axis.is_none()
+        if !consumed
+            && !gizmo_hot
+            && response.clicked_by(PointerButton::Primary)
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            state.selection = self.pick(pointer, &camera_icons);
+            state.selection = self.pick(pointer, &camera, state, &worlds);
         }
 
-        self.overlay(ui, rect, &p, state);
+        // Geometry for this frame, after edits.
+        let worlds = state.world_matrices();
+        self.geometry.clear();
+        self.geometry.wireframe = self.wireframe;
+        self.scene_geometry(state, &worlds);
+        for ext in &mut extensions {
+            ext.geometry(state, &mut self.geometry);
+        }
+        state.ext.viewport = extensions;
+        self.selection_outline(&painter, &camera, state, &worlds);
+
+        let inv = camera.view_proj.inverse();
+        let frame = Frame {
+            viewport: self.id,
+            uniforms: Uniforms {
+                view_proj: camera.view_proj.to_cols_array_2d(),
+                inv_view_proj: inv.to_cols_array_2d(),
+                eye: camera.eye.extend(1.0).to_array(),
+                light: LIGHT.normalize().extend(0.0).to_array(),
+                grid: [snap.step, 8.0, self.fade_distance(), 0.0],
+            },
+            vertices: self.geometry.vertices.clone(),
+            lines: self.geometry.lines.clone(),
+            overlay: self.geometry.overlay_lines.clone(),
+            grid: self.show_grid,
+        };
+        painter.set(scene_slot, eframe::egui_wgpu::Callback::new_paint_callback(rect, frame));
+
+        self.overlay(ui, rect, &camera, state, grid_step);
     }
 }
 
 impl Viewport {
+    fn eye_height(&self) -> f32 {
+        self.orbit.eye().y.abs().max(self.orbit.distance * 0.3).max(0.05)
+    }
+
+    /// Power-of-two grid step that keeps roughly the same on-screen density.
+    fn grid_step(&self) -> f32 {
+        let raw = self.eye_height() / 14.0;
+        2f32.powf(raw.log2().round()).clamp(STEPS[0], 64.0)
+    }
+
+    fn fade_distance(&self) -> f32 {
+        (self.eye_height() * 60.0).clamp(30.0, FAR * 0.8)
+    }
+
+    fn camera(&self, rect: egui::Rect) -> ViewCamera {
+        let eye = self.orbit.eye();
+        let view = view::look_at_mat4(eye, self.orbit.target, Vec3::Y);
+        let proj = directx::perspective(FOV_DEG.to_radians(), rect.width() / rect.height(), NEAR, FAR);
+        ViewCamera { view, proj, view_proj: proj * view, eye, forward: -self.orbit.back(), rect, near: NEAR }
+    }
+
+    fn hotkeys(&mut self, ui: &egui::Ui, response: &egui::Response, state: &mut EditorState) {
+        let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary));
+        if !response.hovered() || flying || ui.ctx().egui_wants_keyboard_input() || self.drag.is_some() {
+            return;
+        }
+        let pressed = |k| ui.input(|i| i.key_pressed(k) && i.modifiers.is_none());
+        for (key, tool) in [
+            (egui::Key::Q, tools::VIEW),
+            (egui::Key::W, tools::MOVE),
+            (egui::Key::E, tools::ROTATE),
+            (egui::Key::R, tools::SCALE),
+        ] {
+            if pressed(key) {
+                state.tool = tool.to_owned();
+            }
+        }
+        for ext in &state.ext.viewport {
+            for t in ext.tools() {
+                if t.key.is_some_and(pressed) {
+                    state.tool = t.id.to_owned();
+                }
+            }
+        }
+        if pressed(egui::Key::X) {
+            state.local_space = !state.local_space;
+        }
+        if pressed(egui::Key::F) {
+            state.frame_selection = true;
+        }
+        for (key, yaw, pitch) in [(egui::Key::Num1, 0.0, 0.0), (egui::Key::Num3, FRAC_PI_2, 0.0), (egui::Key::Num7, 0.0, 1.55)] {
+            if pressed(key) {
+                (self.orbit.yaw, self.orbit.pitch) = (yaw, pitch);
+            }
+        }
+    }
+
     fn navigate(
         &mut self,
         ui: &egui::Ui,
@@ -246,42 +302,47 @@ impl Viewport {
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) {
         let delta = response.drag_delta();
-        let middle = response.dragged_by(egui::PointerButton::Middle);
-        let right = response.dragged_by(egui::PointerButton::Secondary);
-        let shift = ui.input(|i| i.modifiers.shift);
-        if (middle || right) && shift {
-            // Pan in the view plane, scaled so the point under the cursor follows it.
-            let view = self.orbit.view();
-            let right_v = view.row(0).xyz();
-            let up_v = view.row(1).xyz();
+        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+        let middle = response.dragged_by(PointerButton::Middle);
+        let right = response.dragged_by(PointerButton::Secondary);
+        let left = response.dragged_by(PointerButton::Primary);
+        let hand = left && state.tool == tools::VIEW && !alt;
+
+        if (middle && shift) || hand {
+            let view = view::look_at_mat4(self.orbit.eye(), self.orbit.target, Vec3::Y);
+            let (r, u) = (view.row(0).truncate(), view.row(1).truncate());
             let scale = self.orbit.distance * 0.0016;
-            self.orbit.target += (-right_v * delta.x + up_v * delta.y) * scale;
-        } else if middle || right {
+            self.orbit.target += (-r * delta.x + u * delta.y) * scale;
+        } else if middle || (left && alt) {
+            // Orbit around the target (Blender MMB, Unity Alt+LMB).
             self.orbit.yaw -= delta.x * 0.008;
             self.orbit.pitch = (self.orbit.pitch + delta.y * 0.008).clamp(-1.55, 1.55);
+        } else if right {
+            // Look around from the eye (Unity RMB), WASD to fly.
+            let eye = self.orbit.eye();
+            self.orbit.yaw -= delta.x * 0.005;
+            self.orbit.pitch = (self.orbit.pitch + delta.y * 0.005).clamp(-1.55, 1.55);
+            self.orbit.target = eye - self.orbit.back() * self.orbit.distance;
         }
 
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 {
-                self.orbit.distance = (self.orbit.distance * (-scroll * 0.0015).exp()).clamp(0.2, 4000.0);
+        if response.hovered() || right {
+            let flying = ui.input(|i| i.pointer.button_down(PointerButton::Secondary));
+            if flying {
+                let (dt, boost) = ui.input(|i| (i.stable_dt.min(0.1), if i.modifiers.shift { 4.0 } else { 1.0 }));
+                let forward = -self.orbit.back();
+                let right_v = forward.cross(Vec3::Y).normalize_or_zero();
+                let axis = |a: egui::Key, b: egui::Key| ui.input(|i| i.key_down(a) as i32 as f32 - i.key_down(b) as i32 as f32);
+                let mv = forward * axis(egui::Key::W, egui::Key::S)
+                    + right_v * axis(egui::Key::D, egui::Key::A)
+                    + Vec3::Y * axis(egui::Key::E, egui::Key::Q);
+                if mv != Vec3::ZERO {
+                    self.orbit.target += mv.normalize() * (self.orbit.distance * 1.2 + 2.0) * boost * dt;
+                    ui.ctx().request_repaint();
+                }
             }
-            if !ui.ctx().egui_wants_keyboard_input() {
-                let keys = ui.input(|i| {
-                    [egui::Key::F, egui::Key::Num1, egui::Key::Num3, egui::Key::Num7].map(|k| i.key_pressed(k))
-                });
-                if keys[0] {
-                    state.frame_selection = true;
-                }
-                if keys[1] {
-                    (self.orbit.yaw, self.orbit.pitch) = (0.0, 0.0);
-                }
-                if keys[2] {
-                    (self.orbit.yaw, self.orbit.pitch) = (FRAC_PI_2, 0.0);
-                }
-                if keys[3] {
-                    (self.orbit.yaw, self.orbit.pitch) = (0.0, 1.55);
-                }
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 && response.hovered() {
+                self.orbit.distance = (self.orbit.distance * (-scroll * 0.0015).exp()).clamp(0.1, FAR * 0.5);
             }
         }
 
@@ -291,245 +352,501 @@ impl Viewport {
         {
             let (scale, _, translation) = m.to_scale_rotation_translation();
             self.orbit.target = translation;
-            self.orbit.distance = (scale.max_element() * 3.0).clamp(2.0, 500.0);
+            self.orbit.distance = (scale.max_element() * 2.5).clamp(2.0, 800.0);
             state.frame_selection = false;
         }
     }
 
-    fn draw_grid(&self, painter: &egui::Painter, p: &Projector) {
-        let step = if self.orbit.distance > 80.0 { 10.0 } else { 1.0 };
-        let half = 30.0 * step;
-        let cx = (self.orbit.target.x / step).round() * step;
-        let cz = (self.orbit.target.z / step).round() * step;
-        let minor = Color32::from_rgba_unmultiplied(255, 255, 255, 18);
-        let mut i = -half;
-        while i <= half {
-            let (x, z) = (cx + i, cz + i);
-            let cx_line = if x.abs() < step * 0.5 { theme::AXIS_Z.gamma_multiply(0.8) } else { minor };
-            let cz_line = if z.abs() < step * 0.5 { theme::AXIS_X.gamma_multiply(0.8) } else { minor };
-            p.line(painter, Vec3::new(x, 0.0, cz - half), Vec3::new(x, 0.0, cz + half), (1.0, cx_line));
-            p.line(painter, Vec3::new(cx - half, 0.0, z), Vec3::new(cx + half, 0.0, z), (1.0, cz_line));
-            i += step;
-        }
-    }
-
-    fn build_tris(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>, p: &Projector) {
-        self.tris.clear();
-        let light = -LIGHT.normalize();
+    fn scene_geometry(&mut self, state: &EditorState, worlds: &std::collections::HashMap<u64, Mat4>) {
         for e in &state.scene.entities {
-            let (Some(mesh), Some(m)) = (&e.mesh, worlds.get(&e.id)) else { continue };
-            let geo = geometry(mesh.shape);
-            let flipped = m.determinant() < 0.0;
-            let [r, g, b, _] = mesh.color;
-            for tri in &geo.tris {
-                let w = tri.map(|v| m.transform_point3(v));
-                let v = w.map(|x| p.to_view(x));
-                let facing = ((v[1] - v[0]).cross(v[2] - v[0]).dot(-v[0]) > 0.0) != flipped;
-                if !facing && !geo.double_sided {
-                    continue;
-                }
-                let mut n = (w[1] - w[0]).cross(w[2] - w[0]).normalize_or_zero();
-                if flipped == facing {
-                    n = -n;
-                }
-                let k = 0.35 + 0.65 * n.dot(light).max(0.0);
-                let color: Color32 = egui::Rgba::from_rgb(r * k, g * k, b * k).into();
-                let depth = (v[0].z + v[1].z + v[2].z) / 3.0;
-                let layer = if geo.double_sided { 0 } else { 1 };
-
-                if v.iter().all(|x| x.z < -NEAR) {
-                    self.tris.push(Tri { pts: v.map(|x| p.view_to_screen(x)), layer, depth, color, entity: e.id });
-                } else {
-                    clip_polygon(&v, &mut self.poly);
-                    for i in 1..self.poly.len().saturating_sub(1) {
-                        let pts = [self.poly[0], self.poly[i], self.poly[i + 1]].map(|x| p.view_to_screen(x));
-                        self.tris.push(Tri { pts, layer, depth, color, entity: e.id });
-                    }
+            let Some(m) = worlds.get(&e.id) else { continue };
+            if let Some(mesh) = &e.mesh {
+                let color = linear_color(mesh.color);
+                let f = if state.selection == Some(e.id) { flags::SELECTED } else { 0 };
+                for tri in &shape_geometry(mesh.shape).tris {
+                    let w = tri.map(|v| m.transform_point3(v));
+                    let n = (w[1] - w[0]).cross(w[2] - w[0]).normalize_or_zero();
+                    self.geometry.polygon(e.id, &w, n, color, f);
                 }
             }
+            if e.camera.is_some() {
+                let (_, rot, pos) = m.to_scale_rotation_translation();
+                let cm = Mat4::from_rotation_translation(rot, pos);
+                let color = if state.selection == Some(e.id) { theme::SELECTED } else { Color32::from_gray(220) };
+                let apex = cm.transform_point3(Vec3::ZERO);
+                let c = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                    .map(|(x, y)| cm.transform_point3(Vec3::new(0.35 * x, 0.25 * y, -0.6)));
+                let up = cm.transform_point3(Vec3::new(0.0, 0.42, -0.6));
+                for i in 0..4 {
+                    self.geometry.line(apex, c[i], color, false);
+                    self.geometry.line(c[i], c[(i + 1) % 4], color, false);
+                }
+                self.geometry.line(c[2], up, color, false);
+                self.geometry.line(c[3], up, color, false);
+            }
         }
-        // Painter's algorithm: flat layer first, then farthest first (view z is
-        // negative in front of the camera). Approximate by nature; exact
-        // occlusion comes with the GPU viewport.
-        self.tris.sort_unstable_by(|a, b| a.layer.cmp(&b.layer).then(a.depth.total_cmp(&b.depth)));
     }
 
-    fn draw_cameras(
+    fn selection_outline(
         &self,
         painter: &egui::Painter,
-        p: &Projector,
+        camera: &ViewCamera,
         state: &EditorState,
         worlds: &std::collections::HashMap<u64, Mat4>,
-    ) -> Vec<(u64, Pos2)> {
-        let mut icons = Vec::new();
-        for e in state.scene.entities.iter().filter(|e| e.camera.is_some()) {
-            let Some(m) = worlds.get(&e.id) else { continue };
-            let (_, rot, pos) = m.to_scale_rotation_translation();
-            let cm = Mat4::from_rotation_translation(rot, pos);
-            let color = if state.selection == Some(e.id) { theme::SELECTED } else { Color32::from_gray(225) };
-            let apex = cm.transform_point3(Vec3::ZERO);
-            let c = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-                .map(|(x, y)| cm.transform_point3(Vec3::new(0.35 * x, 0.25 * y, -0.6)));
-            for i in 0..4 {
-                p.line(painter, apex, c[i], (1.5, color));
-                p.line(painter, c[i], c[(i + 1) % 4], (1.5, color));
-            }
-            // "Up" marker so the camera's roll is visible.
-            let up = cm.transform_point3(Vec3::new(0.0, 0.42, -0.6));
-            p.line(painter, c[2], up, (1.5, color));
-            p.line(painter, c[3], up, (1.5, color));
-            if let Some(s) = p.project(apex) {
-                icons.push((e.id, s));
+    ) {
+        let Some(sel) = state.selection else { return };
+        let (Some(e), Some(m)) = (state.scene.get(sel), worlds.get(&sel)) else { return };
+        if let Some(mesh) = &e.mesh {
+            for [a, b] in &shape_geometry(mesh.shape).edges {
+                camera.line(painter, m.transform_point3(*a), m.transform_point3(*b), (1.5, theme::SELECTED));
             }
         }
-        icons
     }
 
-    /// Translate gizmo. Returns the axis under the cursor.
+    fn pick(
+        &self,
+        pointer: Pos2,
+        camera: &ViewCamera,
+        state: &EditorState,
+        worlds: &std::collections::HashMap<u64, Mat4>,
+    ) -> Option<u64> {
+        // Cameras have no surface: pick them by their icon.
+        let icon = state
+            .scene
+            .entities
+            .iter()
+            .filter(|e| e.camera.is_some())
+            .filter_map(|e| Some((e.id, camera.project(worlds.get(&e.id)?.w_axis.truncate())?.distance(pointer))))
+            .filter(|(_, d)| *d < 16.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((id, _)) = icon {
+            return Some(id);
+        }
+        self.geometry.raycast(&camera.ray(pointer)).and_then(|h| h.entity)
+    }
+
+    // --- gizmo -----------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
     fn gizmo(
         &mut self,
-        painter: &egui::Painter,
-        p: &Projector,
+        ui: &egui::Ui,
         response: &egui::Response,
+        painter: &egui::Painter,
+        camera: &ViewCamera,
+        snap: Snap,
         state: &mut EditorState,
         worlds: &std::collections::HashMap<u64, Mat4>,
-    ) -> Option<usize> {
-        let sel = state.selection?;
-        let world = *worlds.get(&sel)?;
-        let origin = world.w_axis.truncate();
-        let len = (self.orbit.eye() - origin).length() * 0.15;
-        let o = p.project(origin)?;
-        let tips: Vec<Option<Pos2>> = AXIS_VECS.iter().map(|a| p.project(origin + *a * len)).collect();
+    ) -> bool {
+        let Some(sel) = state.selection else {
+            self.drag = None;
+            return false;
+        };
+        let Some(&world) = worlds.get(&sel) else { return false };
+        let (_, world_rotation, origin) = world.to_scale_rotation_translation();
+        let tool = state.tool.as_str();
+        let local = state.local_space || tool == tools::SCALE;
+        let axes = match &self.drag {
+            Some(d) => d.axes,
+            None if local => AXES.map(|a| (world_rotation * a).normalize()),
+            None => AXES,
+        };
+        let Some(o) = camera.project(origin) else { return false };
+        let len = camera.world_per_point(origin) * GIZMO_POINTS;
+        let tips: [Option<Pos2>; 3] = std::array::from_fn(|i| camera.project(origin + axes[i] * len));
+        let to_eye = (camera.eye - origin).normalize();
 
-        let pointer = response.hover_pos();
-        let hovered = self.drag_axis.or_else(|| {
-            let pointer = pointer?;
-            (0..3)
-                .filter_map(|i| Some((i, dist_to_segment(pointer, o, tips[i]?))))
-                .filter(|(_, d)| *d < 8.0)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(i, _)| i)
-        });
+        let hovered = match &self.drag {
+            Some(d) => Some(d.handle),
+            None => response.hover_pos().and_then(|p| hit_handle(tool, p, camera, origin, axes, len, o, &tips)),
+        };
+        draw_handles(painter, tool, camera, origin, axes, len, o, &tips, hovered, to_eye);
 
-        for (i, tip) in tips.iter().enumerate() {
-            let Some(tip) = *tip else { continue };
-            let color = if hovered == Some(i) { Color32::WHITE } else { theme::AXES[i] };
-            painter.line_segment([o, tip], (3.0, color));
-            painter.circle_filled(tip, 5.0, color);
-        }
-        painter.circle_filled(o, 3.5, Color32::WHITE);
-
-        if response.drag_started_by(egui::PointerButton::Primary) {
-            self.drag_axis = hovered;
-        }
-        if let Some(axis) = self.drag_axis
-            && response.dragged_by(egui::PointerButton::Primary)
-            && let Some(tip) = tips[axis]
+        if self.drag.is_none()
+            && response.drag_started_by(PointerButton::Primary)
+            && let Some(handle) = hovered
+            && let Some(e) = state.scene.get(sel)
         {
-            let d = tip - o;
-            let pixels = d.length();
-            if pixels > 1.0 {
-                let amount = response.drag_delta().dot(d / pixels) / pixels * len;
-                let parent = state.scene.get(sel).and_then(|e| e.parent);
-                let parent_world = parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
-                let local = parent_world.inverse().transform_vector3(AXIS_VECS[axis] * amount);
-                if let Some(e) = state.scene.get_mut(sel) {
-                    e.position += local;
-                }
+            let mouse = ui.input(|i| i.pointer.press_origin()).unwrap_or(o);
+            let ray = camera.ray(mouse);
+            let parent = e.parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
+            let (param, hit) = match handle {
+                Handle::Axis(i) => (ray.closest_on_line(origin, axes[i]).unwrap_or(0.0), origin),
+                Handle::Plane(i) => (0.0, ray.plane(origin, axes[i]).map(|t| ray.at(t)).unwrap_or(origin)),
+                Handle::Free => (0.0, ray.plane(origin, camera.forward).map(|t| ray.at(t)).unwrap_or(origin)),
+                _ => (0.0, origin),
+            };
+            let axis_screen = match handle {
+                Handle::Scale(i) => tips[i].map(|t| t - o).unwrap_or(vec2(1.0, 0.0)),
+                _ => vec2(1.0, 0.0),
+            };
+            self.drag = Some(Drag {
+                handle,
+                entity: sel,
+                scale: e.scale,
+                world_rotation,
+                parent,
+                origin,
+                axes,
+                param,
+                hit,
+                mouse,
+                origin_screen: o,
+                axis_screen,
+                angle: 0.0,
+            });
+        }
+
+        if let Some(d) = &mut self.drag
+            && response.dragged_by(PointerButton::Primary)
+            && let Some(mouse) = response.interact_pointer_pos()
+        {
+            apply_drag(d, mouse, camera, snap, state);
+            if let Handle::Rotate(_) | Handle::RotateView = d.handle {
+                painter.text(
+                    o + vec2(0.0, -len / camera.world_per_point(origin) - 24.0),
+                    Align2::CENTER_CENTER,
+                    format!("{:.1}°", d.angle.to_degrees()),
+                    FontId::proportional(13.0),
+                    HOT,
+                );
             }
         }
         if response.drag_stopped() {
-            self.drag_axis = None;
+            self.drag = None;
         }
-        hovered
+        hovered.is_some()
     }
 
-    fn pick(&self, pointer: Pos2, cameras: &[(u64, Pos2)]) -> Option<u64> {
-        let camera = cameras
-            .iter()
-            .map(|(id, s)| (*id, s.distance(pointer)))
-            .filter(|(_, d)| *d < 14.0)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((id, _)) = camera {
-            return Some(id);
-        }
-        self.tris.iter().rev().find(|t| point_in_tri(pointer, t.pts)).map(|t| t.entity)
-    }
+    // --- overlay -------------------------------------------------------------
 
-    fn overlay(&mut self, ui: &mut egui::Ui, rect: Rect, p: &Projector, state: &mut EditorState) {
-        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(6.0)));
-        bar.horizontal(|ui| {
-            ui.toggle_value(&mut self.show_grid, "Сетка");
-            ui.toggle_value(&mut self.wireframe, "Каркас");
-            if ui.button("⌖").on_hover_text("К выделенному (F)").clicked() {
-                // Picked up by `navigate` on the next frame.
-                state.frame_selection = true;
-            }
-        });
+    fn overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect, camera: &ViewCamera, state: &mut EditorState, grid_step: f32) {
+        let bar_rect = rect.shrink(6.0);
+        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
+        egui::Frame::new()
+            .fill(Color32::from_black_alpha(110))
+            .corner_radius(5.0)
+            .inner_margin(egui::Margin::symmetric(6, 3))
+            .show(&mut bar, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (id, label, key) in [
+                        (tools::VIEW, "Hand", "Q"),
+                        (tools::MOVE, "Move", "W"),
+                        (tools::ROTATE, "Rotate", "E"),
+                        (tools::SCALE, "Scale", "R"),
+                    ] {
+                        if ui.selectable_label(state.tool == id, label).on_hover_text(format!("{label} ({key})")).clicked() {
+                            state.tool = id.to_owned();
+                        }
+                    }
+                    let ext_tools: Vec<_> = state.ext.viewport.iter().flat_map(|e| e.tools().iter().copied()).collect();
+                    if !ext_tools.is_empty() {
+                        ui.separator();
+                    }
+                    for t in ext_tools {
+                        let hint = match t.key {
+                            Some(k) => format!("{} ({})", t.tooltip, k.name()),
+                            None => t.tooltip.to_owned(),
+                        };
+                        if ui.selectable_label(state.tool == t.id, t.label).on_hover_text(hint).clicked() {
+                            state.tool = t.id.to_owned();
+                        }
+                    }
+                    ui.separator();
+                    let space = if state.local_space { "Local" } else { "Global" };
+                    if ui.button(space).on_hover_text("Gizmo axes (X)").clicked() {
+                        state.local_space = !state.local_space;
+                    }
+                    ui.separator();
+                    ui.toggle_value(&mut state.snap.enabled, "Snap").on_hover_text("Grid snapping (hold Ctrl to invert)");
+                    let step_label = |s: f32| if s < 1.0 { format!("1/{}", (1.0 / s).round()) } else { format!("{s}") };
+                    egui::ComboBox::from_id_salt(("snap-step", self.id))
+                        .width(78.0)
+                        .selected_text(match state.snap.step {
+                            None => format!("Auto {}", step_label(grid_step)),
+                            Some(s) => step_label(s),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut state.snap.step, None, "Auto (adaptive)");
+                            for s in STEPS {
+                                ui.selectable_value(&mut state.snap.step, Some(s), step_label(s));
+                            }
+                        });
+                    egui::ComboBox::from_id_salt(("snap-angle", self.id))
+                        .width(48.0)
+                        .selected_text(format!("{}°", state.snap.angle_deg))
+                        .show_ui(ui, |ui| {
+                            for a in [1.0, 5.0, 15.0, 30.0, 45.0, 90.0] {
+                                ui.selectable_value(&mut state.snap.angle_deg, a, format!("{a}°"));
+                            }
+                        });
+                    ui.separator();
+                    ui.toggle_value(&mut self.show_grid, "Grid");
+                    ui.toggle_value(&mut self.wireframe, "Wire");
+                    if ui.button("Frame").on_hover_text("Frame selection (F)").clicked() {
+                        state.frame_selection = true;
+                    }
+                });
+            });
 
         let painter = ui.painter_at(rect);
-        // Axis indicator (top right), back to front.
-        let center = rect.right_top() + vec2(-42.0, 42.0);
+        // Axis indicator, back to front.
+        let center = rect.right_bottom() + vec2(-44.0, -44.0);
         let mut axes: Vec<(usize, Vec3)> =
-            AXIS_VECS.iter().enumerate().map(|(i, a)| (i, p.view.transform_vector3(*a))).collect();
+            AXES.iter().enumerate().map(|(i, a)| (i, camera.view.transform_vector3(*a))).collect();
         axes.sort_by(|a, b| a.1.z.total_cmp(&b.1.z));
-        painter.circle_filled(center, 34.0, Color32::from_black_alpha(40));
+        painter.circle_filled(center, 34.0, Color32::from_black_alpha(50));
         for (i, d) in axes {
             let tip = center + vec2(d.x, -d.y) * 26.0;
             painter.line_segment([center, tip], (2.0, theme::AXES[i]));
             painter.circle_filled(tip, 8.0, theme::AXES[i]);
-            painter.text(tip, egui::Align2::CENTER_CENTER, ["X", "Y", "Z"][i], egui::FontId::proportional(11.0), Color32::BLACK);
+            painter.text(tip, Align2::CENTER_CENTER, ["X", "Y", "Z"][i], FontId::proportional(11.0), Color32::BLACK);
         }
-
         if !state.preview.is_empty() {
-            painter.text(
-                rect.center_top() + vec2(0.0, 14.0),
-                egui::Align2::CENTER_CENTER,
-                "• превью анимации",
-                egui::FontId::proportional(13.0),
-                theme::SELECTED,
-            );
+            painter.text(rect.center_top() + vec2(0.0, 44.0), Align2::CENTER_CENTER, "• animation preview", FontId::proportional(13.0), theme::SELECTED);
         }
         painter.text(
             rect.left_bottom() + vec2(8.0, -8.0),
-            egui::Align2::LEFT_BOTTOM,
-            "СКМ/ПКМ — вращать · Shift — сдвигать · колесо — зум · F — к объекту · 1/3/7 — виды",
-            egui::FontId::proportional(11.0),
+            Align2::LEFT_BOTTOM,
+            "MMB orbit · Shift+MMB pan · RMB look + WASD/QE fly · wheel zoom · F frame",
+            FontId::proportional(11.0),
             Color32::from_white_alpha(90),
         );
     }
 }
 
-/// Sutherland–Hodgman against the near plane (keep z < -NEAR).
-fn clip_polygon(input: &[Vec3], out: &mut Vec<Vec3>) {
-    out.clear();
-    let inside = |p: Vec3| p.z < -NEAR;
-    for i in 0..input.len() {
-        let (a, b) = (input[i], input[(i + 1) % input.len()]);
-        match (inside(a), inside(b)) {
-            (true, true) => out.push(b),
-            (true, false) => out.push(intersect(a, b)),
-            (false, true) => {
-                out.push(intersect(a, b));
-                out.push(b);
+#[allow(clippy::too_many_arguments)]
+fn hit_handle(
+    tool: &str,
+    p: Pos2,
+    camera: &ViewCamera,
+    origin: Vec3,
+    axes: [Vec3; 3],
+    len: f32,
+    o: Pos2,
+    tips: &[Option<Pos2>; 3],
+) -> Option<Handle> {
+    let near_axis = |i: usize| tips[i].filter(|t| t.distance(o) > 6.0).map(|t| dist_to_segment(p, o, t));
+    match tool {
+        tools::MOVE => {
+            if p.distance(o) < 9.0 {
+                return Some(Handle::Free);
             }
-            (false, false) => {}
+            for i in 0..3 {
+                if let Some(quad) = plane_quad(camera, origin, axes, len, i)
+                    && point_in_quad(p, &quad)
+                {
+                    return Some(Handle::Plane(i));
+                }
+            }
+            closest((0..3).filter_map(|i| Some((Handle::Axis(i), near_axis(i)?))))
+        }
+        tools::ROTATE => {
+            let view_r = view_ring_radius(camera, origin, len, o);
+            if (p.distance(o) - view_r).abs() < 6.0 {
+                return Some(Handle::RotateView);
+            }
+            let eye_dir = (camera.eye - origin).normalize();
+            closest((0..3).map(|i| {
+                let pts = ring(camera, origin, axes[i], len, eye_dir);
+                let d = pts
+                    .windows(2)
+                    .filter(|w| w[0].1 && w[1].1)
+                    .map(|w| dist_to_segment(p, w[0].0, w[1].0))
+                    .fold(f32::MAX, f32::min);
+                (Handle::Rotate(i), d)
+            }))
+        }
+        tools::SCALE => {
+            if p.distance(o) < 10.0 {
+                return Some(Handle::ScaleAll);
+            }
+            closest((0..3).filter_map(|i| Some((Handle::Scale(i), near_axis(i)?))))
+        }
+        _ => None,
+    }
+}
+
+fn closest(candidates: impl Iterator<Item = (Handle, f32)>) -> Option<Handle> {
+    candidates.filter(|(_, d)| *d < 7.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
+}
+
+fn plane_quad(camera: &ViewCamera, origin: Vec3, axes: [Vec3; 3], len: f32, normal: usize) -> Option<[Pos2; 4]> {
+    let (j, k) = ((normal + 1) % 3, (normal + 2) % 3);
+    let (a, b) = (0.18 * len, 0.42 * len);
+    let pts = [(a, a), (b, a), (b, b), (a, b)].map(|(u, v)| camera.project(origin + axes[j] * u + axes[k] * v));
+    Some([pts[0]?, pts[1]?, pts[2]?, pts[3]?])
+}
+
+fn view_ring_radius(camera: &ViewCamera, origin: Vec3, len: f32, o: Pos2) -> f32 {
+    let right = camera.view.row(0).truncate();
+    camera.project(origin + right * len).map(|p| p.distance(o) * 1.18).unwrap_or(100.0)
+}
+
+/// Ring around `axis`; the flag marks the half facing the camera.
+fn ring(camera: &ViewCamera, origin: Vec3, axis: Vec3, len: f32, eye_dir: Vec3) -> Vec<(Pos2, bool)> {
+    let u = axis.any_orthonormal_vector();
+    let v = axis.cross(u);
+    (0..=64)
+        .filter_map(|i| {
+            let t = i as f32 / 64.0 * std::f32::consts::TAU;
+            let dir = u * t.cos() + v * t.sin();
+            let p = origin + dir * len;
+            Some((camera.project(p)?, dir.dot(eye_dir) > -0.08))
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_handles(
+    painter: &egui::Painter,
+    tool: &str,
+    camera: &ViewCamera,
+    origin: Vec3,
+    axes: [Vec3; 3],
+    len: f32,
+    o: Pos2,
+    tips: &[Option<Pos2>; 3],
+    hovered: Option<Handle>,
+    eye_dir: Vec3,
+) {
+    let color = |h: Handle, base: Color32| if hovered == Some(h) { HOT } else { base };
+    match tool {
+        tools::MOVE => {
+            for i in 0..3 {
+                if let Some(quad) = plane_quad(camera, origin, axes, len, i) {
+                    let c = color(Handle::Plane(i), theme::AXES[i]);
+                    painter.add(egui::Shape::convex_polygon(quad.to_vec(), c.gamma_multiply(0.35), Stroke::new(1.0, c)));
+                }
+            }
+            for (i, tip) in tips.iter().enumerate() {
+                let Some(tip) = *tip else { continue };
+                let c = color(Handle::Axis(i), theme::AXES[i]);
+                painter.line_segment([o, tip], (2.5, c));
+                let dir = (tip - o).normalized();
+                let side = vec2(-dir.y, dir.x) * 5.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![tip + dir * 12.0, tip + side, tip - side],
+                    c,
+                    Stroke::NONE,
+                ));
+            }
+            let c = color(Handle::Free, Color32::WHITE);
+            painter.rect_stroke(egui::Rect::from_center_size(o, vec2(10.0, 10.0)), 1.0, (1.5, c), egui::StrokeKind::Middle);
+        }
+        tools::ROTATE => {
+            for (i, axis) in axes.iter().enumerate() {
+                let c = color(Handle::Rotate(i), theme::AXES[i]);
+                let pts = ring(camera, origin, *axis, len, eye_dir);
+                for w in pts.windows(2) {
+                    let front = w[0].1 && w[1].1;
+                    let stroke = if front { Stroke::new(2.0, c) } else { Stroke::new(1.0, c.gamma_multiply(0.25)) };
+                    painter.line_segment([w[0].0, w[1].0], stroke);
+                }
+            }
+            let r = view_ring_radius(camera, origin, len, o);
+            painter.circle_stroke(o, r, (1.5, color(Handle::RotateView, Color32::from_gray(210))));
+            painter.circle_filled(o, 2.5, Color32::WHITE);
+        }
+        tools::SCALE => {
+            for (i, tip) in tips.iter().enumerate() {
+                let Some(tip) = *tip else { continue };
+                let c = color(Handle::Scale(i), theme::AXES[i]);
+                painter.line_segment([o, tip], (2.5, c));
+                painter.rect_filled(egui::Rect::from_center_size(tip, vec2(9.0, 9.0)), 1.0, c);
+            }
+            painter.rect_filled(
+                egui::Rect::from_center_size(o, vec2(11.0, 11.0)),
+                1.0,
+                color(Handle::ScaleAll, Color32::from_gray(230)),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn apply_drag(d: &mut Drag, mouse: Pos2, camera: &ViewCamera, snap: Snap, state: &mut EditorState) {
+    let ray = camera.ray(mouse);
+    let to_local = d.parent.inverse();
+    let world_axes_aligned = d.axes == AXES;
+    let snap_world = |mut p: Vec3, components: &[usize]| {
+        for &c in components {
+            p[c] = snap.value(p[c]);
+        }
+        p
+    };
+    let Some(e) = state.scene.get_mut(d.entity) else { return };
+
+    match d.handle {
+        Handle::Axis(i) => {
+            let Some(t) = ray.closest_on_line(d.origin, d.axes[i]) else { return };
+            let mut delta = t - d.param;
+            if !world_axes_aligned {
+                delta = snap.value(delta);
+            }
+            let mut p = d.origin + d.axes[i] * delta;
+            if world_axes_aligned {
+                p = snap_world(p, &[i]);
+            }
+            e.position = to_local.transform_point3(p);
+        }
+        Handle::Plane(_) | Handle::Free => {
+            let normal = match d.handle {
+                Handle::Plane(i) => d.axes[i],
+                _ => camera.forward,
+            };
+            let Some(t) = ray.plane(d.origin, normal) else { return };
+            let delta = ray.at(t) - d.hit;
+            let p = match d.handle {
+                Handle::Plane(i) if world_axes_aligned => snap_world(d.origin + delta, &[(i + 1) % 3, (i + 2) % 3]),
+                Handle::Plane(i) => {
+                    let (j, k) = ((i + 1) % 3, (i + 2) % 3);
+                    d.origin + d.axes[j] * snap.value(delta.dot(d.axes[j])) + d.axes[k] * snap.value(delta.dot(d.axes[k]))
+                }
+                _ => snap_world(d.origin + delta, &[0, 1, 2]),
+            };
+            e.position = to_local.transform_point3(p);
+        }
+        Handle::Rotate(_) | Handle::RotateView => {
+            let axis = match d.handle {
+                Handle::Rotate(i) => d.axes[i],
+                _ => (camera.eye - d.origin).normalize(),
+            };
+            let (v0, v1) = (d.mouse - d.origin_screen, mouse - d.origin_screen);
+            if v0.length() < 2.0 || v1.length() < 2.0 {
+                return;
+            }
+            // Screen angle (clockwise positive, y is down) -> right-handed angle about the axis.
+            let screen = (v0.x * v1.y - v0.y * v1.x).atan2(v0.dot(v1));
+            let facing = axis.dot(camera.eye - d.origin).signum();
+            d.angle = snap.angle(-screen * facing);
+            let world = Quat::from_axis_angle(axis, d.angle) * d.world_rotation;
+            let (_, parent_rotation, _) = d.parent.to_scale_rotation_translation();
+            let (y, x, z) = (parent_rotation.inverse() * world).to_euler(EulerRot::YXZ);
+            e.rotation = Vec3::new(x, y, z).map(f32::to_degrees);
+        }
+        Handle::Scale(i) => {
+            let l = d.axis_screen.length().max(1.0);
+            let mut f = 1.0 + (mouse - d.mouse).dot(d.axis_screen / l) / l;
+            if snap.enabled {
+                f = (f * 10.0).round() / 10.0;
+            }
+            e.scale[i] = d.scale[i] * f;
+        }
+        Handle::ScaleAll => {
+            let m = mouse - d.mouse;
+            let mut f = 1.0 + (m.x - m.y) / 120.0;
+            if snap.enabled {
+                f = (f * 10.0).round() / 10.0;
+            }
+            e.scale = d.scale * f;
         }
     }
+    e.position = e.position.map(|v| if v.abs() < 1e-6 { 0.0 } else { v });
 }
 
-fn clip_segment(a: Vec3, b: Vec3) -> Option<(Vec3, Vec3)> {
-    match (a.z < -NEAR, b.z < -NEAR) {
-        (true, true) => Some((a, b)),
-        (true, false) => Some((a, intersect(a, b))),
-        (false, true) => Some((intersect(a, b), b)),
-        (false, false) => None,
-    }
-}
-
-fn intersect(a: Vec3, b: Vec3) -> Vec3 {
-    let t = (-NEAR - a.z) / (b.z - a.z);
-    a + (b - a) * t
+fn point_in_quad(p: Pos2, q: &[Pos2; 4]) -> bool {
+    point_in_tri(p, [q[0], q[1], q[2]]) || point_in_tri(p, [q[0], q[2], q[3]])
 }
 
 fn point_in_tri(p: Pos2, [a, b, c]: [Pos2; 3]) -> bool {
@@ -549,6 +866,7 @@ fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ext::Ray;
 
     #[test]
     fn cube_faces_point_outward() {
@@ -560,12 +878,24 @@ mod tests {
     }
 
     #[test]
-    fn near_clipping() {
-        let mut out = Vec::new();
-        // One vertex behind the camera: the triangle becomes a quad.
-        clip_polygon(&[Vec3::new(0.0, 0.0, -5.0), Vec3::new(1.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0)], &mut out);
-        assert_eq!(out.len(), 4);
-        assert!(out.iter().all(|p| p.z <= -NEAR + 1e-5));
-        assert!(clip_segment(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 2.0)).is_none());
+    fn rays_hit_triangles_and_axes() {
+        let ray = Ray { origin: Vec3::new(0.2, 5.0, 0.2), dir: Vec3::NEG_Y };
+        let t = ray.triangle(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        assert!((t - 5.0).abs() < 1e-5);
+        // A ray crossing the X axis line at x = 3.
+        let ray = Ray { origin: Vec3::new(3.0, 1.0, 5.0), dir: Vec3::new(0.0, -0.2, -1.0).normalize() };
+        let along = ray.closest_on_line(Vec3::ZERO, Vec3::X).unwrap();
+        assert!((along - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn camera_ray_roundtrips_projection() {
+        let v = Viewport::default();
+        let cam = v.camera(egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
+        let p = Vec3::new(1.0, 0.5, -2.0);
+        let s = cam.project(p).unwrap();
+        let ray = cam.ray(s);
+        let closest = ray.origin + ray.dir * (p - ray.origin).dot(ray.dir);
+        assert!(closest.distance(p) < 1e-3);
     }
 }

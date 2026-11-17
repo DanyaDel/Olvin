@@ -14,6 +14,7 @@ olvin_scene = { workspace = true, features = ["serde"] }
 eframe.workspace = true
 egui.workspace = true
 egui_dock.workspace = true
+bytemuck.workspace = true
 glam.workspace = true
 serde.workspace = true
 ron.workspace = true

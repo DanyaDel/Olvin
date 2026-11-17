@@ -7,13 +7,13 @@ pub struct ConsolePlugin;
 
 impl EditorPlugin for ConsolePlugin {
     fn name(&self) -> &'static str {
-        "Консоль"
+        "Console"
     }
 
     fn build(&self, registry: &mut Registry) {
         registry.add_panel(PanelKind {
             id: "console.log",
-            title: "🖵 Консоль",
+            title: "🖵 Console",
             factory: || Box::new(Console { info: true, warn: true, error: true, filter: String::new() }),
         });
     }
@@ -32,14 +32,14 @@ impl Panel for Console {
         let (n_info, n_warn, n_error) = (count(LogLevel::Info), count(LogLevel::Warn), count(LogLevel::Error));
 
         ui.horizontal(|ui| {
-            if ui.button("Очистить").clicked() {
+            if ui.button("Clear").clicked() {
                 state.log.clear();
             }
             ui.separator();
             ui.toggle_value(&mut self.info, format!("ℹ {n_info}"));
             ui.toggle_value(&mut self.warn, RichText::new(format!("⚠ {n_warn}")).color(ui.visuals().warn_fg_color));
             ui.toggle_value(&mut self.error, RichText::new(format!("⛔ {n_error}")).color(ui.visuals().error_fg_color));
-            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Фильтр").desired_width(f32::INFINITY));
+            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Filter").desired_width(f32::INFINITY));
         });
         ui.separator();
 

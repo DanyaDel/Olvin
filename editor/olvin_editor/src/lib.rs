@@ -3,14 +3,16 @@
 //! generates the binary that lists the installed plugins.
 
 mod app;
+pub mod ext;
 pub mod panels;
 mod registry;
+mod render;
 mod state;
 pub mod theme;
 mod workspace;
 
 pub use registry::{EditorPlugin, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate};
-pub use state::{EditorState, LogLevel, LogLine, NewEntity};
+pub use state::{EditorState, LogLevel, LogLine, NewEntity, SnapSettings, tools};
 pub use workspace::Tab;
 
 // Re-exports so plugins build against exactly the editor's versions.
@@ -38,6 +40,10 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
             .with_app_id("olvin-editor")
             .with_inner_size([1600.0, 940.0])
             .with_min_inner_size([900.0, 560.0]),
+        // The scene view draws into egui's pass and needs depth + MSAA.
+        depth_buffer: render::DEPTH_BITS,
+        multisampling: render::MSAA as u16,
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -45,6 +51,8 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
+            let gpu = cc.wgpu_render_state.as_ref().ok_or("olvin-editor needs the wgpu renderer")?;
+            render::init(gpu);
             Ok(Box::new(app::EditorApp::new(registry, project)))
         }),
     );

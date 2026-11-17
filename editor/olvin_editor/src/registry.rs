@@ -1,5 +1,6 @@
 use egui_dock::DockState;
 
+use crate::ext::{ComponentEditor, CreateItem, Extensions, ViewportExtension};
 use crate::{EditorState, Tab};
 
 /// One dockable window. A new instance is created per tab, so two viewports
@@ -43,6 +44,9 @@ pub struct Registry {
     pub(crate) panels: Vec<PanelKind>,
     pub(crate) templates: Vec<WorkspaceTemplate>,
     pub(crate) plugins: Vec<&'static str>,
+    viewport_extensions: Vec<fn() -> Box<dyn ViewportExtension>>,
+    components: Vec<ComponentEditor>,
+    create_items: Vec<CreateItem>,
 }
 
 impl Registry {
@@ -55,6 +59,30 @@ impl Registry {
     pub fn add_workspace_template(&mut self, template: WorkspaceTemplate) -> &mut Self {
         self.templates.push(template);
         self
+    }
+
+    /// One shared instance serves every viewport (cache what's expensive).
+    pub fn add_viewport_extension(&mut self, factory: fn() -> Box<dyn ViewportExtension>) -> &mut Self {
+        self.viewport_extensions.push(factory);
+        self
+    }
+
+    pub fn add_component(&mut self, component: ComponentEditor) -> &mut Self {
+        self.components.push(component);
+        self
+    }
+
+    pub fn add_create_item(&mut self, item: CreateItem) -> &mut Self {
+        self.create_items.push(item);
+        self
+    }
+
+    pub(crate) fn instantiate_extensions(&self) -> Extensions {
+        Extensions {
+            viewport: self.viewport_extensions.iter().map(|f| f()).collect(),
+            components: self.components.clone(),
+            create: self.create_items.clone(),
+        }
     }
 
     pub fn panel(&self, id: &str) -> Option<&PanelKind> {

@@ -1,0 +1,13 @@
+[package]
+name = "olvin_csg"
+description = "Olvin CSG: convex brushes (box, wedge, cylinder, pyramid, stairs) with ordered add/subtract/intersect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+glam.workspace = true
+serde = { workspace = true, optional = true }

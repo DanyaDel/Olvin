@@ -6,7 +6,31 @@ use glam::{EulerRot, Mat4, Vec3};
 use olvin_scene::Transform;
 use olvin_scene::file::{CameraDesc, EntityDesc, MeshDesc, SceneFile, Shape};
 
+use crate::ext::Extensions;
+
 const UNDO_LIMIT: usize = 200;
+
+/// Built-in viewport tools; elements add their own ids (e.g. `"csg.draw"`).
+pub mod tools {
+    pub const VIEW: &str = "view";
+    pub const MOVE: &str = "move";
+    pub const ROTATE: &str = "rotate";
+    pub const SCALE: &str = "scale";
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SnapSettings {
+    pub enabled: bool,
+    /// Fixed grid step; `None` follows the adaptive grid.
+    pub step: Option<f32>,
+    pub angle_deg: f32,
+}
+
+impl Default for SnapSettings {
+    fn default() -> Self {
+        Self { enabled: true, step: None, angle_deg: 15.0 }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
@@ -36,10 +60,10 @@ impl NewEntity {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Empty => "Пустой объект",
-            Self::Cube => "Куб",
-            Self::Plane => "Плоскость",
-            Self::Camera => "Камера",
+            Self::Empty => "Empty",
+            Self::Cube => "Cube",
+            Self::Plane => "Plane",
+            Self::Camera => "Camera",
         }
     }
 }
@@ -59,6 +83,13 @@ pub struct EditorState {
     /// Viewports frame the selection when set; the first viewport to see it clears it.
     pub frame_selection: bool,
     pub(crate) open_request: Option<PathBuf>,
+    /// Active viewport tool, see [`tools`].
+    pub tool: String,
+    /// Gizmos use the object's axes instead of the world's.
+    pub local_space: bool,
+    /// Hold Ctrl to invert `snap.enabled` temporarily.
+    pub snap: SnapSettings,
+    pub(crate) ext: Extensions,
     committed: SceneFile,
     saved: SceneFile,
     undo: Vec<SceneFile>,
@@ -78,6 +109,10 @@ impl EditorState {
             scene_generation: 0,
             frame_selection: false,
             open_request: None,
+            tool: tools::MOVE.to_owned(),
+            local_space: false,
+            snap: SnapSettings::default(),
+            ext: Extensions::default(),
             committed: SceneFile::default(),
             saved: SceneFile::default(),
             undo: Vec::new(),
@@ -88,11 +123,11 @@ impl EditorState {
             Some(path) if path.is_file() => state.open(&path),
             Some(path) => {
                 state.replace_scene(starter_scene(), Some(path), false);
-                state.info("новая сцена: сохрани её (Ctrl+S), и игра загрузит её при запуске");
+                state.info("new scene: save it (Ctrl+S) and the game will load it on start");
             }
             None => {
                 state.replace_scene(starter_scene(), None, false);
-                state.warn("проект не указан: olvin-editor <папка проекта>");
+                state.warn("no project given: olvin-editor <project folder>");
             }
         }
         state
@@ -141,21 +176,21 @@ impl EditorState {
             Ok(scene) => {
                 self.replace_scene(scene, Some(path.to_path_buf()), true);
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.info(format!("открыта сцена {name}"));
+                self.info(format!("opened scene {name}"));
             }
-            Err(err) => self.error(format!("не удалось открыть сцену: {err}")),
+            Err(err) => self.error(format!("could not open scene: {err}")),
         }
     }
 
     pub fn new_scene(&mut self) {
         let path = self.default_scene_path().map(|p| p.with_file_name("untitled.scene.ron"));
         self.replace_scene(starter_scene(), path, false);
-        self.info("новая сцена");
+        self.info("new scene");
     }
 
     pub fn save(&mut self) -> bool {
         let Some(path) = self.scene_path.clone() else {
-            self.error("некуда сохранять: проект не указан, используй «Сохранить как»");
+            self.error("nowhere to save: no project, use Save As");
             return false;
         };
         self.save_as(&path)
@@ -167,11 +202,11 @@ impl EditorState {
             Ok(()) => {
                 self.saved = self.scene.clone();
                 self.scene_path = Some(path.to_path_buf());
-                self.info(format!("сохранено: {}", path.display()));
+                self.info(format!("saved {}", path.display()));
                 true
             }
             Err(err) => {
-                self.error(format!("не удалось сохранить: {err}"));
+                self.error(format!("could not save: {err}"));
                 false
             }
         }
@@ -317,7 +352,7 @@ impl EditorState {
         }
         for mut e in subtree {
             if e.id == id {
-                e.name = format!("{} (копия)", e.name);
+                e.name = format!("{} (copy)", e.name);
             } else {
                 e.parent = e.parent.map(|p| remap[&p]);
             }
@@ -327,6 +362,23 @@ impl EditorState {
         let copy = remap[&id];
         self.selection = Some(copy);
         Some(copy)
+    }
+
+    /// Moves an entity up (-1) or down (+1) among its siblings. Order matters
+    /// for CSG brushes.
+    pub fn move_sibling(&mut self, id: u64, dir: i32) -> bool {
+        let Some(parent) = self.scene.get(id).map(|e| e.parent) else { return false };
+        let siblings: Vec<usize> =
+            (0..self.scene.entities.len()).filter(|&i| self.scene.entities[i].parent == parent).collect();
+        let Some(pos) = siblings.iter().position(|&i| self.scene.entities[i].id == id) else { return false };
+        let other = pos as i32 + dir;
+        if other < 0 || other as usize >= siblings.len() {
+            return false;
+        }
+        self.scene.entities.swap(siblings[pos], siblings[other as usize]);
+        // Swapping may put a subtree before its parent; restore the invariant.
+        self.fix_order();
+        true
     }
 
     /// Moves `id` under `parent` keeping its world transform (like Unity).
@@ -391,11 +443,11 @@ fn starter_scene() -> SceneFile {
     camera.rotation = Vec3::new(-18.0, 0.0, 0.0);
     camera.camera = Some(CameraDesc::default());
 
-    let mut ground = EntityDesc::new(2, "Земля");
+    let mut ground = EntityDesc::new(2, "Ground");
     ground.scale = Vec3::splat(20.0);
     ground.mesh = Some(MeshDesc { shape: Shape::Plane, color: [0.18, 0.2, 0.22, 1.0] });
 
-    let mut cube = EntityDesc::new(3, "Куб");
+    let mut cube = EntityDesc::new(3, "Cube");
     cube.position = Vec3::new(0.0, 0.5, 0.0);
     cube.mesh = Some(MeshDesc { shape: Shape::Cube, color: [0.9, 0.45, 0.15, 1.0] });
 

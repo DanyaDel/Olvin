@@ -108,3 +108,12 @@ description = "Таймлайн с ключами Transform, превью во �
 crate = "olvin_editor_animator"
 path = "editor/olvin_editor_animator"
 plugin = "olvin_editor_animator::AnimatorPlugin"
+
+[[editor_module]]
+id = "csg"
+name = "CSG (маппинг уровней)"
+description = "Браши с булевыми операциями, рисование по поверхности, ручки граней, адаптивная сетка, область «Level Design»"
+crate = "olvin_editor_csg"
+path = "editor/olvin_editor_csg"
+plugin = "olvin_editor_csg::CsgPlugin"
+default = true

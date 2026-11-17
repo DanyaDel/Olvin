@@ -938,6 +938,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "editor_dev"
+version = "0.1.0"
+dependencies = [
+ "olvin_editor",
+ "olvin_editor_animator",
+ "olvin_editor_console",
+ "olvin_editor_csg",
+]
+
+[[package]]
 name = "eframe"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2527,6 +2537,7 @@ dependencies = [
  "glam",
  "log",
  "olvin_core",
+ "olvin_csg",
  "olvin_ecs",
  "olvin_render",
  "olvin_scene",
@@ -2542,6 +2553,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "olvin_csg"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+]
+
+[[package]]
 name = "olvin_ecs"
 version = "0.1.0"
 dependencies = [
@@ -2553,6 +2572,7 @@ dependencies = [
 name = "olvin_editor"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "dirs",
  "eframe",
  "egui",
@@ -2576,6 +2596,14 @@ dependencies = [
 name = "olvin_editor_console"
 version = "0.1.0"
 dependencies = [
+ "olvin_editor",
+]
+
+[[package]]
+name = "olvin_editor_csg"
+version = "0.1.0"
+dependencies = [
+ "olvin_csg",
  "olvin_editor",
 ]
 
@@ -2628,6 +2656,7 @@ name = "olvin_scene"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "olvin_csg",
  "ron",
  "serde",
 ]

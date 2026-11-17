@@ -37,13 +37,23 @@ impl Project {
             .with_context(|| format!("в {} и выше нет проекта Olvin", start.display()))
     }
 
-    /// Creates `<parent>/<name>` from the template and installs default modules.
-    pub fn create(
+    /// Creates `<parent>/<name>` with the catalog's default modules.
+    pub fn create(parent: &Path, name: &str, engine: &EngineSource, catalog: &Catalog) -> Result<Self> {
+        let defaults: Vec<&str> = catalog.modules.iter().filter(|m| m.default).map(|m| m.id.as_str()).collect();
+        Self::create_with(parent, name, engine, catalog, &defaults)
+    }
+
+    /// Creates `<parent>/<name>` with exactly these modules (plus what they require).
+    pub fn create_with(
         parent: &Path,
         name: &str,
         engine: &EngineSource,
         catalog: &Catalog,
+        modules: &[&str],
     ) -> Result<Self> {
+        for id in modules {
+            catalog.resolve(id)?;
+        }
         validate_name(name)?;
         engine.validate()?;
         let root = parent.join(name);
@@ -51,7 +61,8 @@ impl Project {
             bail!("{} уже существует", root.display());
         }
         fs::create_dir_all(root.join("src"))?;
-        for (file, content) in template::files(name) {
+        let graphical = ["window", "render", "scenes"].iter().all(|m| modules.contains(m));
+        for (file, content) in template::files(name, graphical) {
             fs::write(root.join(file), content)?;
         }
 
@@ -61,8 +72,8 @@ impl Project {
             .unwrap()
             .insert("olvin", Item::Value(Value::InlineTable(engine.dependency())));
         let mut project = Self { root, doc };
-        for module in catalog.modules.iter().filter(|m| m.default) {
-            project.add(catalog, &module.id)?;
+        for id in modules {
+            project.add(catalog, id)?;
         }
         project.save()?;
         Ok(project)
@@ -70,6 +81,14 @@ impl Project {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Last time the manifest or the main scene changed.
+    pub fn modified(&self) -> Option<std::time::SystemTime> {
+        ["Cargo.toml", "assets/scenes/main.scene.ron", "src/main.rs"]
+            .iter()
+            .filter_map(|f| fs::metadata(self.root.join(f)).and_then(|m| m.modified()).ok())
+            .max()
     }
 
     pub fn name(&self) -> &str {

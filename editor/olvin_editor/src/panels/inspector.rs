@@ -10,9 +10,10 @@ pub struct Inspector;
 impl Panel for Inspector {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let Some(id) = state.selection else {
-            ui.centered_and_justified(|ui| ui.weak("Ничего не выбрано"));
+            ui.centered_and_justified(|ui| ui.weak("Nothing selected"));
             return;
         };
+        let components = state.ext.components.clone();
         let Some(e) = state.scene.get_mut(id) else { return };
 
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -24,13 +25,13 @@ impl Panel for Inspector {
 
             component(ui, "Transform", None, |ui| {
                 egui::Grid::new("transform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                    ui.label("Позиция");
+                    ui.label("Position");
                     vec3(ui, &mut e.position, 0.05, "");
                     ui.end_row();
-                    ui.label("Поворот");
+                    ui.label("Rotation");
                     vec3(ui, &mut e.rotation, 0.5, "°");
                     ui.end_row();
-                    ui.label("Масштаб");
+                    ui.label("Scale");
                     vec3(ui, &mut e.scale, 0.02, "");
                     ui.end_row();
                 });
@@ -40,7 +41,7 @@ impl Panel for Inspector {
             if let Some(mesh) = &mut e.mesh {
                 component(ui, "Mesh Renderer", Some(&mut remove_mesh), |ui| {
                     egui::Grid::new("mesh").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                        ui.label("Форма");
+                        ui.label("Shape");
                         egui::ComboBox::from_id_salt("shape")
                             .selected_text(shape_name(mesh.shape))
                             .show_ui(ui, |ui| {
@@ -49,7 +50,7 @@ impl Panel for Inspector {
                                 }
                             });
                         ui.end_row();
-                        ui.label("Цвет");
+                        ui.label("Color");
                         ui.color_edit_button_rgba_unmultiplied(&mut mesh.color);
                         ui.end_row();
                     });
@@ -61,36 +62,51 @@ impl Panel for Inspector {
 
             let mut remove_camera = false;
             if let Some(cam) = &mut e.camera {
-                component(ui, "Камера", Some(&mut remove_camera), |ui| {
+                component(ui, "Camera", Some(&mut remove_camera), |ui| {
                     egui::Grid::new("camera").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                        ui.label("Угол обзора");
+                        ui.label("Field of view");
                         ui.add(DragValue::new(&mut cam.fov_deg).range(10.0..=170.0).suffix("°"));
                         ui.end_row();
-                        ui.label("Ближняя");
+                        ui.label("Near");
                         ui.add(DragValue::new(&mut cam.near).range(0.001..=100.0).speed(0.01));
                         ui.end_row();
-                        ui.label("Дальняя");
+                        ui.label("Far");
                         ui.add(DragValue::new(&mut cam.far).range(1.0..=100_000.0));
                         ui.end_row();
                     });
-                    ui.weak("Игра смотрит через первую камеру сцены");
+                    ui.weak("The game renders through the first camera");
                 });
             }
             if remove_camera {
                 e.camera = None;
             }
 
+            for c in &components {
+                if (c.has)(e) {
+                    let mut remove = false;
+                    component(ui, c.title, Some(&mut remove), |ui| (c.ui)(ui, e));
+                    if remove {
+                        (c.remove)(e);
+                    }
+                }
+            }
+
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                ui.menu_button("Добавить компонент", |ui| {
+                ui.menu_button("Add Component", |ui| {
+                    for c in &components {
+                        if !(c.has)(e) && ui.button(c.title).clicked() {
+                            (c.add)(e);
+                        }
+                    }
                     if e.mesh.is_none() && ui.button("Mesh Renderer").clicked() {
                         e.mesh = Some(MeshDesc { shape: Shape::Cube, color: [0.8, 0.8, 0.8, 1.0] });
                     }
-                    if e.camera.is_none() && ui.button("Камера").clicked() {
+                    if e.camera.is_none() && ui.button("Camera").clicked() {
                         e.camera = Some(CameraDesc::default());
                     }
                     if e.mesh.is_some() && e.camera.is_some() {
-                        ui.weak("Все компоненты уже добавлены");
+                        ui.weak("All components added");
                     }
                 });
             });
@@ -105,7 +121,7 @@ fn component(ui: &mut egui::Ui, title: &str, remove: Option<&mut bool>, body: im
             ui.label(RichText::new(title).strong());
             if let Some(remove) = remove {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("✖").on_hover_text("Убрать компонент").clicked() {
+                    if ui.small_button("✖").on_hover_text("Remove component").clicked() {
                         *remove = true;
                     }
                 });
@@ -132,7 +148,7 @@ fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
 
 fn shape_name(shape: Shape) -> &'static str {
     match shape {
-        Shape::Cube => "Куб",
-        Shape::Plane => "Плоскость",
+        Shape::Cube => "Cube",
+        Shape::Plane => "Plane",
     }
 }

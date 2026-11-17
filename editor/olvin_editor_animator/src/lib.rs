@@ -21,13 +21,13 @@ pub struct AnimatorPlugin;
 
 impl EditorPlugin for AnimatorPlugin {
     fn name(&self) -> &'static str {
-        "Аниматор"
+        "Animator"
     }
 
     fn build(&self, registry: &mut Registry) {
         registry
-            .add_panel(PanelKind { id: TIMELINE, title: "⏱ Таймлайн", factory: || Box::<Timeline>::default() })
-            .add_workspace_template(WorkspaceTemplate { name: "Анимация", build: animation_layout });
+            .add_panel(PanelKind { id: TIMELINE, title: "⏱ Timeline", factory: || Box::<Timeline>::default() })
+            .add_workspace_template(WorkspaceTemplate { name: "Animation", build: animation_layout });
     }
 }
 
@@ -152,28 +152,28 @@ impl Panel for Timeline {
 impl Timeline {
     fn transport(&mut self, ui: &mut egui::Ui, state: &mut EditorState, clip: &mut Clip) {
         ui.horizontal(|ui| {
-            if ui.button("⏮").on_hover_text("В начало").clicked() {
+            if ui.button("⏮").on_hover_text("To start").clicked() {
                 self.time = 0.0;
             }
             let play = if self.playing { "⏸" } else { "▶" };
-            if ui.button(play).on_hover_text("Пуск / пауза").clicked() {
+            if ui.button(play).on_hover_text("Play / pause").clicked() {
                 self.playing = !self.playing;
             }
-            if ui.button("⏹").on_hover_text("Стоп").clicked() {
+            if ui.button("⏹").on_hover_text("Stop").clicked() {
                 self.playing = false;
                 self.time = 0.0;
             }
-            ui.add(DragValue::new(&mut self.time).range(0.0..=clip.length).speed(0.01).max_decimals(2).suffix(" с"));
-            ui.label("из");
-            ui.add(DragValue::new(&mut clip.length).range(0.1..=600.0).speed(0.05).max_decimals(2).suffix(" с"));
-            ui.checkbox(&mut self.looping, "Цикл");
-            ui.checkbox(&mut self.hold_pose, "Держать позу").on_hover_text("Показывать позу на паузе");
+            ui.add(DragValue::new(&mut self.time).range(0.0..=clip.length).speed(0.01).max_decimals(2).suffix(" s"));
+            ui.label("of");
+            ui.add(DragValue::new(&mut clip.length).range(0.1..=600.0).speed(0.05).max_decimals(2).suffix(" s"));
+            ui.checkbox(&mut self.looping, "Loop");
+            ui.checkbox(&mut self.hold_pose, "Hold pose").on_hover_text("Keep showing the pose while paused");
             ui.separator();
 
             let selected = state.selection.and_then(|id| state.scene.get(id).map(|e| (id, e.clone())));
             let key_button = ui
-                .add_enabled(selected.is_some(), egui::Button::new("◆ Ключ"))
-                .on_hover_text("Записать текущий Transform выбранного объекта в момент на таймлайне");
+                .add_enabled(selected.is_some(), egui::Button::new("◆ Key"))
+                .on_hover_text("Record the selected object's Transform at the playhead");
             if key_button.clicked()
                 && let Some((id, e)) = &selected
             {
@@ -182,11 +182,11 @@ impl Timeline {
                 keys.retain(|k| (k.t - self.time).abs() > 1.0 / 120.0);
                 keys.push(key);
                 keys.sort_by(|a, b| a.t.total_cmp(&b.t));
-                state.info(format!("ключ {:.2} с: {}", self.time, e.name));
+                state.info(format!("key {:.2} s: {}", self.time, e.name));
             }
             if let Some((id, _)) = &selected
                 && clip.tracks.contains_key(id)
-                && ui.button("Удалить дорожку").clicked()
+                && ui.button("Delete Track").clicked()
             {
                 clip.tracks.remove(id);
             }
@@ -223,7 +223,7 @@ impl Timeline {
             painter.text(
                 pos2(x0 + 12.0, ruler.bottom() + 14.0),
                 egui::Align2::LEFT_CENTER,
-                "Выбери объект и нажми «◆ Ключ», сдвинь время, измени объект, снова «◆ Ключ»",
+                "Select an object, press ◆ Key, move the playhead, change the object, press ◆ Key again",
                 egui::FontId::proportional(12.0),
                 ui.visuals().weak_text_color(),
             );
@@ -238,7 +238,7 @@ impl Timeline {
                     theme::ACCENT.gamma_multiply(0.25),
                 );
             }
-            let name = state.scene.get(*id).map(|e| e.name.as_str()).unwrap_or("(удалён)");
+            let name = state.scene.get(*id).map(|e| e.name.as_str()).unwrap_or("(deleted)");
             painter.text(pos2(rect.left() + 8.0, y + ROW_H / 2.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(13.0), ui.visuals().text_color());
             for (i, key) in keys.iter().enumerate() {
                 let c = pos2(x_of(key.t), y + ROW_H / 2.0);
@@ -308,7 +308,7 @@ impl Timeline {
         let x = x_of(self.time);
         painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], (2.0, theme::SELECTED));
         painter.rect_filled(egui::Rect::from_center_size(pos2(x, ruler.top() + 6.0), vec2(10.0, 12.0)), 2.0, theme::SELECTED);
-        response.on_hover_text_at_pointer("ЛКМ — время / тащить ключ · ПКМ по ключу — удалить");
+        response.on_hover_text_at_pointer("LMB: set time / drag key · RMB on a key: delete");
     }
 }
 

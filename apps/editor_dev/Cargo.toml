@@ -1,0 +1,17 @@
+[package]
+name = "editor_dev"
+description = "Development build of olvin-editor with every element linked in"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "olvin-editor-dev"
+path = "src/main.rs"
+
+[dependencies]
+olvin_editor.workspace = true
+olvin_editor_console = { path = "../../editor/olvin_editor_console" }
+olvin_editor_animator = { path = "../../editor/olvin_editor_animator" }
+olvin_editor_csg = { path = "../../editor/olvin_editor_csg" }

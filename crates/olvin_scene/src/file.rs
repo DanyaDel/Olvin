@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
+pub use olvin_csg::{BrushShape, CsgOp};
 use serde::{Deserialize, Serialize};
 
 use crate::{Camera, Transform};
@@ -33,6 +34,17 @@ pub struct EntityDesc {
     pub mesh: Option<MeshDesc>,
     #[serde(default)]
     pub camera: Option<CameraDesc>,
+    /// CSG brush: its geometry is the unit cube scaled by the transform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brush: Option<BrushDesc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrushDesc {
+    pub shape: BrushShape,
+    pub op: CsgOp,
+    /// Linear RGBA of the faces this brush contributes.
+    pub color: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -88,6 +100,7 @@ impl EntityDesc {
             scale: Vec3::ONE,
             mesh: None,
             camera: None,
+            brush: None,
         }
     }
 
@@ -123,6 +136,41 @@ impl SceneFile {
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut EntityDesc> {
         self.entities.iter_mut().find(|e| e.id == id)
+    }
+
+    /// Entity indices in hierarchy (depth-first) order: the order the
+    /// hierarchy panel shows and CSG operations apply in.
+    pub fn hierarchy_order(&self) -> Vec<usize> {
+        fn visit(scene: &SceneFile, parent: Option<u64>, out: &mut Vec<usize>) {
+            for (i, e) in scene.entities.iter().enumerate() {
+                if e.parent == parent {
+                    out.push(i);
+                    visit(scene, Some(e.id), out);
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(self.entities.len());
+        visit(self, None, &mut out);
+        out
+    }
+
+    /// CSG brushes in operation order, placed in the world.
+    pub fn csg_brushes(&self) -> Vec<olvin_csg::BrushInput> {
+        let worlds = self.world_matrices();
+        self.hierarchy_order()
+            .into_iter()
+            .filter_map(|i| {
+                let e = &self.entities[i];
+                let b = e.brush.as_ref()?;
+                Some(olvin_csg::BrushInput {
+                    id: e.id,
+                    shape: b.shape,
+                    op: b.op,
+                    transform: *worlds.get(&e.id)?,
+                    color: b.color,
+                })
+            })
+            .collect()
     }
 
     /// World matrices of all entities, parents resolved.

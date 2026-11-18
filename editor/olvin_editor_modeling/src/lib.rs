@@ -1,10 +1,15 @@
 //! Editor element: Blender-style Edit Mode for polygon meshes (`olvin_mesh`).
-//! Tab toggles Edit Mode; 1/2/3 pick vertices/edges/faces; G E I F K X M and
-//! Ctrl+R work like in Blender.
+//! Tab toggles Edit Mode; 1/2/3 pick vertices/edges/faces; G R S with axis
+//! constraints and typed values, E I F K J X M, Ctrl+R, box select, loops,
+//! X-ray and a move gizmo work like in Blender.
 
+mod cage;
 mod edit;
+mod gizmo;
 mod ops;
 mod panel;
+mod select;
+mod transform;
 
 use std::cell::RefCell;
 
@@ -100,10 +105,20 @@ pub(crate) struct Shared {
     /// Selected vertices; edges and faces are selected through their vertices.
     pub verts: Vec<u32>,
     pub cuts: u32,
+    /// Hidden vertices (H / Alt+H): elements using them are not drawn or picked.
+    pub hidden: Vec<u32>,
+    /// Alt+Z: everything is pickable, nothing is occluded.
+    pub xray: bool,
+    /// Show the move gizmo at the selection.
+    pub gizmo: bool,
+    /// The panel's "Move selection by" offset (world space).
+    pub move_by: Vec3,
+    /// What the viewport is doing (modal status), for the panel.
+    pub status: String,
 }
 
 thread_local! {
-    static SHARED: RefCell<Shared> = RefCell::new(Shared { cuts: 1, ..Default::default() });
+    static SHARED: RefCell<Shared> = RefCell::new(Shared { cuts: 1, gizmo: true, ..Default::default() });
 }
 
 pub(crate) fn shared<R>(f: impl FnOnce(&mut Shared) -> R) -> R {
@@ -123,6 +138,17 @@ pub(crate) fn selected_faces(mesh: &PolyMesh, verts: &[u32]) -> Vec<usize> {
     (0..mesh.faces.len())
         .filter(|&f| mesh.faces[f].iter().all(|v| verts.contains(v)))
         .collect()
+}
+
+/// Per-vertex flags for a vertex list (out-of-range indices are ignored).
+pub(crate) fn mask(n: usize, verts: &[u32]) -> Vec<bool> {
+    let mut on = vec![false; n];
+    for &v in verts {
+        if let Some(x) = on.get_mut(v as usize) {
+            *x = true;
+        }
+    }
+    on
 }
 
 pub(crate) fn face_verts(mesh: &PolyMesh, faces: &[usize]) -> Vec<u32> {
@@ -208,6 +234,48 @@ mod tests {
         ops::apply(&mut state, Op::SelectAll).unwrap();
         let n = shared(|s| s.verts.len());
         assert_eq!(n, mesh(&state, id).positions.len());
+        mesh(&state, id).validate().unwrap();
+    }
+
+    #[test]
+    fn select_hide_duplicate_connect() {
+        let mut state = EditorState::new(None);
+        let id = editing(&mut state, PolyMesh::cube(1.0));
+        shared(|s| s.verts = vec![0]);
+        ops::apply(&mut state, Op::SelectGrow).unwrap();
+        assert_eq!(
+            shared(|s| s.verts.len()),
+            7,
+            "every vertex sharing a face with 0"
+        );
+        ops::apply(&mut state, Op::SelectInvert).unwrap();
+        assert_eq!(shared(|s| s.verts.clone()), [7]);
+        ops::apply(&mut state, Op::Hide).unwrap();
+        ops::apply(&mut state, Op::SelectAll).unwrap();
+        assert_eq!(
+            shared(|s| s.verts.len()),
+            7,
+            "hidden vertices stay unselected"
+        );
+        ops::apply(&mut state, Op::Reveal).unwrap();
+        assert_eq!(shared(|s| (s.verts.clone(), s.hidden.len())), (vec![7], 0));
+
+        ops::apply(&mut state, Op::SelectAll).unwrap();
+        ops::apply(&mut state, Op::Duplicate).unwrap();
+        assert_eq!(mesh(&state, id).faces.len(), 12);
+        ops::apply(&mut state, Op::MoveBy(Vec3::X * 2.0)).unwrap();
+        assert!(shared(|s| s.verts.iter().all(|&v| v >= 8)));
+        assert_eq!(
+            mesh(&state, id).positions[8].x,
+            mesh(&state, id).positions[0].x + 2.0
+        );
+
+        // Connect two opposite corners of the -Z face (0, 3).
+        shared(|s| s.verts = vec![0, 3]);
+        ops::apply(&mut state, Op::Connect).unwrap();
+        assert_eq!(mesh(&state, id).faces.len(), 13);
+        shared(|s| s.verts = vec![0]);
+        assert!(ops::apply(&mut state, Op::Connect).is_err());
         mesh(&state, id).validate().unwrap();
     }
 }

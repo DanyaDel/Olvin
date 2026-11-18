@@ -139,6 +139,9 @@ pub struct EditorState {
     /// vertices); the editor then won't delete or duplicate the object.
     /// Cleared every frame.
     pub tool_owns_keys: bool,
+    /// `tool_owns_keys` of the previous frame: panels drawn before the tool
+    /// (the viewport's own hotkeys) check this one.
+    pub keys_owned_last_frame: bool,
     /// Set every frame by a tool in a modal operation (grab, inset...): the
     /// whole operation becomes one undo step. Cleared every frame.
     pub busy: bool,
@@ -172,6 +175,7 @@ impl EditorState {
             local_space: false,
             snap: SnapSettings::default(),
             tool_owns_keys: false,
+            keys_owned_last_frame: false,
             busy: false,
             ext: Extensions::default(),
             gpu: None,

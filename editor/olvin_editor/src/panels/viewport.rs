@@ -304,6 +304,8 @@ impl Viewport {
             || flying
             || ui.ctx().egui_wants_keyboard_input()
             || self.drag.is_some()
+            // A tool such as Edit Mode uses plain keys (E, R, X, F...) itself.
+            || state.keys_owned_last_frame
         {
             return;
         }

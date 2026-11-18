@@ -5,11 +5,23 @@ use olvin_editor::glam::{Mat4, Vec3};
 use olvin_editor::olvin_scene::file::{MeshDesc, PolyMesh, Shape};
 use olvin_editor::olvin_scene::primitives::Primitive;
 
-use crate::{Mode, face_verts, selected_edges, selected_faces, shared};
+use crate::{Mode, face_verts, mask, selected_edges, selected_faces, shared};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     SelectAll,
+    SelectNone,
+    SelectInvert,
+    SelectLinked,
+    SelectGrow,
+    SelectShrink,
+    Hide,
+    HideUnselected,
+    Reveal,
+    Duplicate,
+    Connect,
+    /// Moves the selection by a world-space offset.
+    MoveBy(Vec3),
     Fill,
     Delete,
     DeleteOnlyFaces,
@@ -26,7 +38,18 @@ pub enum Op {
 impl Op {
     pub fn label(self) -> &'static str {
         match self {
-            Op::SelectAll => "Select All  A",
+            Op::SelectAll => "All  A",
+            Op::SelectNone => "None  Alt+A",
+            Op::SelectInvert => "Invert  Ctrl+I",
+            Op::SelectLinked => "Linked  Ctrl+L",
+            Op::SelectGrow => "Grow  Ctrl+=",
+            Op::SelectShrink => "Shrink  Ctrl+-",
+            Op::Hide => "Hide  H",
+            Op::HideUnselected => "Hide Others  Shift+H",
+            Op::Reveal => "Reveal  Alt+H",
+            Op::Duplicate => "Duplicate  Shift+D",
+            Op::Connect => "Connect Vertices  J",
+            Op::MoveBy(_) => "Move",
             Op::Fill => "Make Face / Fill  F",
             Op::Delete => "Delete  X",
             Op::DeleteOnlyFaces => "Faces → Edges",
@@ -47,21 +70,70 @@ pub fn apply(state: &mut EditorState, op: Op) -> Result<(), String> {
     let Some(id) = shared(|s| s.entity) else {
         return Err("not in Edit Mode".into());
     };
+    let world = state
+        .scene
+        .world_matrices()
+        .get(&id)
+        .copied()
+        .unwrap_or(Mat4::IDENTITY);
     let Some(mesh) = state.scene.get_mut(id).and_then(|e| e.poly.as_mut()) else {
         return Err("no editable mesh".into());
     };
-    let (mode, verts, cuts) = shared(|s| (s.mode, s.verts.clone(), s.cuts.max(1)));
+    let (mode, verts, cuts, hidden) =
+        shared(|s| (s.mode, s.verts.clone(), s.cuts.max(1), s.hidden.clone()));
+    let n = mesh.positions.len();
+    let shown: Vec<u32> = {
+        let h = mask(n, &hidden);
+        (0..n as u32).filter(|v| !h[*v as usize]).collect()
+    };
     let faces = selected_faces(mesh, &verts);
     let edges = selected_edges(mesh, &verts);
     let mut select: Option<Vec<u32>> = None;
     match op {
         Op::SelectAll => {
-            select = Some(if verts.len() == mesh.positions.len() {
+            select = Some(if verts.len() >= shown.len() {
                 Vec::new()
             } else {
-                (0..mesh.positions.len() as u32).collect()
+                shown
             });
         }
+        Op::SelectNone => select = Some(Vec::new()),
+        Op::SelectInvert => {
+            let on = mask(n, &verts);
+            select = Some(shown.into_iter().filter(|v| !on[*v as usize]).collect());
+        }
+        Op::SelectLinked => select = Some(mesh.linked(&verts)),
+        Op::SelectGrow => select = Some(mesh.grow_selection(&verts)),
+        Op::SelectShrink => select = Some(mesh.shrink_selection(&verts)),
+        Op::Hide | Op::HideUnselected => {
+            let on = mask(n, &verts);
+            let hide = shown
+                .into_iter()
+                .filter(|v| on[*v as usize] == (op == Op::Hide));
+            shared(|s| s.hidden.extend(hide));
+            select = Some(if op == Op::Hide {
+                Vec::new()
+            } else {
+                verts.clone()
+            });
+        }
+        Op::Reveal => {
+            shared(|s| s.hidden.clear());
+            select = Some(hidden.clone());
+        }
+        Op::Duplicate => {
+            if verts.is_empty() {
+                return Err("nothing selected to duplicate".into());
+            }
+            select = Some(mesh.duplicate(&verts));
+        }
+        Op::Connect => {
+            let [a, b] = verts[..] else {
+                return Err("select exactly two vertices to connect".into());
+            };
+            mesh.connect_vertices(a, b).map_err(|e| e.to_string())?;
+        }
+        Op::MoveBy(d) => mesh.translate_vertices(&verts, world.inverse().transform_vector3(d)),
         Op::Fill => match mode {
             Mode::Edge if !edges.is_empty() => {
                 let f = mesh.fill_edges(&edges).map_err(|e| e.to_string())?;
@@ -102,7 +174,10 @@ pub fn apply(state: &mut EditorState, op: Op) -> Result<(), String> {
         Op::MergeByDistance => {
             let (removed, _) = mesh.merge_by_distance(1e-3);
             state.info(format!("merged {removed} vertices"));
-            shared(|s| s.verts.clear());
+            shared(|s| {
+                s.verts.clear();
+                s.hidden.clear();
+            });
             return Ok(());
         }
         Op::Subdivide => {
@@ -127,7 +202,13 @@ pub fn apply(state: &mut EditorState, op: Op) -> Result<(), String> {
             select = Some(mesh.loop_cut(a, b, cuts).map_err(|e| e.to_string())?);
         }
     }
-    if let Some(v) = select {
+    // Removing vertices renumbers them: the hidden set no longer applies.
+    if mesh.positions.len() < n || op == Op::Smooth {
+        shared(|s| s.hidden.clear());
+    }
+    if let Some(mut v) = select {
+        let h = shared(|s| mask(mesh.positions.len(), &s.hidden));
+        v.retain(|i| !h.get(*i as usize).copied().unwrap_or(true));
         shared(|s| s.verts = v);
     }
     Ok(())

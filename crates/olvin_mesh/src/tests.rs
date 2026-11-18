@@ -570,3 +570,114 @@ fn ops_on_invalid_input_do_not_panic() {
     assert_closed(&c);
     assert_eq!(c.edges().len(), 12);
 }
+
+/// Cube with every face cut into 2×2 quads: all mid-edge and face-centre
+/// vertices are 4-valent, corners are poles.
+fn grid_cube() -> PolyMesh {
+    let mut m = PolyMesh::cube(2.0);
+    m.subdivide_faces(&[0, 1, 2, 3, 4, 5], 1);
+    m
+}
+
+/// An edge from the +Y face centre to a mid-edge vertex.
+fn belt_edge(m: &PolyMesh) -> (u32, u32) {
+    let at = |p: Vec3| {
+        m.positions
+            .iter()
+            .position(|q| q.distance(p) < EPS)
+            .unwrap() as u32
+    };
+    (at(Vec3::Y), at(Vec3::new(1.0, 1.0, 0.0)))
+}
+
+#[test]
+fn edge_loop_goes_around_the_cube() {
+    let m = grid_cube();
+    let (a, b) = belt_edge(&m);
+    let edges = m.edge_loop(a, b);
+    assert_eq!(edges.len(), 8, "a closed belt through four face centres");
+    // Closed: every vertex of the loop is used by exactly two of its edges.
+    let mut uses: HashMap<u32, u32> = HashMap::new();
+    for v in edges.iter().flatten() {
+        *uses.entry(*v).or_default() += 1;
+    }
+    assert!(uses.values().all(|&n| n == 2));
+    assert!(
+        edges
+            .iter()
+            .flatten()
+            .all(|v| m.positions[*v as usize].z.abs() < EPS)
+    );
+}
+
+#[test]
+fn edge_loop_stops_at_poles_and_follows_borders() {
+    let mut m = PolyMesh::plane(3.0);
+    m.subdivide_faces(&[0], 2);
+    // An interior edge crosses the 3×3 grid: 3 edges, ending at the border.
+    let at = |p: Vec3| {
+        m.positions
+            .iter()
+            .position(|q| q.distance(p) < EPS)
+            .unwrap() as u32
+    };
+    let (a, b) = (
+        at(Vec3::new(-0.5, 0.0, -0.5)),
+        at(Vec3::new(0.5, 0.0, -0.5)),
+    );
+    assert_eq!(m.edge_loop(a, b).len(), 3);
+    // A border edge walks the whole border.
+    let (c, d) = (
+        at(Vec3::new(-1.5, 0.0, -1.5)),
+        at(Vec3::new(-0.5, 0.0, -1.5)),
+    );
+    assert_eq!(m.edge_loop(c, d).len(), 12);
+    assert!(m.edge_loop(a, a).is_empty());
+}
+
+#[test]
+fn ring_selects_face_loop() {
+    let m = grid_cube();
+    let (a, b) = belt_edge(&m);
+    let (faces, edges) = m.ring(a, b);
+    assert_eq!(faces.len(), 8, "the belt of quads crossing the edge");
+    assert_eq!(edges.len(), 8);
+    for f in faces {
+        let c = m.face_center(f);
+        assert!(c.x.abs() > 0.4 || c.y.abs() > 0.4, "belt faces around Z");
+    }
+}
+
+#[test]
+fn linked_grow_shrink() {
+    let mut m = PolyMesh::cube(1.0);
+    let copies = m.duplicate(&(0..8).collect::<Vec<_>>());
+    m.translate_vertices(&copies, Vec3::X * 3.0);
+    m.validate().unwrap();
+    assert_eq!((m.positions.len(), m.faces.len()), (16, 12));
+    assert_eq!(m.linked(&[0]), (0..8).collect::<Vec<_>>());
+    assert_eq!(m.linked(&[copies[3]]), (8..16).collect::<Vec<_>>());
+
+    let mut g = PolyMesh::plane(3.0);
+    g.subdivide_faces(&[0], 2);
+    let centre: Vec<u32> =
+        g.faces[(0..9).find(|&f| g.face_center(f).length() < EPS).unwrap()].clone();
+    let grown = g.grow_selection(&centre);
+    assert_eq!(grown.len(), 16, "the whole 3×3 grid");
+    assert_eq!(
+        g.shrink_selection(&grown).len(),
+        16,
+        "border of the mesh is kept"
+    );
+    assert!(g.shrink_selection(&centre).is_empty());
+}
+
+#[test]
+fn duplicate_edges_and_vertices() {
+    let mut m = PolyMesh::cube(1.0);
+    let copies = m.duplicate(&[0, 1, 2]);
+    assert_eq!(copies.len(), 3);
+    assert_eq!(m.faces.len(), 6, "no face lies entirely in the selection");
+    assert_eq!(m.wire.len(), 2, "edges 0-1 and 0-2 are copied as wire");
+    m.validate().unwrap();
+}

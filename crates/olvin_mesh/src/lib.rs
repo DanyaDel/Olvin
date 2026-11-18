@@ -20,6 +20,7 @@ mod normals;
 mod query;
 mod smooth;
 mod triangulate;
+mod walk;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,7 @@ use std::fmt;
 use glam::Vec3;
 
 pub use triangulate::ear_clip;
+pub use walk::Adjacency;
 
 /// An editable polygon mesh.
 #[derive(Clone, Debug, Default, PartialEq)]

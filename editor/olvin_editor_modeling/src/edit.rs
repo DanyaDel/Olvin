@@ -1,42 +1,47 @@
-//! Edit Mode in the scene view: the cage, selection and Blender's modal
-//! operations (grab, extrude, inset, loop cut, knife).
+//! Edit Mode in the scene view: the cage, selection (click, box, loops,
+//! X-ray), the move gizmo and Blender's modal operations.
 
 use olvin_editor::egui::{
-    self, Align2, Color32, FontId, Key, Modifiers, PointerButton, Pos2, Stroke, vec2,
+    self, Align2, Color32, Event, FontId, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke,
+    vec2,
 };
-use olvin_editor::ext::{Geometry, ToolDesc, ViewCamera, ViewportCtx, ViewportExtension};
+use olvin_editor::ext::{Geometry, ToolDesc, ViewportCtx, ViewportExtension};
 use olvin_editor::glam::{Mat4, Vec3};
 use olvin_editor::olvin_scene::file::PolyMesh;
 use olvin_editor::{EditorState, theme, tools};
 
+use crate::cage::{Cage, HOT, Hover};
+use crate::gizmo::Gizmo;
 use crate::ops::{self, Op, make_editable};
+use crate::select::{Combine, combine};
+use crate::transform::{self, Constraint, Input, Kind, NumInput, Transform, normal_basis};
 use crate::{EDIT_TOOL, Mode, face_verts, selected_edges, selected_faces, shared};
 
 const TOOLS: [ToolDesc; 1] = [ToolDesc {
     id: EDIT_TOOL,
     label: "Edit Mesh",
-    tooltip: "Blender-style Edit Mode (Tab): 1/2/3 select mode, G E I F K X M, Ctrl+R",
+    tooltip: "Blender-style Edit Mode (Tab): 1/2/3 select mode, G R S, E I K J F X M, Ctrl+R, Alt+Z X-ray",
     key: None,
 }];
 
-const HOT: Color32 = Color32::from_rgb(255, 225, 70);
-const WIRE: Color32 = Color32::from_rgb(20, 22, 26);
-
 enum Modal {
-    /// Move the selection; `axis` constrains it (X/Y/Z).
-    Grab {
-        before: PolyMesh,
-        verts: Vec<u32>,
-        axis: Option<Vec3>,
-        center: Vec3,
-        start: Pos2,
-    },
+    Transform(Box<Transform>),
     Inset {
         before: PolyMesh,
         faces: Vec<usize>,
         center: Pos2,
         start: f32,
+        num: NumInput,
     },
+}
+
+impl Modal {
+    fn before(&self) -> &PolyMesh {
+        match self {
+            Modal::Transform(t) => &t.before,
+            Modal::Inset { before, .. } => before,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -49,6 +54,14 @@ enum Sub {
 pub struct EditMode {
     modal: Option<Modal>,
     sub: Sub,
+    cage: Cage,
+    /// Box select in progress: where the drag started.
+    boxing: Option<Pos2>,
+    /// Edit Mode was active last frame (to win back plain keys the core
+    /// viewport turns into tool switches).
+    was_editing: bool,
+    /// egui's Ctrl+=/- zoom is off while editing (it is grow / shrink here).
+    zoom_off: bool,
 }
 
 impl Default for EditMode {
@@ -56,15 +69,12 @@ impl Default for EditMode {
         Self {
             modal: None,
             sub: Sub::None,
+            cage: Cage::default(),
+            boxing: None,
+            was_editing: false,
+            zoom_off: false,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-enum Hover {
-    Vertex(u32),
-    Edge(u32, u32, f32),
-    Face(usize),
 }
 
 impl ViewportExtension for EditMode {
@@ -76,12 +86,16 @@ impl ViewportExtension for EditMode {
 
     fn interact(&mut self, ctx: &mut ViewportCtx) -> bool {
         let keys_free = ctx.response.hovered() && !ctx.ui.ctx().egui_wants_keyboard_input();
-        if keys_free && pressed(ctx, Key::Tab) {
-            self.toggle(ctx);
+        let mut editing = self.reclaim(ctx, keys_free);
+        if keys_free && self.modal.is_none() && pressed(ctx, Key::Tab) {
+            editing = self.toggle(ctx, editing);
         }
-        if ctx.tool != EDIT_TOOL {
+        self.keyboard_zoom(ctx, editing);
+        self.was_editing = editing;
+        if !editing {
             self.modal = None;
             self.sub = Sub::None;
+            self.boxing = None;
             return false;
         }
         ctx.state.tool_owns_keys = true;
@@ -97,6 +111,7 @@ impl ViewportExtension for EditMode {
             shared(|s| {
                 s.entity = Some(id);
                 s.verts.clear();
+                s.hidden.clear();
             });
         }
         let world = ctx
@@ -106,83 +121,144 @@ impl ViewportExtension for EditMode {
             .get(&id)
             .copied()
             .unwrap_or(Mat4::IDENTITY);
-        let points: Vec<Vec3> = mesh
-            .positions
-            .iter()
-            .map(|p| world.transform_point3(*p))
-            .collect();
 
-        if let Some(modal) = &mut self.modal {
+        if self.modal.is_some() {
             ctx.state.busy = true;
-            match update_modal(ctx, modal, id, world) {
-                ModalResult::Continue => {}
-                ModalResult::Confirm => self.modal = None,
-                ModalResult::Cancel => {
-                    if let Some(before) = modal_before(modal)
-                        && let Some(e) = ctx.state.scene.get_mut(id)
-                    {
-                        e.poly = Some(before);
-                    }
-                    self.modal = None;
-                }
-            }
-            draw_cage(ctx, &mesh, &points, None);
+            self.run_modal(ctx, id);
+            let mesh = ctx
+                .state
+                .scene
+                .get(id)
+                .and_then(|e| e.poly.clone())
+                .unwrap_or(mesh);
+            self.cage.update(&mesh, world, ctx.camera, true);
+            let mode = shared(|s| s.mode);
+            self.cage.draw(ctx.painter, ctx.camera, mode, None);
+            self.draw_modal_guides(ctx);
+            self.overlay(ctx, mode);
             return true;
+        }
+        self.cage.update(&mesh, world, ctx.camera, false);
+
+        let (mode, xray, show_gizmo) = shared(|s| (s.mode, s.xray, s.gizmo));
+        let (alt, shift, ctrl) = ctx
+            .ui
+            .input(|i| (i.modifiers.alt, i.modifiers.shift, i.modifiers.command));
+        let pointer = ctx.response.hover_pos();
+        let gizmo = self
+            .cage
+            .pivot()
+            .filter(|_| show_gizmo && self.sub == Sub::None && self.boxing.is_none())
+            .and_then(|p| Gizmo::new(ctx.camera, p));
+        let gizmo_hover = gizmo.as_ref().zip(pointer).and_then(|(g, p)| g.hit(p));
+        let pick_mode = if alt || self.sub != Sub::None {
+            Mode::Edge
+        } else {
+            mode
+        };
+        let hover = pointer
+            .filter(|_| gizmo_hover.is_none() && self.boxing.is_none())
+            .and_then(|p| self.cage.pick(pick_mode, ctx.camera, p, xray));
+        self.cage.draw(ctx.painter, ctx.camera, mode, hover);
+        if let Some(g) = &gizmo {
+            g.draw(ctx.painter, gizmo_hover);
         }
 
         if keys_free {
-            self.hotkeys(ctx, &mesh, &points, world, id);
+            self.hotkeys(ctx, &mesh, world, id, hover);
         }
-        let mode = shared(|s| s.mode);
-        let pointer = ctx.response.hover_pos();
-        let hover = pointer.and_then(|p| {
-            let m = match self.sub {
-                Sub::LoopCut | Sub::Knife(_) => Mode::Edge,
-                Sub::None => mode,
-            };
-            pick(m, &mesh, &points, ctx.camera, p)
-        });
-        draw_cage(ctx, &mesh, &points, hover);
-        self.overlay(ctx, mode);
-
         if ctx.ui.input(|i| i.key_pressed(Key::Escape)) {
             self.sub = Sub::None;
         }
-        if ctx.response.clicked_by(PointerButton::Primary) {
-            self.click(ctx, id, hover);
+
+        // LMB drag: a gizmo handle moves the selection, empty space boxes.
+        if self.modal.is_none() && !alt && ctx.response.drag_started_by(PointerButton::Primary) {
+            let origin = ctx.ui.input(|i| i.pointer.press_origin()).or(pointer);
+            let handle = gizmo.as_ref().zip(origin).and_then(|(g, p)| g.hit(p));
+            if let Some(h) = handle {
+                let start = origin.unwrap_or_default();
+                self.start_transform(ctx, Kind::Move, "Move", mesh.clone(), world, start);
+                if let Some(Modal::Transform(t)) = &mut self.modal {
+                    t.drag = true;
+                    t.constraint = h.constraint();
+                }
+            } else if self.sub == Sub::None {
+                self.boxing = origin;
+            }
         }
+        if let Some(start) = self.boxing {
+            let end = pointer.unwrap_or(start);
+            let r = Rect::from_two_pos(start, end);
+            ctx.painter
+                .rect_filled(r, 0.0, Color32::from_white_alpha(12));
+            ctx.painter.rect_stroke(
+                r,
+                0.0,
+                (1.0, Color32::from_white_alpha(200)),
+                egui::StrokeKind::Middle,
+            );
+            if !ctx.ui.input(|i| i.pointer.primary_down()) {
+                let how = if ctrl {
+                    Combine::Subtract
+                } else if shift {
+                    Combine::Add
+                } else {
+                    Combine::Replace
+                };
+                let picked = self.cage.boxed(mode, &mesh, r);
+                shared(|s| combine(&mut s.verts, &picked, how));
+                self.boxing = None;
+            }
+        }
+        if ctx.response.clicked_by(PointerButton::Primary) && gizmo_hover.is_none() {
+            self.click(ctx, id, hover, alt, shift, ctrl);
+        }
+        shared(|s| s.status.clear());
+        self.overlay(ctx, mode);
         true
     }
 }
 
-enum ModalResult {
-    Continue,
-    Confirm,
-    Cancel,
-}
-
-fn modal_before(m: &Modal) -> Option<PolyMesh> {
-    match m {
-        Modal::Grab { before, .. } | Modal::Inset { before, .. } => Some(before.clone()),
-    }
-}
-
 impl EditMode {
-    fn toggle(&mut self, ctx: &mut ViewportCtx) {
-        if ctx.tool == EDIT_TOOL {
+    /// Whether Edit Mode is on. The core viewport leaves plain keys alone
+    /// while a tool owns them (`EditorState::keys_owned_last_frame`).
+    fn reclaim(&self, ctx: &mut ViewportCtx, _keys_free: bool) -> bool {
+        ctx.tool == EDIT_TOOL
+    }
+
+    fn keyboard_zoom(&mut self, ctx: &ViewportCtx, editing: bool) {
+        if editing != self.zoom_off {
+            ctx.ui
+                .ctx()
+                .options_mut(|o| o.zoom_with_keyboard = !editing);
+            self.zoom_off = editing;
+        }
+    }
+
+    /// Tab: enter or leave Edit Mode. Returns whether Edit Mode is now on.
+    fn toggle(&mut self, ctx: &mut ViewportCtx, editing: bool) -> bool {
+        if editing {
             ctx.state.tool = tools::MOVE.to_owned();
             self.modal = None;
             self.sub = Sub::None;
-        } else if let Some(id) = ctx.state.selection {
-            match make_editable(ctx.state, id) {
-                Ok(()) => {
-                    ctx.state.tool = EDIT_TOOL.to_owned();
-                    shared(|s| {
-                        s.entity = Some(id);
-                        s.verts.clear();
-                    });
-                }
-                Err(e) => ctx.state.warn(e),
+            return false;
+        }
+        let Some(id) = ctx.state.selection else {
+            return false;
+        };
+        match make_editable(ctx.state, id) {
+            Ok(()) => {
+                ctx.state.tool = EDIT_TOOL.to_owned();
+                shared(|s| {
+                    s.entity = Some(id);
+                    s.verts.clear();
+                    s.hidden.clear();
+                });
+                true
+            }
+            Err(e) => {
+                ctx.state.warn(e);
+                false
             }
         }
     }
@@ -191,9 +267,9 @@ impl EditMode {
         &mut self,
         ctx: &mut ViewportCtx,
         mesh: &PolyMesh,
-        points: &[Vec3],
         world: Mat4,
         id: u64,
+        hover: Option<Hover>,
     ) {
         for (key, mode) in [
             (Key::Num1, Mode::Vertex),
@@ -204,19 +280,45 @@ impl EditMode {
                 shared(|s| s.mode = mode);
             }
         }
-        let shift_n = ctx.ui.input(|i| i.key_pressed(Key::N) && i.modifiers.shift);
-        let ctrl_r = ctx
-            .ui
-            .input(|i| i.key_pressed(Key::R) && i.modifiers.command);
+        let ui = ctx.ui;
+        let alt = |k| chord_ui(ui, Modifiers::ALT, k);
+        let shift = |k| chord_ui(ui, Modifiers::SHIFT, k);
+        let ctrl = |k| chord_ui(ui, Modifiers::COMMAND, k);
+        let ctrl_any = |keys: &[Key]| {
+            ui.input(|i| {
+                i.modifiers.command && !i.modifiers.alt && keys.iter().any(|k| i.key_pressed(*k))
+            })
+        };
+        if alt(Key::Z) {
+            shared(|s| s.xray = !s.xray);
+        }
         let op = if pressed(ctx, Key::A) {
             Some(Op::SelectAll)
+        } else if alt(Key::A) {
+            Some(Op::SelectNone)
+        } else if ctrl(Key::I) {
+            Some(Op::SelectInvert)
+        } else if ctrl(Key::L) {
+            Some(Op::SelectLinked)
+        } else if ctrl_any(&[Key::Plus, Key::Equals]) {
+            Some(Op::SelectGrow)
+        } else if ctrl_any(&[Key::Minus]) {
+            Some(Op::SelectShrink)
+        } else if pressed(ctx, Key::H) {
+            Some(Op::Hide)
+        } else if shift(Key::H) {
+            Some(Op::HideUnselected)
+        } else if alt(Key::H) {
+            Some(Op::Reveal)
         } else if pressed(ctx, Key::F) {
             Some(Op::Fill)
+        } else if pressed(ctx, Key::J) {
+            Some(Op::Connect)
         } else if pressed(ctx, Key::X) || pressed(ctx, Key::Delete) {
             Some(Op::Delete)
         } else if pressed(ctx, Key::M) {
             Some(Op::Merge)
-        } else if shift_n {
+        } else if shift(Key::N) {
             Some(Op::RecalculateNormals)
         } else {
             None
@@ -226,7 +328,19 @@ impl EditMode {
         {
             ctx.state.warn(e);
         }
-        if ctrl_r {
+        // L / Shift+L: (de)select everything linked to the element under the cursor.
+        for (mods, how) in [
+            (Modifiers::NONE, Combine::Add),
+            (Modifiers::SHIFT, Combine::Subtract),
+        ] {
+            if chord(ctx, mods, Key::L)
+                && let Some(h) = hover
+            {
+                let linked = mesh.linked(&h.verts(mesh));
+                shared(|s| combine(&mut s.verts, &linked, how));
+            }
+        }
+        if ctrl(Key::R) {
             self.sub = Sub::LoopCut;
         } else if pressed(ctx, Key::K) {
             self.sub = Sub::Knife(None);
@@ -236,29 +350,62 @@ impl EditMode {
         if verts.is_empty() {
             return;
         }
-        let start = ctx.response.hover_pos().unwrap_or_default();
-        let center = verts.iter().map(|&v| points[v as usize]).sum::<Vec3>() / verts.len() as f32;
-        if pressed(ctx, Key::G) {
-            self.modal = Some(Modal::Grab {
-                before: mesh.clone(),
-                verts,
-                axis: None,
-                center,
-                start,
-            });
+        let start = ctx.response.hover_pos().unwrap_or(ctx.camera.rect.center());
+        for (key, kind) in [
+            (Key::G, Kind::Move),
+            (Key::R, Kind::Rotate),
+            (Key::S, Kind::Scale),
+        ] {
+            if pressed(ctx, key) {
+                self.start_transform(ctx, kind, "Move", mesh.clone(), world, start);
+            }
+        }
+        if shift(Key::D) {
+            match ops::apply(ctx.state, Op::Duplicate) {
+                Ok(()) => {
+                    if let Some(m) = ctx.state.scene.get(id).and_then(|e| e.poly.clone()) {
+                        self.start_transform(ctx, Kind::Move, "Duplicate", m, world, start);
+                    }
+                }
+                Err(e) => ctx.state.warn(e),
+            }
         } else if pressed(ctx, Key::E) {
-            self.extrude(ctx, mesh, world, id, center, start);
+            self.extrude(ctx, mesh, world, id, start);
         } else if pressed(ctx, Key::I) {
             let faces = selected_faces(mesh, &verts);
-            if let (false, Some(c)) = (faces.is_empty(), ctx.camera.project(center)) {
+            let center = self.cage.pivot().and_then(|p| ctx.camera.project(p));
+            if let (false, Some(c)) = (faces.is_empty(), center) {
                 self.modal = Some(Modal::Inset {
                     before: mesh.clone(),
                     faces,
                     center: c,
                     start: start.distance(c),
+                    num: NumInput::default(),
                 });
             }
         }
+    }
+
+    /// Starts G / R / S on the current selection of `mesh` (already stored
+    /// in the scene).
+    fn start_transform(
+        &mut self,
+        ctx: &ViewportCtx,
+        kind: Kind,
+        title: &'static str,
+        mesh: PolyMesh,
+        world: Mat4,
+        mouse: Pos2,
+    ) {
+        let verts = shared(|s| s.verts.clone());
+        if verts.is_empty() {
+            return;
+        }
+        let local = orientation(&mesh, &verts, world);
+        let mut t = Transform::new(kind, title, mesh, verts, world, local, mouse);
+        // Seed the summary so the first frame already shows the op name.
+        t.step(ctx.camera, ctx.snap, &Input::default());
+        self.modal = Some(Modal::Transform(Box::new(t)));
     }
 
     /// E: extrude, then grab (faces along their normal, like Blender).
@@ -268,47 +415,170 @@ impl EditMode {
         mesh: &PolyMesh,
         world: Mat4,
         id: u64,
-        center: Vec3,
         start: Pos2,
     ) {
         let (mode, verts) = shared(|s| (s.mode, s.verts.clone()));
         let mut m = mesh.clone();
-        let (moved, axis) = match mode {
+        let (moved, along_normal) = match mode {
             Mode::Face => {
                 let faces = selected_faces(&m, &verts);
                 if faces.is_empty() {
                     return;
                 }
-                let normal: Vec3 = faces.iter().map(|&f| m.face_normal(f)).sum();
                 let top = m.extrude_faces(&faces, Vec3::ZERO);
-                (
-                    face_verts(&m, &top),
-                    Some(world.transform_vector3(normal).normalize_or_zero()),
-                )
+                (face_verts(&m, &top), true)
             }
             Mode::Edge => {
                 let edges = selected_edges(&m, &verts);
-                (m.extrude_edges(&edges, Vec3::ZERO), None)
+                (m.extrude_edges(&edges, Vec3::ZERO), false)
             }
-            Mode::Vertex => (m.extrude_vertices(&verts, Vec3::ZERO), None),
+            Mode::Vertex => (m.extrude_vertices(&verts, Vec3::ZERO), false),
         };
         if moved.is_empty() {
             return;
         }
+        // The normal orientation comes from the faces before extrusion.
+        let local = orientation(mesh, &verts, world);
         if let Some(e) = ctx.state.scene.get_mut(id) {
             e.poly = Some(m.clone());
         }
-        shared(|s| s.verts = moved.clone());
-        self.modal = Some(Modal::Grab {
-            before: m,
-            verts: moved,
-            axis: axis.filter(|a| *a != Vec3::ZERO),
-            center,
-            start,
-        });
+        shared(|s| s.verts = moved);
+        self.start_transform(ctx, Kind::Move, "Extrude", m, world, start);
+        if let Some(Modal::Transform(t)) = &mut self.modal {
+            (t.local, t.local_name) = local;
+            if along_normal {
+                t.constraint = Some(Constraint {
+                    axis: 2,
+                    plane: false,
+                    local: true,
+                });
+            }
+        }
     }
 
-    fn click(&mut self, ctx: &mut ViewportCtx, id: u64, hover: Option<Hover>) {
+    fn run_modal(&mut self, ctx: &mut ViewportCtx, id: u64) {
+        let Some(modal) = &mut self.modal else {
+            return;
+        };
+        let (enter, cancel, click, released) = ctx.ui.input(|i| {
+            (
+                i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
+                i.pointer.button_pressed(PointerButton::Secondary) || i.key_pressed(Key::Escape),
+                i.pointer.button_pressed(PointerButton::Primary),
+                !i.pointer.primary_down(),
+            )
+        });
+        if cancel {
+            let before = modal.before().clone();
+            if let Some(e) = ctx.state.scene.get_mut(id) {
+                e.poly = Some(before);
+            }
+            self.modal = None;
+            return;
+        }
+        let input = modal_input(ctx);
+        let (mesh, confirm, status) = match modal {
+            Modal::Transform(t) => {
+                let m = t.step(ctx.camera, ctx.snap, &input);
+                let confirm = enter || if t.drag { released } else { click };
+                (
+                    transform::apply(&t.before, &t.verts, t.world, m),
+                    confirm,
+                    t.summary.clone(),
+                )
+            }
+            Modal::Inset {
+                before,
+                faces,
+                center,
+                start,
+                num,
+            } => {
+                for c in &input.chars {
+                    num.type_char(*c);
+                }
+                if input.backspace {
+                    num.backspace();
+                }
+                let amount = num.value().unwrap_or_else(|| {
+                    let mouse = input.mouse.unwrap_or(*center);
+                    let pixels = (*start - mouse.distance(*center)).max(0.0);
+                    let world = ctx
+                        .state
+                        .scene
+                        .world_matrices()
+                        .get(&id)
+                        .copied()
+                        .unwrap_or(Mat4::IDENTITY);
+                    let at = world.transform_point3(before.face_center(faces[0]));
+                    ctx.snap.value(pixels * ctx.camera.world_per_point(at))
+                });
+                let mut m = before.clone();
+                let inner = m.inset_faces(faces, amount.max(0.0));
+                shared(|s| s.verts = face_verts(&m, &inner));
+                let typed = if num.is_active() {
+                    format!("  [{}|]", num.text())
+                } else {
+                    String::new()
+                };
+                (m, enter || click, format!("Inset{typed}  {amount:.3}"))
+            }
+        };
+        if let Some(e) = ctx.state.scene.get_mut(id) {
+            e.poly = Some(mesh);
+        }
+        shared(|s| s.status = status);
+        if confirm {
+            self.modal = None;
+        }
+    }
+
+    /// Constraint axis lines, the pivot and the dashed line to the mouse.
+    fn draw_modal_guides(&self, ctx: &ViewportCtx) {
+        let mouse = ctx.ui.ctx().pointer_hover_pos();
+        let status = shared(|s| s.status.clone());
+        if let Some(Modal::Transform(t)) = &self.modal {
+            let axes = t.axes();
+            let on = transform::active_axes(t.constraint);
+            if t.constraint.is_some() {
+                let far = ctx.camera.world_per_point(t.pivot) * 4000.0;
+                for i in (0..3).filter(|&i| on[i]) {
+                    let (a, b) = (t.pivot - axes[i] * far, t.pivot + axes[i] * far);
+                    ctx.camera
+                        .line(ctx.painter, a, b, (1.5, theme::AXES[i].gamma_multiply(0.9)));
+                }
+            }
+            if let Some(c) = ctx.camera.project(t.pivot) {
+                ctx.painter.circle_filled(c, 3.0, Color32::WHITE);
+                if t.kind != Kind::Move
+                    && let Some(m) = mouse
+                {
+                    let stroke = Stroke::new(1.0, Color32::from_white_alpha(170));
+                    ctx.painter
+                        .extend(egui::Shape::dashed_line(&[c, m], stroke, 6.0, 4.0));
+                }
+            }
+        }
+        if let Some(m) = mouse {
+            ctx.painter.text(
+                m + vec2(16.0, -16.0),
+                Align2::LEFT_BOTTOM,
+                status,
+                FontId::monospace(12.0),
+                HOT,
+            );
+        }
+    }
+
+    fn click(
+        &mut self,
+        ctx: &mut ViewportCtx,
+        id: u64,
+        hover: Option<Hover>,
+        alt: bool,
+        shift: bool,
+        ctrl: bool,
+    ) {
         let Some(mesh) = ctx.state.scene.get_mut(id).and_then(|e| e.poly.as_mut()) else {
             return;
         };
@@ -333,282 +603,195 @@ impl EditMode {
                 }
                 self.sub = Sub::None;
             }
-            (Sub::None, hover) => {
-                let add = ctx.ui.input(|i| i.modifiers.shift);
-                let picked = match hover {
-                    Some(Hover::Vertex(v)) => vec![v],
-                    Some(Hover::Edge(a, b, _)) => vec![a, b],
-                    Some(Hover::Face(f)) => mesh.faces[f].clone(),
-                    None => Vec::new(),
+            (Sub::None, Some(Hover::Edge(a, b, _))) if alt => {
+                // Alt: edge loop; Ctrl+Alt: edge ring; face mode: face loop.
+                let mode = shared(|s| s.mode);
+                let picked: Vec<u32> = if mode == Mode::Face {
+                    face_verts(mesh, &mesh.ring(a, b).0)
+                } else if ctrl {
+                    mesh.ring(a, b).1.into_iter().flatten().collect()
+                } else {
+                    mesh.edge_loop(a, b).into_iter().flatten().collect()
                 };
+                let how = if shift {
+                    Combine::Add
+                } else {
+                    Combine::Replace
+                };
+                shared(|s| combine(&mut s.verts, &picked, how));
+            }
+            (Sub::None, hover) => {
+                let picked = hover.map(|h| h.verts(mesh)).unwrap_or_default();
                 shared(|s| {
-                    if !add {
-                        s.verts = picked;
-                    } else if !picked.is_empty() && picked.iter().all(|v| s.verts.contains(v)) {
-                        s.verts.retain(|v| !picked.contains(v));
-                    } else {
-                        for v in picked {
-                            if !s.verts.contains(&v) {
-                                s.verts.push(v);
-                            }
-                        }
-                    }
+                    let all_on = !picked.is_empty() && picked.iter().all(|v| s.verts.contains(v));
+                    let how = match (shift, all_on) {
+                        (false, _) => Combine::Replace,
+                        (true, true) => Combine::Subtract,
+                        (true, false) => Combine::Add,
+                    };
+                    combine(&mut s.verts, &picked, how);
                 });
             }
             _ => {}
         }
     }
 
+    /// Header pill (top left): select mode, X-ray and gizmo toggles and what
+    /// is going on; plus a short key hint at the bottom.
     fn overlay(&self, ctx: &ViewportCtx, mode: Mode) {
         let rect = ctx.camera.rect;
-        let count = shared(|s| s.verts.len());
-        let mode_name = match self.sub {
-            Sub::LoopCut => "LOOP CUT · click an edge · Esc cancel".to_owned(),
-            Sub::Knife(None) => "KNIFE · click the first edge".to_owned(),
-            Sub::Knife(Some(_)) => "KNIFE · click a second edge of the same face".to_owned(),
-            Sub::None => format!("EDIT MODE · {mode:?} · {count} selected"),
+        let font = FontId::proportional(12.5);
+        let (count, xray, gizmo, status) =
+            shared(|s| (s.verts.len(), s.xray, s.gizmo, s.status.clone()));
+        let text = match self.sub {
+            Sub::LoopCut => "Loop Cut: click an edge".to_owned(),
+            Sub::Knife(None) => "Knife: click the first edge".to_owned(),
+            Sub::Knife(Some(_)) => "Knife: click a second edge of the same face".to_owned(),
+            Sub::None if !status.is_empty() => status,
+            Sub::None => format!("{count} selected"),
         };
-        let pos = rect.center_top() + vec2(0.0, 56.0);
-        let galley =
-            ctx.painter
-                .layout_no_wrap(mode_name, FontId::proportional(13.0), Color32::WHITE);
-        let bg = egui::Rect::from_center_size(pos, galley.size() + vec2(20.0, 8.0));
+        let galley = ctx.painter.layout_no_wrap(text, font.clone(), theme::TEXT);
+        const BUTTON: f32 = 52.0;
+        const H: f32 = 22.0;
+        let origin = rect.left_top() + vec2(8.0, 42.0);
+        let width = 5.0 * BUTTON + 2.0 * 8.0 + galley.size().x + 22.0;
+        let bg = Rect::from_min_size(origin, vec2(width, H + 6.0));
         ctx.painter
-            .rect_filled(bg, 8.0, theme::ACCENT.gamma_multiply(0.85));
-        ctx.painter
-            .galley(bg.min + vec2(10.0, 4.0), galley, Color32::WHITE);
+            .rect_filled(bg, 7.0, Color32::from_black_alpha(130));
+
+        let mut x = origin.x + 3.0;
+        let button = |x: &mut f32, label: &str, on: bool, tip: &str| -> bool {
+            let r = Rect::from_min_size(Pos2::new(*x, origin.y + 3.0), vec2(BUTTON - 2.0, H));
+            *x += BUTTON;
+            let id = ctx.response.id.with(("edit-pill", label));
+            let resp = ctx.ui.interact(r, id, Sense::click());
+            let fill = if on {
+                theme::ACCENT
+            } else if resp.hovered() {
+                Color32::from_white_alpha(28)
+            } else {
+                Color32::TRANSPARENT
+            };
+            ctx.painter.rect_filled(r, 5.0, fill);
+            let color = if on || resp.hovered() {
+                Color32::WHITE
+            } else {
+                theme::TEXT_WEAK
+            };
+            ctx.painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                label,
+                font.clone(),
+                color,
+            );
+            resp.on_hover_text(tip).clicked()
+        };
+        for (m, label, tip) in [
+            (Mode::Vertex, "Vertex", "Vertex select (1)"),
+            (Mode::Edge, "Edge", "Edge select (2)"),
+            (Mode::Face, "Face", "Face select (3)"),
+        ] {
+            if button(&mut x, label, mode == m, tip) {
+                shared(|s| s.mode = m);
+            }
+        }
+        x += 8.0;
+        if button(
+            &mut x,
+            "X-ray",
+            xray,
+            "See and select through the mesh (Alt+Z)",
+        ) {
+            shared(|s| s.xray = !s.xray);
+        }
+        if button(&mut x, "Gizmo", gizmo, "Move gizmo at the selection") {
+            shared(|s| s.gizmo = !s.gizmo);
+        }
+        x += 8.0;
+        let text_pos = Pos2::new(x + 6.0, bg.center().y - galley.size().y * 0.5);
+        ctx.painter.galley(text_pos, galley, theme::TEXT);
+
+        let keys = match (&self.modal, self.sub) {
+            (Some(Modal::Transform(_)), _) => {
+                "LMB/Enter confirm · RMB/Esc cancel · X/Y/Z axis, twice local · Shift+X/Y/Z plane · type a value · Ctrl snap · Shift precise"
+            }
+            (Some(Modal::Inset { .. }), _) => {
+                "move towards the centre · type a value · LMB/Enter confirm · RMB/Esc cancel"
+            }
+            (None, Sub::LoopCut | Sub::Knife(_)) => "click an edge · Esc cancel",
+            (None, Sub::None) => {
+                "G/R/S transform · E extrude · I inset · Shift+D duplicate · Ctrl+R loop cut · K knife · J connect · drag box · Alt+click loop · L linked · H hide · Alt+Z X-ray · Tab exit"
+            }
+        };
         ctx.painter.text(
             rect.left_bottom() + vec2(8.0, -24.0),
             Align2::LEFT_BOTTOM,
-            "1/2/3 mode · A all · G move (X/Y/Z axis) · E extrude · I inset · Ctrl+R loop cut · K knife · F fill · X delete · M merge · Tab exit",
+            keys,
             FontId::proportional(11.0),
             Color32::from_white_alpha(130),
         );
     }
 }
 
-fn update_modal(ctx: &mut ViewportCtx, modal: &mut Modal, id: u64, world: Mat4) -> ModalResult {
-    let (confirm, cancel) = ctx.ui.input(|i| {
-        (
-            i.pointer.button_pressed(PointerButton::Primary) || i.key_pressed(Key::Enter),
-            i.pointer.button_pressed(PointerButton::Secondary) || i.key_pressed(Key::Escape),
-        )
-    });
-    if cancel {
-        return ModalResult::Cancel;
+/// Second orientation for double axis presses: the average normal of the
+/// selected faces, else the object's own axes.
+fn orientation(mesh: &PolyMesh, verts: &[u32], world: Mat4) -> ([Vec3; 3], &'static str) {
+    let faces = selected_faces(mesh, verts);
+    let normal: Vec3 = faces.iter().map(|&f| mesh.face_area_vector(f)).sum();
+    if normal.length_squared() > 1e-12 {
+        let n = world.inverse().transpose().transform_vector3(normal);
+        return (normal_basis(n), "Normal");
     }
-    let Some(mouse) = ctx.ui.ctx().pointer_hover_pos() else {
-        return ModalResult::Continue;
-    };
-    let inverse = world.inverse();
-    match modal {
-        Modal::Grab {
-            before,
-            verts,
-            axis,
-            center,
-            start,
-        } => {
-            for (key, a) in [(Key::X, Vec3::X), (Key::Y, Vec3::Y), (Key::Z, Vec3::Z)] {
-                if ctx.ui.input(|i| i.key_pressed(key)) {
-                    *axis = if *axis == Some(a) { None } else { Some(a) };
-                }
-            }
-            let (axis_now, origin) = (*axis, *center);
-            let point = |p: Pos2| -> Option<Vec3> {
-                let ray = ctx.camera.ray(p);
-                match axis_now {
-                    Some(a) => Some(origin + a * ray.closest_on_line(origin, a)?),
-                    None => Some(ray.at(ray.plane(origin, ctx.camera.forward)?)),
-                }
-            };
-            let (Some(from), Some(to)) = (point(*start), point(mouse)) else {
-                return ModalResult::Continue;
-            };
-            let delta = match axis {
-                Some(a) => *a * ctx.snap.value((to - from).dot(*a)),
-                None => ctx.snap.vec(to - from),
-            };
-            let mut m = before.clone();
-            m.translate_vertices(verts, inverse.transform_vector3(delta));
-            if let Some(e) = ctx.state.scene.get_mut(id) {
-                e.poly = Some(m);
-            }
-            let label = match axis {
-                Some(a) if *a == Vec3::X => "X",
-                Some(a) if *a == Vec3::Y => "Y",
-                Some(a) if *a == Vec3::Z => "Z",
-                Some(_) => "normal",
-                None => "free",
-            };
-            status(
-                ctx,
-                mouse,
-                format!("move {label}  {:.3} {:.3} {:.3}", delta.x, delta.y, delta.z),
-            );
-        }
-        Modal::Inset {
-            before,
-            faces,
-            center,
-            start,
-        } => {
-            let pixels = (*start - mouse.distance(*center)).max(0.0);
-            let amount = ctx.snap.value(
-                pixels
-                    * ctx
-                        .camera
-                        .world_per_point(world.transform_point3(before.face_center(faces[0]))),
-            );
-            let mut m = before.clone();
-            let inner = m.inset_faces(faces, amount.max(0.0));
-            shared(|s| s.verts = face_verts(&m, &inner));
-            if let Some(e) = ctx.state.scene.get_mut(id) {
-                e.poly = Some(m);
-            }
-            status(
-                ctx,
-                mouse,
-                format!("inset {amount:.3}  (move towards the centre)"),
-            );
-        }
-    }
-    if confirm {
-        ModalResult::Confirm
-    } else {
-        ModalResult::Continue
-    }
+    let (_, rotation, _) = world.to_scale_rotation_translation();
+    ([Vec3::X, Vec3::Y, Vec3::Z].map(|a| rotation * a), "Local")
 }
 
-fn draw_cage(ctx: &ViewportCtx, mesh: &PolyMesh, points: &[Vec3], hover: Option<Hover>) {
-    let (mode, verts) = shared(|s| (s.mode, s.verts.clone()));
-    let project = |i: u32| ctx.camera.project(points[i as usize]);
-    // Faces: selected (face mode) and hovered tints.
-    for f in 0..mesh.faces.len() {
-        let selected = mode == Mode::Face && mesh.faces[f].iter().all(|v| verts.contains(v));
-        let hot = matches!(hover, Some(Hover::Face(h)) if h == f);
-        if !(selected || hot) {
-            continue;
-        }
-        let fill = if hot {
-            HOT.gamma_multiply(0.22)
-        } else {
-            theme::SELECTED.gamma_multiply(0.28)
-        };
-        for [a, b, c] in mesh.face_triangles(f) {
-            if let (Some(a), Some(b), Some(c)) = (project(a), project(b), project(c)) {
-                ctx.painter.add(egui::Shape::convex_polygon(
-                    vec![a, b, c],
-                    fill,
-                    Stroke::NONE,
-                ));
-            }
-        }
-    }
-    for [a, b] in mesh.edges() {
-        let on = verts.contains(&a) && verts.contains(&b);
-        let (pa, pb) = (points[a as usize], points[b as usize]);
-        ctx.camera.line(ctx.painter, pa, pb, (2.5, WIRE));
-        ctx.camera.line(
-            ctx.painter,
-            pa,
-            pb,
-            (
-                if on { 2.0 } else { 1.0 },
-                if on {
-                    theme::SELECTED
-                } else {
-                    Color32::from_gray(200)
-                },
-            ),
-        );
-    }
-    if let Some(Hover::Edge(a, b, t)) = hover {
-        let (pa, pb) = (points[a as usize], points[b as usize]);
-        ctx.camera.line(ctx.painter, pa, pb, (3.0, HOT));
-        if let Some(s) = ctx.camera.project(pa.lerp(pb, t)) {
-            ctx.painter.circle_filled(s, 3.5, HOT);
-        }
-    }
-    let size = if mode == Mode::Vertex { 6.0 } else { 3.5 };
-    for (i, p) in points.iter().enumerate() {
-        if let Some(s) = ctx.camera.project(*p) {
-            let color = if verts.contains(&(i as u32)) {
-                theme::SELECTED
-            } else {
-                Color32::from_gray(15)
-            };
-            ctx.painter.rect_filled(
-                egui::Rect::from_center_size(s, vec2(size, size)),
-                1.0,
-                color,
-            );
-            ctx.painter.rect_stroke(
-                egui::Rect::from_center_size(s, vec2(size, size)),
-                1.0,
-                (1.0, Color32::from_gray(220)),
-                egui::StrokeKind::Middle,
-            );
-        }
-    }
-    if let Some(Hover::Vertex(v)) = hover
-        && let Some(s) = project(v)
-    {
-        ctx.painter.circle_stroke(s, 7.0, (2.0, HOT));
-    }
-}
-
-fn pick(
-    mode: Mode,
-    mesh: &PolyMesh,
-    points: &[Vec3],
-    camera: &ViewCamera,
-    p: Pos2,
-) -> Option<Hover> {
-    match mode {
-        Mode::Vertex => points
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| Some((i, camera.project(*v)?.distance(p))))
-            .filter(|(_, d)| *d < 10.0)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| Hover::Vertex(i as u32)),
-        Mode::Edge => mesh
-            .edges()
-            .into_iter()
-            .filter_map(|[a, b]| {
-                let (sa, sb) = (
-                    camera.project(points[a as usize])?,
-                    camera.project(points[b as usize])?,
-                );
-                let ab = sb - sa;
-                let t = ((p - sa).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.02, 0.98);
-                Some((a, b, t, p.distance(sa + ab * t)))
-            })
-            .filter(|e| e.3 < 8.0)
-            .min_by(|x, y| x.3.total_cmp(&y.3))
-            .map(|(a, b, t, _)| Hover::Edge(a, b, t)),
-        Mode::Face => {
-            let ray = camera.ray(p);
-            (0..mesh.faces.len())
-                .filter_map(|f| {
-                    mesh.face_triangles(f)
-                        .into_iter()
-                        .filter_map(|[a, b, c]| {
-                            ray.triangle(points[a as usize], points[b as usize], points[c as usize])
-                        })
-                        .min_by(|x, y| x.total_cmp(y))
-                        .map(|t| (f, t))
+/// This frame's input for a running modal operation.
+fn modal_input(ctx: &ViewportCtx) -> Input {
+    ctx.ui.input(|i| {
+        let plain = !i.modifiers.command && !i.modifiers.alt;
+        let key = |k| plain && i.key_pressed(k);
+        Input {
+            mouse: i.pointer.hover_pos(),
+            precise: i.modifiers.shift,
+            axis_keys: [(Key::X, 0), (Key::Y, 1), (Key::Z, 2)]
+                .into_iter()
+                .filter(|(k, _)| key(*k))
+                .map(|(_, a)| (a, i.modifiers.shift))
+                .collect(),
+            chars: i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Text(t) => Some(t.chars()),
+                    _ => None,
                 })
-                .min_by(|x, y| x.1.total_cmp(&y.1))
-                .map(|(f, _)| Hover::Face(f))
+                .flatten()
+                .collect(),
+            backspace: i.key_pressed(Key::Backspace),
+            switch: [
+                (Key::G, Kind::Move),
+                (Key::R, Kind::Rotate),
+                (Key::S, Kind::Scale),
+            ]
+            .into_iter()
+            .find(|(k, _)| key(*k) && !i.modifiers.shift)
+            .map(|(_, kind)| kind),
         }
-    }
+    })
 }
 
 fn pressed(ctx: &ViewportCtx, key: Key) -> bool {
-    ctx.ui
-        .input(|i| i.key_pressed(key) && i.modifiers.matches_exact(Modifiers::NONE))
+    chord(ctx, Modifiers::NONE, key)
+}
+
+fn chord(ctx: &ViewportCtx, mods: Modifiers, key: Key) -> bool {
+    chord_ui(ctx.ui, mods, key)
+}
+
+fn chord_ui(ui: &egui::Ui, mods: Modifiers, key: Key) -> bool {
+    ui.input(|i| i.key_pressed(key) && i.modifiers.matches_exact(mods))
 }
 
 fn hint(ctx: &ViewportCtx, text: &str) {
@@ -618,15 +801,5 @@ fn hint(ctx: &ViewportCtx, text: &str) {
         text,
         FontId::proportional(13.0),
         Color32::from_white_alpha(200),
-    );
-}
-
-fn status(ctx: &ViewportCtx, at: Pos2, text: String) {
-    ctx.painter.text(
-        at + vec2(16.0, -16.0),
-        Align2::LEFT_BOTTOM,
-        text,
-        FontId::monospace(12.0),
-        HOT,
     );
 }

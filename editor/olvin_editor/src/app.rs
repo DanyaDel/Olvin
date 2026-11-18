@@ -639,6 +639,7 @@ impl eframe::App for EditorApp {
             ctx.request_repaint();
         }
         self.tint(&ctx);
+        self.state.keys_owned_last_frame = self.state.tool_owns_keys;
         self.state.tool_owns_keys = false;
 
         let bar = egui::Frame::new()

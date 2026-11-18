@@ -1,6 +1,7 @@
 //! The Modeling panel: Edit Mode controls and every operation as a button.
 
 use olvin_editor::egui::{self, DragValue, RichText};
+use olvin_editor::glam::{Mat4, Vec3};
 use olvin_editor::{EditorState, Panel, tools};
 
 use crate::ops::{self, Op, make_editable};
@@ -34,6 +35,7 @@ impl Panel for ModelingPanel {
             });
             ui.add_space(6.0);
 
+            let mut run = None;
             section(ui, "Select", |ui| {
                 ui.horizontal(|ui| {
                     shared(|s| {
@@ -42,13 +44,41 @@ impl Panel for ModelingPanel {
                         }
                     });
                 });
-                let n = shared(|s| s.verts.len());
-                ui.weak(format!("{n} vertices selected · Shift+click adds · A toggles all"));
+                grid(ui, &mut run, &[Op::SelectAll, Op::SelectNone, Op::SelectInvert, Op::SelectLinked, Op::SelectGrow, Op::SelectShrink]);
+                grid(ui, &mut run, &[Op::Hide, Op::HideUnselected, Op::Reveal]);
+                ui.horizontal(|ui| {
+                    shared(|s| {
+                        ui.toggle_value(&mut s.xray, "X-ray").on_hover_text("Select through the mesh (Alt+Z)");
+                        ui.toggle_value(&mut s.gizmo, "Gizmo").on_hover_text("Move gizmo at the selection");
+                    });
+                });
+                let (n, hidden) = shared(|s| (s.verts.len(), s.hidden.len()));
+                let hidden = if hidden > 0 { format!(" · {hidden} hidden") } else { String::new() };
+                ui.weak(format!("{n} vertices selected{hidden}"));
+                ui.weak("Click · Shift+click adds · drag: box (Shift adds, Ctrl subtracts) · Alt+click: loop · Ctrl+Alt+click: ring · L: linked under cursor");
             });
 
-            let mut run = None;
+            section(ui, "Transform", |ui| {
+                match pivot(state) {
+                    Some(p) => ui.label(format!("Pivot (median)  {:.3}  {:.3}  {:.3}", p.x, p.y, p.z)),
+                    None => ui.weak("Nothing selected"),
+                };
+                ui.horizontal(|ui| {
+                    ui.label("Move by");
+                    shared(|s| {
+                        for (i, c) in ["X", "Y", "Z"].into_iter().enumerate() {
+                            ui.add(DragValue::new(&mut s.move_by[i]).speed(0.01).prefix(format!("{c} ")));
+                        }
+                    });
+                    if ui.button("Apply").clicked() {
+                        run = Some(Op::MoveBy(shared(|s| s.move_by)));
+                    }
+                });
+                ui.weak("Viewport: G move · R rotate · S scale, then X/Y/Z (twice: local / normal), Shift+X/Y/Z plane, type a value, Ctrl snap, Shift precise");
+            });
+
             section(ui, "Create", |ui| {
-                grid(ui, &mut run, &[Op::Fill]);
+                grid(ui, &mut run, &[Op::Fill, Op::Duplicate, Op::Connect]);
                 ui.weak("E extrude · I inset · K knife · Ctrl+R loop cut (in the viewport)");
             });
             section(ui, "Cut", |ui| {
@@ -85,6 +115,24 @@ impl Panel for ModelingPanel {
             }
         });
     }
+}
+
+/// Median of the selected vertices in world space.
+fn pivot(state: &EditorState) -> Option<Vec3> {
+    let id = shared(|s| s.entity)?;
+    let mesh = state.scene.get(id)?.poly.as_ref()?;
+    let world = state
+        .scene
+        .world_matrices()
+        .get(&id)
+        .copied()
+        .unwrap_or(Mat4::IDENTITY);
+    let verts: Vec<Vec3> = shared(|s| s.verts.clone())
+        .into_iter()
+        .filter_map(|v| mesh.positions.get(v as usize))
+        .map(|p| world.transform_point3(*p))
+        .collect();
+    (!verts.is_empty()).then(|| verts.iter().sum::<Vec3>() / verts.len() as f32)
 }
 
 fn grid(ui: &mut egui::Ui, run: &mut Option<Op>, ops: &[Op]) {

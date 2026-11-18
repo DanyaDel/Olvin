@@ -41,10 +41,37 @@ pub struct Environment {
     /// ACES filmic tonemapping; off = plain clamp.
     pub filmic: bool,
     pub fog: Option<FogDesc>,
+    /// What's drawn behind everything.
+    pub skybox: Sky,
     /// Shadows are drawn this far from the camera.
     pub shadow_distance: f32,
     /// Shadow map resolution (512..4096).
     pub shadow_resolution: u32,
+}
+
+/// The background of the scene (Unity's skybox).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum Sky {
+    /// Flat `Environment::background`.
+    #[default]
+    Color,
+    /// Gradient sky with a sun disc at the first directional light. Linear colours.
+    Procedural {
+        zenith: [f32; 3],
+        horizon: [f32; 3],
+        ground: [f32; 3],
+        /// Angular radius of the sun disc, degrees (0 = no disc).
+        sun_size: f32,
+    },
+    /// Equirectangular panorama (`.hdr`, `.exr`, `.png`, `.jpg`), path relative
+    /// to the project's `assets/`.
+    Texture { path: String, rotation_deg: f32, intensity: f32 },
+}
+
+impl Sky {
+    pub fn procedural() -> Self {
+        Sky::Procedural { zenith: [0.18, 0.32, 0.62], horizon: [0.62, 0.7, 0.8], ground: [0.12, 0.11, 0.1], sun_size: 1.5 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,6 +91,7 @@ impl Default for Environment {
             exposure: 1.0,
             filmic: true,
             fog: None,
+            skybox: Sky::Color,
             shadow_distance: 60.0,
             shadow_resolution: 2048,
         }
@@ -153,6 +181,11 @@ pub struct EntityDesc {
     /// CSG brush: its geometry is the unit cube scaled by the transform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brush: Option<BrushDesc>,
+    /// Material asset (`*.mat.ron`, path relative to the project's `assets/`)
+    /// for the mesh, the edited mesh or the faces this brush contributes.
+    /// `None`: plain `color` (mesh/brush colour), no textures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light: Option<LightDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +448,7 @@ impl EntityDesc {
             camera: None,
             brush: None,
             poly: None,
+            material: None,
             light: None,
             collider: None,
             rigidbody: None,

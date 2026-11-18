@@ -2,6 +2,8 @@
 
 #[cfg(feature = "serde")]
 pub mod file;
+#[cfg(feature = "serde")]
+pub mod material;
 pub mod primitives;
 
 use glam::camera::rh::{proj::directx, view};

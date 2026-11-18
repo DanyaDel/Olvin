@@ -115,11 +115,21 @@ fn run(cli: Cli) -> Result<()> {
             let project = Project::create(&parent, &name, &config.engine, &catalog)?;
             config.register(project.root())?;
             config.save()?;
-            let installed: Vec<_> =
-                project.installed(&catalog).iter().map(|m| m.id.as_str()).collect();
-            println!("создан {} (движок: {})", project.root().display(), config.engine);
+            let installed: Vec<_> = project
+                .installed(&catalog)
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect();
+            println!(
+                "создан {} (движок: {})",
+                project.root().display(),
+                config.engine
+            );
             println!("модули: {}", installed.join(", "));
-            println!("запуск: cd {} && cargo run --release", project.root().display());
+            println!(
+                "запуск: cd {} && cargo run --release",
+                project.root().display()
+            );
         }
         Cmd::List { project } => {
             let project = open(project.as_deref()).ok();
@@ -151,7 +161,11 @@ fn run(cli: Cli) -> Result<()> {
             }
             project.save()?;
         }
-        Cmd::Remove { modules, project, force } => {
+        Cmd::Remove {
+            modules,
+            project,
+            force,
+        } => {
             let mut project = open(project.as_deref())?;
             for id in &modules {
                 if project.remove(&catalog, id, force)? {
@@ -229,7 +243,11 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
         EditorCmd::List => {
             println!("База (всегда): сцена, иерархия, инспектор, ассеты");
             for m in &catalog.editor_modules {
-                let mark = if install.is_generated() && current.contains(&m.id) { "[x]" } else { "[ ]" };
+                let mark = if install.is_generated() && current.contains(&m.id) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
                 println!("  {mark} {:<9} {} — {}", m.id, m.name, m.description);
             }
             if install.is_stale(&config.engine) {
@@ -274,11 +292,31 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
     build_editor(&install, catalog, config, &selection)
 }
 
-fn build_editor(install: &EditorInstall, catalog: &Catalog, config: &HubConfig, ids: &[String]) -> Result<()> {
+fn build_editor(
+    install: &EditorInstall,
+    catalog: &Catalog,
+    config: &HubConfig,
+    ids: &[String],
+) -> Result<()> {
     install.write(&config.engine, catalog, ids)?;
-    let names: Vec<_> = catalog.editor_modules.iter().filter(|m| ids.contains(&m.id)).map(|m| m.name.as_str()).collect();
-    println!("сборка редактора (элементы: {})…", if names.is_empty() { "только база".into() } else { names.join(", ") });
-    let status = install.build_command().status().context("не удалось запустить cargo")?;
+    let names: Vec<_> = catalog
+        .editor_modules
+        .iter()
+        .filter(|m| ids.contains(&m.id))
+        .map(|m| m.name.as_str())
+        .collect();
+    println!(
+        "сборка редактора (элементы: {})…",
+        if names.is_empty() {
+            "только база".into()
+        } else {
+            names.join(", ")
+        }
+    );
+    let status = install
+        .build_command()
+        .status()
+        .context("не удалось запустить cargo")?;
     if !status.success() {
         bail!("сборка редактора не удалась ({status})");
     }

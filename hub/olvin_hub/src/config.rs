@@ -47,7 +47,9 @@ impl EngineSource {
     pub fn crate_dependency(&self, repo_path: &str) -> toml_edit::InlineTable {
         let mut dep = toml_edit::InlineTable::new();
         match self {
-            Self::Path(path) => dep.insert("path", path.join(repo_path).display().to_string().into()),
+            Self::Path(path) => {
+                dep.insert("path", path.join(repo_path).display().to_string().into())
+            }
             Self::Git(url) => dep.insert("git", url.as_str().into()),
         };
         dep
@@ -80,7 +82,8 @@ impl HubConfig {
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
         match fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).with_context(|| format!("не удалось прочитать {}", path.display())),
+            Ok(text) => toml::from_str(&text)
+                .with_context(|| format!("не удалось прочитать {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("не удалось прочитать {}", path.display())),
         }

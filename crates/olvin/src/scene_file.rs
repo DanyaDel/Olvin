@@ -54,7 +54,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         if !e.tag.is_empty() {
             b.add(Tag(e.tag.clone()));
         }
-        if let Some(poly) = &e.poly {
+        if let Some(poly) = e.poly.as_ref().filter(|_| e.brush.is_none()) {
             // Edited mesh: its own geometry, and the triangles for a Mesh Collider.
             let (positions, normals, indices) = poly.triangulate();
             let color = e.mesh.as_ref().map_or([0.8; 4], |m| m.color);
@@ -85,15 +85,10 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         }
         // A brush with a Rigidbody leaves the static level and becomes its own
         // body: its convex geometry (local space; the Transform scales it).
-        if let (Some(brush), Some(_)) = (&e.brush, &e.rigidbody) {
-            let input = olvin_csg::BrushInput {
-                id: e.id,
-                shape: brush.shape,
-                op: CsgOp::Add,
-                transform: glam::Mat4::IDENTITY,
-                color: brush.color,
-                vertices: brush.vertices.clone(),
-            };
+        if let (Some(brush), Some(_)) = (&e.brush, &e.rigidbody)
+            && let Some(mut input) = e.brush_input(glam::Mat4::IDENTITY)
+        {
+            input.op = CsgOp::Add;
             let tri = olvin_csg::TriMesh::from_polygons(&olvin_csg::build(&[input]));
             let vertices = tri
                 .positions

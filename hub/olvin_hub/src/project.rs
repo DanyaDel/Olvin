@@ -17,13 +17,17 @@ impl Project {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         let path = root.join("Cargo.toml");
-        let text =
-            fs::read_to_string(&path).with_context(|| format!("не удалось прочитать {}", path.display()))?;
-        let doc: DocumentMut =
-            text.parse().with_context(|| format!("не удалось разобрать {}", path.display()))?;
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("не удалось прочитать {}", path.display()))?;
+        let doc: DocumentMut = text
+            .parse()
+            .with_context(|| format!("не удалось разобрать {}", path.display()))?;
         let project = Self { root, doc };
         if project.olvin().is_none() {
-            bail!("{} не проект Olvin: нет зависимости `olvin`", path.display());
+            bail!(
+                "{} не проект Olvin: нет зависимости `olvin`",
+                path.display()
+            );
         }
         Ok(project)
     }
@@ -38,8 +42,18 @@ impl Project {
     }
 
     /// Creates `<parent>/<name>` with the catalog's default modules.
-    pub fn create(parent: &Path, name: &str, engine: &EngineSource, catalog: &Catalog) -> Result<Self> {
-        let defaults: Vec<&str> = catalog.modules.iter().filter(|m| m.default).map(|m| m.id.as_str()).collect();
+    pub fn create(
+        parent: &Path,
+        name: &str,
+        engine: &EngineSource,
+        catalog: &Catalog,
+    ) -> Result<Self> {
+        let defaults: Vec<&str> = catalog
+            .modules
+            .iter()
+            .filter(|m| m.default)
+            .map(|m| m.id.as_str())
+            .collect();
         Self::create_with(parent, name, engine, catalog, &defaults)
     }
 
@@ -61,16 +75,18 @@ impl Project {
             bail!("{} уже существует", root.display());
         }
         fs::create_dir_all(root.join("src"))?;
-        let graphical = ["window", "render", "scenes"].iter().all(|m| modules.contains(m));
+        let graphical = ["window", "render", "scenes"]
+            .iter()
+            .all(|m| modules.contains(m));
         for (file, content) in template::files(name, graphical) {
             fs::write(root.join(file), content)?;
         }
 
         let mut doc: DocumentMut = template::cargo_toml(name).parse()?;
-        doc["dependencies"]
-            .as_table_like_mut()
-            .unwrap()
-            .insert("olvin", Item::Value(Value::InlineTable(engine.dependency())));
+        doc["dependencies"].as_table_like_mut().unwrap().insert(
+            "olvin",
+            Item::Value(Value::InlineTable(engine.dependency())),
+        );
         let mut project = Self { root, doc };
         for id in modules {
             project.add(catalog, id)?;
@@ -87,12 +103,20 @@ impl Project {
     pub fn modified(&self) -> Option<std::time::SystemTime> {
         ["Cargo.toml", "assets/scenes/main.scene.ron", "src/main.rs"]
             .iter()
-            .filter_map(|f| fs::metadata(self.root.join(f)).and_then(|m| m.modified()).ok())
+            .filter_map(|f| {
+                fs::metadata(self.root.join(f))
+                    .and_then(|m| m.modified())
+                    .ok()
+            })
             .max()
     }
 
     pub fn name(&self) -> &str {
-        self.doc.get("package").and_then(|p| p.get("name")).and_then(Item::as_str).unwrap_or("?")
+        self.doc
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(Item::as_str)
+            .unwrap_or("?")
     }
 
     pub fn is_installed(&self, module: &Module) -> bool {
@@ -103,7 +127,11 @@ impl Project {
     }
 
     pub fn installed<'c>(&self, catalog: &'c Catalog) -> Vec<&'c Module> {
-        catalog.modules.iter().filter(|m| self.is_installed(m)).collect()
+        catalog
+            .modules
+            .iter()
+            .filter(|m| self.is_installed(m))
+            .collect()
     }
 
     /// Installs a module and whatever it requires. Returns ids actually added.
@@ -120,7 +148,9 @@ impl Project {
 
     /// Uninstalls a module. Refuses if installed modules require it, unless `force`.
     pub fn remove(&mut self, catalog: &Catalog, id: &str, force: bool) -> Result<bool> {
-        let Some(module) = catalog.get(id) else { bail!("нет модуля `{id}`") };
+        let Some(module) = catalog.get(id) else {
+            bail!("нет модуля `{id}`")
+        };
         if !self.is_installed(module) {
             return Ok(false);
         }
@@ -135,7 +165,11 @@ impl Project {
         }
         match &module.source {
             Source::Olvin { feature } => {
-                if let Some(features) = self.olvin_mut()?.get_mut("features").and_then(Item::as_array_mut) {
+                if let Some(features) = self
+                    .olvin_mut()?
+                    .get_mut("features")
+                    .and_then(Item::as_array_mut)
+                {
                     features.retain(|v| v.as_str() != Some(feature));
                     features.fmt();
                 }
@@ -149,7 +183,8 @@ impl Project {
 
     pub fn save(&self) -> Result<()> {
         let path = self.root.join("Cargo.toml");
-        fs::write(&path, self.doc.to_string()).with_context(|| format!("не удалось записать {}", path.display()))
+        fs::write(&path, self.doc.to_string())
+            .with_context(|| format!("не удалось записать {}", path.display()))
     }
 
     fn install(&mut self, module: &Module) -> Result<()> {
@@ -166,13 +201,24 @@ impl Project {
                 features.push(feature.as_str());
                 features.fmt();
             }
-            Source::Crate { name, version, features } => {
+            Source::Crate {
+                name,
+                version,
+                features,
+            } => {
                 let item = if features.is_empty() {
                     toml_edit::value(version.as_str())
                 } else {
                     let mut dep = InlineTable::new();
                     dep.insert("version", version.as_str().into());
-                    dep.insert("features", features.iter().map(String::as_str).collect::<Array>().into());
+                    dep.insert(
+                        "features",
+                        features
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Array>()
+                            .into(),
+                    );
                     Item::Value(dep.into())
                 };
                 self.deps_mut().insert(name, item);
@@ -189,7 +235,9 @@ impl Project {
         if self.doc.get("dependencies").is_none() {
             self.doc["dependencies"] = toml_edit::table();
         }
-        self.doc["dependencies"].as_table_like_mut().expect("[dependencies] is a table")
+        self.doc["dependencies"]
+            .as_table_like_mut()
+            .expect("[dependencies] is a table")
     }
 
     fn olvin(&self) -> Option<&dyn TableLike> {
@@ -207,14 +255,23 @@ impl Project {
         self.olvin()
             .and_then(|o| o.get("features"))
             .and_then(Item::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    let ok = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let ok = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if !ok {
         bail!("`{name}`: только латиница, цифры, `_` и `-`, начинаться с буквы");
     }
@@ -239,7 +296,12 @@ mod tests {
         let engine = EngineSource::default();
         let mut p = Project::create(&dir, "my_game", &engine, &catalog).unwrap();
 
-        let ids = |p: &Project| p.installed(&catalog).iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        let ids = |p: &Project| {
+            p.installed(&catalog)
+                .iter()
+                .map(|m| m.id.clone())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(ids(&p), ["window", "render", "scenes"]);
 
         // requires pulls in serde; re-adding is a no-op.
@@ -255,7 +317,10 @@ mod tests {
         assert_eq!(reopened.name(), "my_game");
         assert_eq!(ids(&reopened), ["render", "scenes", "serde"]);
         let text = fs::read_to_string(p.root().join("Cargo.toml")).unwrap();
-        assert!(text.contains(r#"serde = { version = "1", features = ["derive"] }"#), "{text}");
+        assert!(
+            text.contains(r#"serde = { version = "1", features = ["derive"] }"#),
+            "{text}"
+        );
 
         assert!(Project::create(&dir, "my_game", &engine, &catalog).is_err());
         assert!(Project::create(&dir, "1bad name", &engine, &catalog).is_err());

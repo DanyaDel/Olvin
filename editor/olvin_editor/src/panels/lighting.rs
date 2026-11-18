@@ -1,5 +1,5 @@
-//! Lighting window (Unity's Window → Rendering → Lighting): the scene's
-//! environment, presets and every light in the scene at a glance.
+//! Lighting window: presets and every light in the scene at a glance. The
+//! environment itself is edited in Settings → Rendering (`environment_ui`).
 
 use egui::{DragValue, RichText};
 use olvin_scene::file::{Environment, FogDesc, LightKind};
@@ -12,70 +12,97 @@ pub struct Lighting;
 
 impl Panel for Lighting {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            presets(ui, state);
-            let env = &mut state.scene.environment;
-            section(ui, "🌤 Environment", None, |ui| {
-                grid(ui, "env", |ui| {
-                    row(ui, "Sky", |ui| {
-                        ui.color_edit_button_rgb(&mut env.sky);
-                    });
-                    row(ui, "Ground", |ui| {
-                        ui.color_edit_button_rgb(&mut env.ground);
-                    });
-                    row(ui, "Intensity", |ui| drag(ui, &mut env.ambient_intensity, 0.0..=8.0, 0.01, ""));
-                    row(ui, "Background", |ui| {
-                        ui.color_edit_button_rgb(&mut env.background);
-                    });
-                });
-            });
-            section(ui, "📷 Camera", None, |ui| {
-                grid(ui, "cam", |ui| {
-                    row(ui, "Exposure", |ui| {
-                        ui.add(egui::Slider::new(&mut env.exposure, 0.05..=8.0).logarithmic(true));
-                    });
-                    row(ui, "Tonemapping", |ui| {
-                        ui.selectable_value(&mut env.filmic, true, "ACES Filmic");
-                        ui.selectable_value(&mut env.filmic, false, "None");
-                    });
-                });
-            });
-            section(ui, "🌫 Fog", None, |ui| {
-                let mut on = env.fog.is_some();
-                if ui.checkbox(&mut on, "Enabled").changed() {
-                    env.fog = on.then_some(FogDesc { color: env.background, start: 15.0, end: 120.0 });
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if ui
+                    .button("⚙ Render Settings…")
+                    .on_hover_text(
+                        "Environment, exposure, fog, shadows and viewport quality (Ctrl+,)",
+                    )
+                    .clicked()
+                {
+                    state.open_settings(crate::settings::Page::Rendering);
                 }
-                if let Some(fog) = &mut env.fog {
-                    grid(ui, "fog", |ui| {
-                        row(ui, "Color", |ui| {
-                            ui.color_edit_button_rgb(&mut fog.color);
-                            if ui.small_button("= Background").clicked() {
-                                fog.color = env.background;
-                            }
-                        });
-                        row(ui, "Start", |ui| drag(ui, &mut fog.start, 0.0..=10_000.0, 0.2, " m"));
-                        row(ui, "End", |ui| drag(ui, &mut fog.end, 0.0..=10_000.0, 0.5, " m"));
-                    });
-                    fog.end = fog.end.max(fog.start + 0.1);
-                }
+                ui.add_space(4.0);
+                presets(ui, state);
+                lights(ui, state);
             });
-            section(ui, "◼ Shadows", None, |ui| {
-                grid(ui, "shadows", |ui| {
-                    row(ui, "Distance", |ui| drag(ui, &mut env.shadow_distance, 5.0..=1000.0, 0.5, " m"));
-                    row(ui, "Resolution", |ui| {
-                        for r in [512, 1024, 2048, 4096] {
-                            ui.selectable_value(&mut env.shadow_resolution, r, r.to_string());
-                        }
-                    });
-                });
-                ui.weak("Shorter distance = sharper shadows; the sun's Shadows toggle is in its Light.");
-            });
-            lights(ui, state);
-        });
     }
 }
 
-fn presets(ui: &mut egui::Ui, state: &mut EditorState) {
+/// The scene's environment: ambient, camera, fog and shadows (Settings → Rendering).
+pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment) {
+    section(ui, "🌤 Environment", None, |ui| {
+        grid(ui, "env", |ui| {
+            row(ui, "Sky", |ui| {
+                ui.color_edit_button_rgb(&mut env.sky);
+            });
+            row(ui, "Ground", |ui| {
+                ui.color_edit_button_rgb(&mut env.ground);
+            });
+            row(ui, "Intensity", |ui| {
+                drag(ui, &mut env.ambient_intensity, 0.0..=8.0, 0.01, "")
+            });
+            row(ui, "Background", |ui| {
+                ui.color_edit_button_rgb(&mut env.background);
+            });
+        });
+    });
+    section(ui, "📷 Camera", None, |ui| {
+        grid(ui, "cam", |ui| {
+            row(ui, "Exposure", |ui| {
+                ui.add(egui::Slider::new(&mut env.exposure, 0.05..=8.0).logarithmic(true));
+            });
+            row(ui, "Tonemapping", |ui| {
+                ui.selectable_value(&mut env.filmic, true, "ACES Filmic");
+                ui.selectable_value(&mut env.filmic, false, "None");
+            });
+        });
+    });
+    section(ui, "🌫 Fog", None, |ui| {
+        let mut on = env.fog.is_some();
+        if ui.checkbox(&mut on, "Enabled").changed() {
+            env.fog = on.then_some(FogDesc {
+                color: env.background,
+                start: 15.0,
+                end: 120.0,
+            });
+        }
+        if let Some(fog) = &mut env.fog {
+            grid(ui, "fog", |ui| {
+                row(ui, "Color", |ui| {
+                    ui.color_edit_button_rgb(&mut fog.color);
+                    if ui.small_button("= Background").clicked() {
+                        fog.color = env.background;
+                    }
+                });
+                row(ui, "Start", |ui| {
+                    drag(ui, &mut fog.start, 0.0..=10_000.0, 0.2, " m")
+                });
+                row(ui, "End", |ui| {
+                    drag(ui, &mut fog.end, 0.0..=10_000.0, 0.5, " m")
+                });
+            });
+            fog.end = fog.end.max(fog.start + 0.1);
+        }
+    });
+    section(ui, "◼ Shadows", None, |ui| {
+        grid(ui, "shadows", |ui| {
+            row(ui, "Distance", |ui| {
+                drag(ui, &mut env.shadow_distance, 5.0..=1000.0, 0.5, " m")
+            });
+            row(ui, "Resolution", |ui| {
+                for r in [512, 1024, 2048, 4096] {
+                    ui.selectable_value(&mut env.shadow_resolution, r, r.to_string());
+                }
+            });
+        });
+        ui.weak("Shorter distance = sharper shadows; the sun's Shadows toggle is in its Light.");
+    });
+}
+
+pub(crate) fn presets(ui: &mut egui::Ui, state: &mut EditorState) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Presets").strong());
         for (name, make) in Environment::PRESETS {

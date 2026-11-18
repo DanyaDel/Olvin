@@ -27,7 +27,11 @@ impl GlobalTransform {
     /// World pose without scale (for cameras, physics).
     pub fn to_transform(&self) -> Transform {
         let (scale, rotation, translation) = self.0.to_scale_rotation_translation();
-        Transform { translation, rotation, scale }
+        Transform {
+            translation,
+            rotation,
+            scale,
+        }
     }
 }
 
@@ -35,7 +39,10 @@ pub struct TransformPlugin;
 
 impl Plugin for TransformPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(EcsPlugin).add_system(Stage::PostUpdate, |res| propagate(&mut res.fetch_mut::<World>()));
+        app.add_plugin(EcsPlugin)
+            .add_system(Stage::PostUpdate, |res| {
+                propagate(&mut res.fetch_mut::<World>())
+            });
     }
 }
 
@@ -45,7 +52,11 @@ pub fn world_matrix(world: &World, entity: Entity) -> Option<Mat4> {
     let mut current = world.get::<&Parent>(entity).ok().map(|p| p.0);
     for _ in 0..256 {
         let Some(p) = current else { break };
-        m = world.get::<&Transform>(p).map(|t| t.matrix()).unwrap_or(Mat4::IDENTITY) * m;
+        m = world
+            .get::<&Transform>(p)
+            .map(|t| t.matrix())
+            .unwrap_or(Mat4::IDENTITY)
+            * m;
         current = world.get::<&Parent>(p).ok().map(|p| p.0);
     }
     Some(m)
@@ -53,23 +64,34 @@ pub fn world_matrix(world: &World, entity: Entity) -> Option<Mat4> {
 
 /// Recomputes every `GlobalTransform`, adding missing ones.
 pub fn propagate(world: &mut World) {
-    let missing: Vec<Entity> =
-        world.query::<(Entity, &Transform)>().without::<&GlobalTransform>().iter().map(|(e, _)| e).collect();
+    let missing: Vec<Entity> = world
+        .query::<(Entity, &Transform)>()
+        .without::<&GlobalTransform>()
+        .iter()
+        .map(|(e, _)| e)
+        .collect();
     for e in missing {
         let _ = world.insert_one(e, GlobalTransform::default());
     }
 
     // Roots: a straight copy, the common case for large flat scenes.
-    for (t, g) in world.query_mut::<(&Transform, &mut GlobalTransform)>().without::<&Parent>() {
+    for (t, g) in world
+        .query_mut::<(&Transform, &mut GlobalTransform)>()
+        .without::<&Parent>()
+    {
         g.0 = t.matrix();
     }
 
-    let children: Vec<(Entity, Entity, Mat4)> =
-        world.query::<(Entity, &Parent, &Transform)>().iter().map(|(e, p, t)| (e, p.0, t.matrix())).collect();
+    let children: Vec<(Entity, Entity, Mat4)> = world
+        .query::<(Entity, &Parent, &Transform)>()
+        .iter()
+        .map(|(e, p, t)| (e, p.0, t.matrix()))
+        .collect();
     if children.is_empty() {
         return;
     }
-    let local: HashMap<Entity, (Entity, Mat4)> = children.iter().map(|(e, p, m)| (*e, (*p, *m))).collect();
+    let local: HashMap<Entity, (Entity, Mat4)> =
+        children.iter().map(|(e, p, m)| (*e, (*p, *m))).collect();
     let mut done: HashMap<Entity, Mat4> = HashMap::with_capacity(children.len());
     for (e, _, _) in &children {
         resolve(*e, world, &local, &mut done, 0);
@@ -93,10 +115,17 @@ fn resolve(
     }
     let Some(&(parent, m)) = local.get(&e) else {
         // A root (already copied) or a dangling parent.
-        return world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
+        return world
+            .get::<&GlobalTransform>(e)
+            .map(|g| g.0)
+            .unwrap_or(Mat4::IDENTITY);
     };
     // A parent cycle is a bug in game code; cut it rather than overflow.
-    let parent_world = if depth > 256 { Mat4::IDENTITY } else { resolve(parent, world, local, done, depth + 1) };
+    let parent_world = if depth > 256 {
+        Mat4::IDENTITY
+    } else {
+        resolve(parent, world, local, done, depth + 1)
+    };
     let global = parent_world * m;
     done.insert(e, global);
     global
@@ -110,16 +139,33 @@ mod tests {
     #[test]
     fn children_follow_parents_through_levels() {
         let mut world = World::new();
-        let root = world.spawn((Transform::from_xyz(10.0, 0.0, 0.0).with_rotation(Quat::from_rotation_y(90f32.to_radians())),));
+        let root = world.spawn((Transform::from_xyz(10.0, 0.0, 0.0)
+            .with_rotation(Quat::from_rotation_y(90f32.to_radians())),));
         let child = world.spawn((Transform::from_xyz(0.0, 0.0, -2.0), Parent(root)));
-        let grandchild = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::splat(2.0)), Parent(child)));
+        let grandchild = world.spawn((
+            Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::splat(2.0)),
+            Parent(child),
+        ));
         propagate(&mut world);
 
-        let at = |w: &World, e| w.get::<&GlobalTransform>(e).unwrap().0.transform_point3(Vec3::ZERO);
+        let at = |w: &World, e| {
+            w.get::<&GlobalTransform>(e)
+                .unwrap()
+                .0
+                .transform_point3(Vec3::ZERO)
+        };
         // Root turned 90° left: its -Z points to -X.
-        assert!(at(&world, child).abs_diff_eq(Vec3::new(8.0, 0.0, 0.0), 1e-4), "{}", at(&world, child));
+        assert!(
+            at(&world, child).abs_diff_eq(Vec3::new(8.0, 0.0, 0.0), 1e-4),
+            "{}",
+            at(&world, child)
+        );
         assert!(at(&world, grandchild).abs_diff_eq(Vec3::new(8.0, 1.0, 0.0), 1e-4));
-        assert!(world_matrix(&world, grandchild).unwrap().abs_diff_eq(world.get::<&GlobalTransform>(grandchild).unwrap().0, 1e-5));
+        assert!(
+            world_matrix(&world, grandchild)
+                .unwrap()
+                .abs_diff_eq(world.get::<&GlobalTransform>(grandchild).unwrap().0, 1e-5)
+        );
 
         // Moving the root moves the whole branch next frame.
         world.get::<&mut Transform>(root).unwrap().translation.x = 0.0;

@@ -223,6 +223,37 @@ mod tests {
     }
 
     #[test]
+    fn brushes_are_modelled_in_place_and_carve_by_their_shape() {
+        use olvin_editor::olvin_scene::file::{BrushDesc, BrushShape, CsgOp};
+        let mut state = EditorState::new(None);
+        let id = state.create(NewEntity::Empty, None);
+        state.scene.get_mut(id).unwrap().brush = Some(BrushDesc {
+            shape: BrushShape::Box,
+            op: CsgOp::Add,
+            color: [1.0; 4],
+            vertices: None,
+        });
+        make_editable(&mut state, id).unwrap();
+        let e = state.scene.get(id).unwrap();
+        assert!(e.brush.is_some(), "still a brush");
+        assert_eq!(mesh(&state, id).faces.len(), 6);
+        // Extrude the top face: the brush becomes a taller box, and CSG follows.
+        let poly = state.scene.get_mut(id).unwrap().poly.as_mut().unwrap();
+        let top = (0..6).find(|&f| poly.face_normal(f).y > 0.9).unwrap();
+        poly.extrude_faces(&[top], Vec3::Y);
+        let input = state.scene.csg_brushes().remove(0);
+        assert!(input.faces.is_some());
+        let height = olvin_csg::build(&[input])
+            .iter()
+            .flat_map(|p| p.vertices.iter().map(|v| v.y))
+            .fold(f32::MIN, f32::max);
+        assert!((height - 1.5).abs() < 1e-4, "{height}");
+        ops::detach_brush(&mut state, id);
+        let e = state.scene.get(id).unwrap();
+        assert!(e.brush.is_none() && e.poly.is_some() && e.mesh.is_some());
+    }
+
+    #[test]
     fn subdivide_and_merge() {
         let mut state = EditorState::new(None);
         let id = editing(&mut state, PolyMesh::cube(1.0));

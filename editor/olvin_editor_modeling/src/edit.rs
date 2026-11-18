@@ -85,7 +85,10 @@ impl ViewportExtension for EditMode {
     }
 
     fn interact(&mut self, ctx: &mut ViewportCtx) -> bool {
-        let keys_free = ctx.response.hovered() && !ctx.ui.ctx().egui_wants_keyboard_input();
+        // While RMB is held the keys fly the camera (WASD/QE), never edit.
+        let flying = ctx.ui.input(|i| i.pointer.secondary_down());
+        let keys_free =
+            ctx.response.hovered() && !flying && !ctx.ui.ctx().egui_wants_keyboard_input();
         let mut editing = self.reclaim(ctx, keys_free);
         if keys_free && self.modal.is_none() && pressed(ctx, Key::Tab) {
             editing = self.toggle(ctx, editing);
@@ -103,6 +106,15 @@ impl ViewportExtension for EditMode {
             hint(ctx, "Select a mesh, then Tab");
             return true;
         };
+        // Picking another brush while editing: it becomes editable at once.
+        if ctx
+            .state
+            .scene
+            .get(id)
+            .is_some_and(|e| e.brush.is_some() && e.poly.is_none())
+        {
+            let _ = make_editable(ctx.state, id);
+        }
         let Some(mesh) = ctx.state.scene.get(id).and_then(|e| e.poly.clone()) else {
             hint(ctx, "Tab converts the selected object to an editable mesh");
             return true;
@@ -653,7 +665,7 @@ impl EditMode {
         let galley = ctx.painter.layout_no_wrap(text, font.clone(), theme::TEXT);
         const BUTTON: f32 = 52.0;
         const H: f32 = 22.0;
-        let origin = rect.left_top() + vec2(8.0, 42.0);
+        let origin = egui::pos2(rect.left() + 8.0, ctx.overlay_top + 6.0);
         let width = 5.0 * BUTTON + 2.0 * 8.0 + galley.size().x + 22.0;
         let bg = Rect::from_min_size(origin, vec2(width, H + 6.0));
         ctx.painter
@@ -796,7 +808,7 @@ fn chord_ui(ui: &egui::Ui, mods: Modifiers, key: Key) -> bool {
 
 fn hint(ctx: &ViewportCtx, text: &str) {
     ctx.painter.text(
-        ctx.camera.rect.center_top() + vec2(0.0, 56.0),
+        egui::pos2(ctx.camera.rect.center().x, ctx.overlay_top + 20.0),
         Align2::CENTER_CENTER,
         text,
         FontId::proportional(13.0),

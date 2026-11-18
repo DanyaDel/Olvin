@@ -439,6 +439,51 @@ impl EntityDesc {
     }
 }
 
+impl EntityDesc {
+    /// This brush as CSG input. A modelled brush (`poly`) sends its faces:
+    /// convex ones as they are, concave ones as triangles.
+    pub fn brush_input(&self, transform: Mat4) -> Option<olvin_csg::BrushInput> {
+        let b = self.brush.as_ref()?;
+        let faces = self
+            .poly
+            .as_ref()
+            .filter(|p| !p.faces.is_empty())
+            .map(|poly| {
+                let mut out = Vec::with_capacity(poly.faces.len());
+                for f in 0..poly.faces.len() {
+                    let points: Vec<Vec3> = poly.face_positions(f).collect();
+                    if convex_polygon(&points, poly.face_normal(f)) {
+                        out.push(points);
+                    } else {
+                        out.extend(
+                            poly.face_triangles(f)
+                                .iter()
+                                .map(|t| t.iter().map(|&i| poly.positions[i as usize]).collect()),
+                        );
+                    }
+                }
+                out
+            });
+        Some(olvin_csg::BrushInput {
+            id: self.id,
+            shape: b.shape,
+            op: b.op,
+            transform,
+            color: b.color,
+            vertices: b.vertices.clone(),
+            faces,
+        })
+    }
+}
+
+fn convex_polygon(points: &[Vec3], normal: Vec3) -> bool {
+    let n = points.len();
+    (0..n).all(|i| {
+        let (a, b, c) = (points[i], points[(i + 1) % n], points[(i + 2) % n]);
+        (b - a).cross(c - b).dot(normal) >= -1e-6
+    })
+}
+
 impl SceneFile {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
@@ -487,15 +532,7 @@ impl SceneFile {
             .into_iter()
             .filter_map(|i| {
                 let e = &self.entities[i];
-                let b = e.brush.as_ref()?;
-                Some(olvin_csg::BrushInput {
-                    id: e.id,
-                    shape: b.shape,
-                    op: b.op,
-                    transform: *worlds.get(&e.id)?,
-                    color: b.color,
-                    vertices: b.vertices.clone(),
-                })
+                e.brush_input(*worlds.get(&e.id)?)
             })
             .collect()
     }

@@ -401,6 +401,8 @@ pub struct ViewportCtx<'a> {
     pub tool: &'a str,
     /// Last frame's geometry, for raycasts.
     pub geometry: &'a Geometry,
+    /// Screen y below the viewport toolbar: where tool overlays may start.
+    pub overlay_top: f32,
 }
 
 impl ViewportCtx<'_> {

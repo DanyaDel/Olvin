@@ -13,10 +13,16 @@ pub enum BrushShape {
     Box,
     /// Ramp: full bottom and back (-Z) faces, slope down towards +Z.
     Wedge,
-    Cylinder { sides: u32 },
-    Pyramid { sides: u32 },
+    Cylinder {
+        sides: u32,
+    },
+    Pyramid {
+        sides: u32,
+    },
     /// Steps rise towards -Z.
-    Stairs { steps: u32 },
+    Stairs {
+        steps: u32,
+    },
 }
 
 impl BrushShape {
@@ -42,14 +48,21 @@ pub fn pieces(shape: BrushShape) -> Vec<Piece> {
     match shape {
         BrushShape::Box => vec![cuboid(Vec3::splat(-0.5), Vec3::splat(0.5))],
         BrushShape::Wedge => vec![wedge()],
-        BrushShape::Cylinder { sides } => vec![prism(sides.clamp(BrushShape::MIN_SIDES, BrushShape::MAX_SIDES))],
-        BrushShape::Pyramid { sides } => vec![pyramid(sides.clamp(BrushShape::MIN_SIDES, BrushShape::MAX_SIDES))],
+        BrushShape::Cylinder { sides } => vec![prism(
+            sides.clamp(BrushShape::MIN_SIDES, BrushShape::MAX_SIDES),
+        )],
+        BrushShape::Pyramid { sides } => vec![pyramid(
+            sides.clamp(BrushShape::MIN_SIDES, BrushShape::MAX_SIDES),
+        )],
         BrushShape::Stairs { steps } => {
             let k = steps.clamp(1, BrushShape::MAX_STEPS) as f32;
             (0..steps.clamp(1, BrushShape::MAX_STEPS))
                 .map(|s| {
                     let s = s as f32;
-                    cuboid(vec3(-0.5, -0.5 + s / k, -0.5), vec3(0.5, -0.5 + (s + 1.0) / k, 0.5 - s / k))
+                    cuboid(
+                        vec3(-0.5, -0.5 + s / k, -0.5),
+                        vec3(0.5, -0.5 + (s + 1.0) / k, 0.5 - s / k),
+                    )
                 })
                 .collect()
         }
@@ -58,7 +71,11 @@ pub fn pieces(shape: BrushShape) -> Vec<Piece> {
 
 fn cuboid(min: Vec3, max: Vec3) -> Piece {
     let c = |x: bool, y: bool, z: bool| {
-        vec3(if x { max.x } else { min.x }, if y { max.y } else { min.y }, if z { max.z } else { min.z })
+        vec3(
+            if x { max.x } else { min.x },
+            if y { max.y } else { min.y },
+            if z { max.z } else { min.z },
+        )
     };
     let (f, t) = (false, true);
     vec![
@@ -72,7 +89,12 @@ fn cuboid(min: Vec3, max: Vec3) -> Piece {
 }
 
 fn wedge() -> Piece {
-    let (b0, b1, b2, b3) = (vec3(-0.5, -0.5, -0.5), vec3(0.5, -0.5, -0.5), vec3(0.5, -0.5, 0.5), vec3(-0.5, -0.5, 0.5));
+    let (b0, b1, b2, b3) = (
+        vec3(-0.5, -0.5, -0.5),
+        vec3(0.5, -0.5, -0.5),
+        vec3(0.5, -0.5, 0.5),
+        vec3(-0.5, -0.5, 0.5),
+    );
     let (t0, t1) = (vec3(-0.5, 0.5, -0.5), vec3(0.5, 0.5, -0.5));
     vec![
         vec![b0, b1, b2, b3], // bottom
@@ -158,7 +180,9 @@ pub fn convex_hull(points: &[Vec3]) -> Option<Piece> {
                     n = -n;
                 }
                 let d = n.dot(pts[i]);
-                let known = planes.iter().any(|(m, e)| m.dot(n) > 0.9999 && (e - d).abs() < EPS);
+                let known = planes
+                    .iter()
+                    .any(|(m, e)| m.dot(n) > 0.9999 && (e - d).abs() < EPS);
                 if !known && pts.iter().all(|p| n.dot(*p) - d <= EPS) {
                     planes.push((n, d));
                 }
@@ -171,7 +195,11 @@ pub fn convex_hull(points: &[Vec3]) -> Option<Piece> {
     let faces: Piece = planes
         .iter()
         .filter_map(|&(n, d)| {
-            let on: Vec<Vec3> = pts.iter().copied().filter(|p| (n.dot(*p) - d).abs() <= EPS).collect();
+            let on: Vec<Vec3> = pts
+                .iter()
+                .copied()
+                .filter(|p| (n.dot(*p) - d).abs() <= EPS)
+                .collect();
             if on.len() < 3 {
                 return None;
             }

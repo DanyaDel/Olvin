@@ -14,7 +14,14 @@ impl EditorPlugin for ConsolePlugin {
         registry.add_panel(PanelKind {
             id: "console.log",
             title: "🖵 Console",
-            factory: || Box::new(Console { info: true, warn: true, error: true, filter: String::new() }),
+            factory: || {
+                Box::new(Console {
+                    info: true,
+                    warn: true,
+                    error: true,
+                    filter: String::new(),
+                })
+            },
         });
     }
 }
@@ -29,7 +36,11 @@ struct Console {
 impl Panel for Console {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let count = |level| state.log.iter().filter(|l| l.level == level).count();
-        let (n_info, n_warn, n_error) = (count(LogLevel::Info), count(LogLevel::Warn), count(LogLevel::Error));
+        let (n_info, n_warn, n_error) = (
+            count(LogLevel::Info),
+            count(LogLevel::Warn),
+            count(LogLevel::Error),
+        );
 
         ui.horizontal(|ui| {
             if ui.button("Clear").clicked() {
@@ -37,9 +48,19 @@ impl Panel for Console {
             }
             ui.separator();
             ui.toggle_value(&mut self.info, format!("ℹ {n_info}"));
-            ui.toggle_value(&mut self.warn, RichText::new(format!("⚠ {n_warn}")).color(ui.visuals().warn_fg_color));
-            ui.toggle_value(&mut self.error, RichText::new(format!("⛔ {n_error}")).color(ui.visuals().error_fg_color));
-            ui.add(TextEdit::singleline(&mut self.filter).hint_text("🔍 Filter").desired_width(f32::INFINITY));
+            ui.toggle_value(
+                &mut self.warn,
+                RichText::new(format!("⚠ {n_warn}")).color(ui.visuals().warn_fg_color),
+            );
+            ui.toggle_value(
+                &mut self.error,
+                RichText::new(format!("⛔ {n_error}")).color(ui.visuals().error_fg_color),
+            );
+            ui.add(
+                TextEdit::singleline(&mut self.filter)
+                    .hint_text("🔍 Filter")
+                    .desired_width(f32::INFINITY),
+            );
         });
         ui.separator();
 
@@ -56,11 +77,10 @@ impl Panel for Console {
             .collect();
 
         let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
-        egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show_rows(
-            ui,
-            row_height,
-            visible.len(),
-            |ui, range| {
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .stick_to_bottom(true)
+            .show_rows(ui, row_height, visible.len(), |ui, range| {
                 for line in &visible[range] {
                     let color = match line.level {
                         LogLevel::Info => ui.visuals().text_color(),
@@ -68,11 +88,14 @@ impl Panel for Console {
                         LogLevel::Error => ui.visuals().error_fg_color,
                     };
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{:>8.2}", line.time)).monospace().weak());
+                        ui.label(
+                            RichText::new(format!("{:>8.2}", line.time))
+                                .monospace()
+                                .weak(),
+                        );
                         ui.label(RichText::new(&line.text).monospace().color(color));
                     });
                 }
-            },
-        );
+            });
     }
 }

@@ -45,6 +45,7 @@ impl EditorApp {
     ) -> Self {
         let layout = Layout::load(&registry);
         let mut state = EditorState::new(project);
+        state.prefs = crate::prefs::Preferences::load();
         state.ext = registry.instantiate_extensions();
         state.gpu = gpu;
         if !registry.plugins().is_empty() {
@@ -162,6 +163,10 @@ impl EditorApp {
             }
         });
         ui.menu_button("Edit", |ui| {
+            if ui.button("Settings…        Ctrl+,").clicked() {
+                self.state.open_settings(crate::settings::Page::default());
+            }
+            ui.separator();
             if ui
                 .add_enabled(
                     self.state.can_undo(),
@@ -634,6 +639,17 @@ impl eframe::App for EditorApp {
         {
             self.toggle_play();
         }
+        if ctx.input_mut(|i| {
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma))
+        }) {
+            self.state.settings_page = match self.state.settings_page {
+                Some(_) => None,
+                None => Some(crate::settings::Page::default()),
+            };
+        }
+        if ctx.zoom_factor() != self.state.prefs.ui_scale && !ctx.input(|i| i.pointer.any_down()) {
+            ctx.set_zoom_factor(self.state.prefs.ui_scale);
+        }
         if let Some(play) = &mut self.state.play {
             play.tick();
             ctx.request_repaint();
@@ -658,6 +674,20 @@ impl eframe::App for EditorApp {
                 self.menus(ui);
                 ui.add_space(10.0);
                 self.workspace_tabs(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let open = self.state.settings_page.is_some();
+                    if ui
+                        .selectable_label(open, RichText::new("⚙").size(16.0))
+                        .on_hover_text("Settings (Ctrl+,)")
+                        .clicked()
+                    {
+                        self.state.settings_page = if open {
+                            None
+                        } else {
+                            Some(crate::settings::Page::default())
+                        };
+                    }
+                });
             });
             // Play controls centred over the window, like Unity.
             let center = egui::Rect::from_center_size(
@@ -711,6 +741,7 @@ impl eframe::App for EditorApp {
             dock.push_to_focused_leaf(tab);
         }
 
+        crate::settings::window(&ctx, &mut self.state);
         self.dialogs(&ctx);
         self.update_title(&ctx);
 

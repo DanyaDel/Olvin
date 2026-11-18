@@ -142,6 +142,12 @@ pub struct EditorState {
     /// `tool_owns_keys` of the previous frame: panels drawn before the tool
     /// (the viewport's own hotkeys) check this one.
     pub keys_owned_last_frame: bool,
+    /// Editor preferences (Settings window).
+    pub prefs: crate::prefs::Preferences,
+    /// Open Settings page, `None` when the window is closed.
+    pub settings_page: Option<crate::settings::Page>,
+    /// Last frame's render statistics per view.
+    pub render_stats: HashMap<u64, olvin::render::RenderStats>,
     /// Set every frame by a tool in a modal operation (grab, inset...): the
     /// whole operation becomes one undo step. Cleared every frame.
     pub busy: bool,
@@ -176,6 +182,9 @@ impl EditorState {
             snap: SnapSettings::default(),
             tool_owns_keys: false,
             keys_owned_last_frame: false,
+            prefs: crate::prefs::Preferences::default(),
+            settings_page: None,
+            render_stats: HashMap::new(),
             busy: false,
             ext: Extensions::default(),
             gpu: None,
@@ -319,6 +328,10 @@ impl EditorState {
     pub fn is_selected(&self, id: u64) -> bool {
         self.selection == Some(id)
             || (self.selection.is_some_and(|p| self.multi.contains(&p)) && self.multi.contains(&id))
+    }
+
+    pub fn open_settings(&mut self, page: crate::settings::Page) {
+        self.settings_page = Some(page);
     }
 
     pub fn select(&mut self, id: Option<u64>) {

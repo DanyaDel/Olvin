@@ -27,7 +27,12 @@ pub struct WindowPlugin {
 
 impl Default for WindowPlugin {
     fn default() -> Self {
-        Self { title: "Olvin".into(), width: 1280, height: 720, resizable: true }
+        Self {
+            title: "Olvin".into(),
+            width: 1280,
+            height: 720,
+            resizable: true,
+        }
     }
 }
 
@@ -43,7 +48,11 @@ impl Plugin for WindowPlugin {
 fn run(app: App, config: WindowPlugin) {
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut runner = Runner { app, config, window: None };
+    let mut runner = Runner {
+        app,
+        config,
+        window: None,
+    };
     if let Err(err) = event_loop.run_app(&mut runner) {
         log::error!("event loop error: {err}");
     }
@@ -75,8 +84,10 @@ impl ApplicationHandler for Runner {
             }
         };
         let size = window.inner_size();
-        self.app
-            .insert_resource(SurfaceTarget::new(window.clone(), (size.width, size.height)));
+        self.app.insert_resource(SurfaceTarget::new(
+            window.clone(),
+            (size.width, size.height),
+        ));
         self.app.startup();
         window.request_redraw();
         self.window = Some(window);
@@ -93,11 +104,13 @@ impl ApplicationHandler for Runner {
                 if let PhysicalKey::Code(code) = event.physical_key
                     && !event.repeat
                 {
-                    res.fetch_mut::<Input>().set_key(code, event.state.is_pressed());
+                    res.fetch_mut::<Input>()
+                        .set_key(code, event.state.is_pressed());
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                res.fetch_mut::<Input>().set_button(button, state.is_pressed());
+                res.fetch_mut::<Input>()
+                    .set_button(button, state.is_pressed());
             }
             WindowEvent::CursorMoved { position, .. } => {
                 res.fetch_mut::<Input>().cursor = glam::vec2(position.x as f32, position.y as f32);

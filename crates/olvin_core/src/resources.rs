@@ -16,13 +16,19 @@ impl Resources {
     pub fn insert<T: 'static>(&mut self, value: T) -> Option<T> {
         self.map
             .insert(TypeId::of::<T>(), RefCell::new(Box::new(value)))
-            .map(|old| *old.into_inner().downcast::<T>().expect("resource type mismatch"))
+            .map(|old| {
+                *old.into_inner()
+                    .downcast::<T>()
+                    .expect("resource type mismatch")
+            })
     }
 
     pub fn remove<T: 'static>(&mut self) -> Option<T> {
-        self.map
-            .remove(&TypeId::of::<T>())
-            .map(|old| *old.into_inner().downcast::<T>().expect("resource type mismatch"))
+        self.map.remove(&TypeId::of::<T>()).map(|old| {
+            *old.into_inner()
+                .downcast::<T>()
+                .expect("resource type mismatch")
+        })
     }
 
     pub fn contains<T: 'static>(&self) -> bool {
@@ -36,7 +42,9 @@ impl Resources {
 
     pub fn get_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         let cell = self.map.get(&TypeId::of::<T>())?;
-        Some(RefMut::map(cell.borrow_mut(), |b| b.downcast_mut::<T>().unwrap()))
+        Some(RefMut::map(cell.borrow_mut(), |b| {
+            b.downcast_mut::<T>().unwrap()
+        }))
     }
 
     /// Like [`Resources::get`], but panics with the type name if the resource is missing.

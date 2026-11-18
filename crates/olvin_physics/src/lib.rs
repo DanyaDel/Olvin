@@ -37,7 +37,10 @@ impl Physics {
         let mut world = rp::PhysicsWorld::new();
         world.gravity = v(gravity);
         world.integration_parameters.dt = FIXED_DT;
-        Self { world, accumulator: 0.0 }
+        Self {
+            world,
+            accumulator: 0.0,
+        }
     }
 
     /// Advances by `dt` seconds in fixed steps; returns how many were taken.
@@ -59,16 +62,20 @@ pub struct PhysicsPlugin {
 
 impl Default for PhysicsPlugin {
     fn default() -> Self {
-        Self { gravity: Vec3::new(0.0, -9.81, 0.0) }
+        Self {
+            gravity: Vec3::new(0.0, -9.81, 0.0),
+        }
     }
 }
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(EcsPlugin).insert_resource(Physics::new(self.gravity)).add_system(Stage::PreUpdate, |res| {
-            let dt = res.fetch::<Time>().delta();
-            step(res, dt);
-        });
+        app.add_plugin(EcsPlugin)
+            .insert_resource(Physics::new(self.gravity))
+            .add_system(Stage::PreUpdate, |res| {
+                let dt = res.fetch::<Time>().delta();
+                step(res, dt);
+            });
     }
 }
 
@@ -77,8 +84,12 @@ pub fn step(res: &Resources, dt: f32) {
     let mut physics = res.fetch_mut::<Physics>();
     let mut world = res.fetch_mut::<World>();
     create_bodies(&mut world, &mut physics);
-    let kinematic: Vec<(Entity, Body)> =
-        world.query::<(Entity, &Body)>().iter().filter(|(_, b)| b.kind == Kind::Kinematic).map(|(e, b)| (e, *b)).collect();
+    let kinematic: Vec<(Entity, Body)> = world
+        .query::<(Entity, &Body)>()
+        .iter()
+        .filter(|(_, b)| b.kind == Kind::Kinematic)
+        .map(|(e, b)| (e, *b))
+        .collect();
     for (e, body) in kinematic {
         if let Some(m) = world_matrix(&world, e)
             && let Some(rb) = physics.world.bodies.get_mut(body.handle)
@@ -96,13 +107,19 @@ pub fn step(res: &Resources, dt: f32) {
         .filter(|(_, b, _)| b.kind == Kind::Dynamic)
         .filter_map(|(e, b, parent)| {
             let p = physics.world.bodies.get(b.handle)?.position();
-            Some((e, parent.map(|p| p.0), Vec3::from_array(p.translation.to_array()), Quat::from_array(p.rotation.to_array())))
+            Some((
+                e,
+                parent.map(|p| p.0),
+                Vec3::from_array(p.translation.to_array()),
+                Quat::from_array(p.rotation.to_array()),
+            ))
         })
         .collect();
     for (e, parent, translation, rotation) in moved {
         let (translation, rotation) = match parent.and_then(|p| world_matrix(&world, p)) {
             Some(pm) => {
-                let local = pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
+                let local =
+                    pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
                 let (_, r, t) = local.to_scale_rotation_translation();
                 (t, r)
             }
@@ -117,15 +134,31 @@ pub fn step(res: &Resources, dt: f32) {
 
 fn decompose(m: glam::Mat4) -> Transform {
     let (scale, rotation, translation) = m.to_scale_rotation_translation();
-    Transform { translation, rotation, scale }
+    Transform {
+        translation,
+        rotation,
+        scale,
+    }
 }
 
 /// An entity waiting for its body: everything copied out of the ECS first.
-type Pending = (Entity, Transform, Option<ColliderDesc>, Option<RigidbodyDesc>, Option<MeshGeometry>);
+type Pending = (
+    Entity,
+    Transform,
+    Option<ColliderDesc>,
+    Option<RigidbodyDesc>,
+    Option<MeshGeometry>,
+);
 
 fn create_bodies(world: &mut World, physics: &mut Physics) {
     let pending: Vec<Pending> = world
-        .query::<(Entity, &Transform, Option<&ColliderDesc>, Option<&RigidbodyDesc>, Option<&MeshGeometry>)>()
+        .query::<(
+            Entity,
+            &Transform,
+            Option<&ColliderDesc>,
+            Option<&RigidbodyDesc>,
+            Option<&MeshGeometry>,
+        )>()
         .without::<&Body>()
         .iter()
         .filter(|(_, _, c, r, _)| c.is_some() || r.is_some())
@@ -160,8 +193,15 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
         }
         let handle = physics.world.insert_body(builder);
 
-        let shape = collider.clone().unwrap_or_else(|| ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }));
-        match collider_builder(&shape, transform.scale, mesh.as_ref(), kind == Kind::Dynamic) {
+        let shape = collider
+            .clone()
+            .unwrap_or_else(|| ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }));
+        match collider_builder(
+            &shape,
+            transform.scale,
+            mesh.as_ref(),
+            kind == Kind::Dynamic,
+        ) {
             Some(mut c) => {
                 if let Some(r) = &rigidbody {
                     c = c.mass(r.mass);
@@ -177,14 +217,21 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
 /// Rapier has no scale: bake the object's scale into the shape.
 /// Moving bodies get the convex hull of mesh colliders: Rapier (like PhysX)
 /// doesn't simulate concave triangle meshes as dynamic bodies.
-fn collider_builder(desc: &ColliderDesc, scale: Vec3, mesh: Option<&MeshGeometry>, dynamic: bool) -> Option<rp::ColliderBuilder> {
+fn collider_builder(
+    desc: &ColliderDesc,
+    scale: Vec3,
+    mesh: Option<&MeshGeometry>,
+    dynamic: bool,
+) -> Option<rp::ColliderBuilder> {
     let s = scale.abs();
     let builder = match &desc.shape {
         ColliderShape::Box { size } => {
             let h = (*size * s * 0.5).max(Vec3::splat(1e-4));
             rp::ColliderBuilder::cuboid(h.x, h.y, h.z)
         }
-        ColliderShape::Sphere { radius } => rp::ColliderBuilder::ball((radius * s.max_element()).max(1e-4)),
+        ColliderShape::Sphere { radius } => {
+            rp::ColliderBuilder::ball((radius * s.max_element()).max(1e-4))
+        }
         ColliderShape::Capsule { radius, height } => {
             let r = (radius * s.x.max(s.z)).max(1e-4);
             let half = (height * s.y * 0.5 - r).max(0.0);
@@ -214,7 +261,10 @@ fn v(p: Vec3) -> rp::Vector {
 }
 
 fn pose(t: &Transform) -> rp::Pose {
-    rp::Pose::from_parts(v(t.translation), rp::Rotation::from_array(t.rotation.normalize().to_array()))
+    rp::Pose::from_parts(
+        v(t.translation),
+        rp::Rotation::from_array(t.rotation.normalize().to_array()),
+    )
 }
 
 #[cfg(test)]
@@ -246,8 +296,16 @@ mod tests {
         for _ in 0..240 {
             step(&res, FIXED_DT);
         }
-        let y = res.fetch::<World>().get::<&Transform>(falling).unwrap().translation.y;
-        assert!((y - 0.5).abs() < 0.05, "box should rest on the ground at y = 0.5, got {y}");
+        let y = res
+            .fetch::<World>()
+            .get::<&Transform>(falling)
+            .unwrap()
+            .translation
+            .y;
+        assert!(
+            (y - 0.5).abs() < 0.05,
+            "box should rest on the ground at y = 0.5, got {y}"
+        );
     }
 
     #[test]
@@ -265,19 +323,28 @@ mod tests {
                 ],
                 indices: vec![[0, 2, 1], [0, 3, 2]],
             };
-            world.spawn((Transform::IDENTITY, ColliderDesc::new(ColliderShape::Mesh), floor));
+            world.spawn((
+                Transform::IDENTITY,
+                ColliderDesc::new(ColliderShape::Mesh),
+                floor,
+            ));
             let ball = world.spawn((
                 Transform::from_xyz(0.0, 3.0, 0.0),
                 ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
                 RigidbodyDesc::default(),
             ));
-            let mut trigger = ColliderDesc::new(ColliderShape::Box { size: Vec3::splat(4.0) });
+            let mut trigger = ColliderDesc::new(ColliderShape::Box {
+                size: Vec3::splat(4.0),
+            });
             trigger.is_trigger = true;
             world.spawn((Transform::from_xyz(0.0, 1.0, 3.0), trigger));
             let ghost = world.spawn((
                 Transform::from_xyz(0.0, 3.0, 3.0),
                 ColliderDesc::new(ColliderShape::Sphere { radius: 0.25 }),
-                RigidbodyDesc { gravity_scale: 1.0, ..Default::default() },
+                RigidbodyDesc {
+                    gravity_scale: 1.0,
+                    ..Default::default()
+                },
             ));
             (ball, ghost)
         };
@@ -286,10 +353,16 @@ mod tests {
         }
         let world = res.fetch::<World>();
         let ball_y = world.get::<&Transform>(ball).unwrap().translation.y;
-        assert!((ball_y - 0.5).abs() < 0.05, "ball rests on the mesh floor, got {ball_y}");
+        assert!(
+            (ball_y - 0.5).abs() < 0.05,
+            "ball rests on the mesh floor, got {ball_y}"
+        );
         // The trigger box doesn't stop it; the floor does.
         let ghost_y = world.get::<&Transform>(ghost).unwrap().translation.y;
-        assert!((ghost_y - 0.25).abs() < 0.05, "trigger must not collide, got {ghost_y}");
+        assert!(
+            (ghost_y - 0.25).abs() < 0.05,
+            "trigger must not collide, got {ghost_y}"
+        );
     }
 
     #[test]
@@ -303,8 +376,30 @@ mod tests {
             ));
             // A unit cube given as triangles, scaled 2x: rests with its centre at y = 1.
             let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) * 0.5;
-            let positions = vec![c(-1., -1., -1.), c(1., -1., -1.), c(1., 1., -1.), c(-1., 1., -1.), c(-1., -1., 1.), c(1., -1., 1.), c(1., 1., 1.), c(-1., 1., 1.)];
-            let indices = vec![[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1], [3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]];
+            let positions = vec![
+                c(-1., -1., -1.),
+                c(1., -1., -1.),
+                c(1., 1., -1.),
+                c(-1., 1., -1.),
+                c(-1., -1., 1.),
+                c(1., -1., 1.),
+                c(1., 1., 1.),
+                c(-1., 1., 1.),
+            ];
+            let indices = vec![
+                [0, 1, 2],
+                [0, 2, 3],
+                [4, 6, 5],
+                [4, 7, 6],
+                [0, 4, 5],
+                [0, 5, 1],
+                [3, 2, 6],
+                [3, 6, 7],
+                [0, 3, 7],
+                [0, 7, 4],
+                [1, 5, 6],
+                [1, 6, 2],
+            ];
             world.spawn((
                 Transform::from_xyz(0.0, 4.0, 0.0).with_scale(Vec3::splat(2.0)),
                 ColliderDesc::new(ColliderShape::Mesh),
@@ -315,7 +410,15 @@ mod tests {
         for _ in 0..240 {
             step(&res, FIXED_DT);
         }
-        let y = res.fetch::<World>().get::<&Transform>(cube).unwrap().translation.y;
-        assert!((y - 1.0).abs() < 0.05, "dynamic mesh body should fall and rest at y = 1, got {y}");
+        let y = res
+            .fetch::<World>()
+            .get::<&Transform>(cube)
+            .unwrap()
+            .translation
+            .y;
+        assert!(
+            (y - 1.0).abs() < 0.05,
+            "dynamic mesh body should fall and rest at y = 1, got {y}"
+        );
     }
 }

@@ -66,7 +66,7 @@ impl EngineGpu {
         meshes: &mut Meshes,
         view_proj: Mat4,
         settings: &RenderSettings,
-    ) {
+    ) -> olvin::render::RenderStats {
         let gpu = match source {
             Source::Edit => &mut self.edit,
             Source::Play => &mut self.play,
@@ -76,7 +76,7 @@ impl EngineGpu {
             .views
             .entry(id)
             .or_insert_with(|| self.core.create_view());
-        self.core.prepare(view, gpu, world, view_proj, settings);
+        self.core.prepare(view, gpu, world, view_proj, settings)
     }
 
     /// Shadow pass for view `id`; record it before the pass `draw` goes into.
@@ -131,7 +131,8 @@ impl ScenePreview {
             .filter(|e| scene.active_in_hierarchy(e.id))
         {
             let Some(m) = worlds.get(&e.id) else { continue };
-            if let Some(poly) = &e.poly {
+            // A modelled CSG brush is drawn by the CSG level, not as a mesh.
+            if let Some(poly) = e.poly.as_ref().filter(|_| e.brush.is_none()) {
                 let color = e.mesh.as_ref().map_or([0.8; 4], |m| m.color);
                 let handle = match self.polys.get(&e.id) {
                     Some((h, uploaded)) if uploaded == poly => *h,
@@ -231,6 +232,20 @@ fn solid_settings(scene: &SceneFile, view_proj: Mat4) -> RenderSettings {
     }
 }
 
+/// Editor-only quality switches from the Settings window.
+fn editor_quality(
+    prefs: &crate::prefs::Preferences,
+    mut settings: RenderSettings,
+) -> RenderSettings {
+    if !prefs.viewport_shadows {
+        settings.shadow_distance = 0.0;
+    }
+    if !prefs.viewport_fog {
+        settings.fog = None;
+    }
+    settings
+}
+
 /// Prepares engine view `id` for this frame: the running game while playing,
 /// otherwise the edited scene. Returns what to draw, or `None` without a GPU
 /// (or without a camera, when `view_proj` finds none).
@@ -256,8 +271,11 @@ pub(crate) fn prepare_view(
             .map(|s| s.clone())
             .unwrap_or_default();
         let vp = view_proj(&world)?;
-        res.engine
+        let settings = editor_quality(&state.prefs, settings);
+        let stats = res
+            .engine
             .prepare(id, Source::Play, &world, &mut meshes, vp, &settings);
+        state.render_stats.insert(id, stats);
         Some(Source::Play)
     } else {
         state.engine_scene.sync(&state.scene, frame);
@@ -266,7 +284,8 @@ pub(crate) fn prepare_view(
             Shading::Rendered => settings_for(&state.scene),
             Shading::Solid => solid_settings(&state.scene, vp),
         };
-        res.engine.prepare(
+        let settings = editor_quality(&state.prefs, settings);
+        let stats = res.engine.prepare(
             id,
             Source::Edit,
             &state.engine_scene.world,
@@ -274,6 +293,7 @@ pub(crate) fn prepare_view(
             vp,
             &settings,
         );
+        state.render_stats.insert(id, stats);
         Some(Source::Edit)
     }
 }

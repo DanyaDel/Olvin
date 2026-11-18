@@ -26,7 +26,7 @@ impl Panel for ModelingPanel {
                         }
                     }
                 }
-                if !has_mesh && state.selection.is_some() && ui.button("Convert to Editable Mesh").clicked() {
+                if !has_mesh && state.selection.is_some() && ui.button("Make Editable").clicked() {
                     let id = state.selection.unwrap();
                     if let Err(e) = make_editable(state, id) {
                         state.warn(e);
@@ -34,6 +34,7 @@ impl Panel for ModelingPanel {
                 }
             });
             ui.add_space(6.0);
+            brush_section(ui, state);
 
             let mut run = None;
             section(ui, "Select", |ui| {
@@ -156,4 +157,50 @@ fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
             body(ui);
         });
     ui.add_space(4.0);
+}
+
+/// CSG part of a modelled brush: the same object is edited and carves the level.
+fn brush_section(ui: &mut egui::Ui, state: &mut EditorState) {
+    let Some(id) = state.selection else { return };
+    let Some(e) = state.scene.get_mut(id) else {
+        return;
+    };
+    let modelled = e.poly.is_some();
+    let Some(brush) = &mut e.brush else { return };
+    let (mut detach, mut reset) = (false, false);
+    section(ui, "CSG Brush", |ui| {
+        ui.horizontal(|ui| {
+            for op in olvin_csg::CsgOp::ALL {
+                ui.selectable_value(&mut brush.op, op, op.label());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Color");
+            ui.color_edit_button_rgba_unmultiplied(&mut brush.color);
+        });
+        ui.horizontal(|ui| {
+            if modelled
+                && ui
+                    .button("Reset to Shape")
+                    .on_hover_text("Drop the modelled shape")
+                    .clicked()
+            {
+                reset = true;
+            }
+            if ui
+                .button("Detach from CSG")
+                .on_hover_text("Make it a plain mesh object")
+                .clicked()
+            {
+                detach = true;
+            }
+        });
+        ui.weak("Edit Mode works on brushes too: the level is carved by exactly what you model, concave shapes included.");
+    });
+    if reset {
+        ops::reset_brush(state, id);
+    }
+    if detach {
+        ops::detach_brush(state, id);
+    }
 }

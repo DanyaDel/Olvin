@@ -19,7 +19,6 @@ use crate::{EditorState, Panel, theme};
 
 const NEAR: f32 = 0.05;
 const FAR: f32 = 4000.0;
-const FOV_DEG: f32 = 55.0;
 const LIGHT: Vec3 = Vec3::new(-0.45, -1.0, -0.3);
 const GIZMO_POINTS: f32 = 95.0;
 const HOT: Color32 = Color32::from_rgb(255, 225, 70);
@@ -113,6 +112,12 @@ pub struct Viewport {
     drag: Option<Drag>,
     /// Dragging a light's range or cone handle.
     light_drag: Option<(u64, LightHandle)>,
+    /// Bottom of the toolbar last frame: tool overlays start below it.
+    toolbar_bottom: f32,
+    /// Copy of the editor preferences for this frame (camera feel, FOV).
+    prefs: crate::prefs::Preferences,
+    /// Shading was set from the preferences (first frame) or by the user.
+    shading_set: bool,
     /// Last frame's geometry: raycasts and the GPU upload.
     geometry: Geometry,
 }
@@ -134,6 +139,9 @@ impl Default for Viewport {
             shading: crate::engine::Shading::default(),
             drag: None,
             light_drag: None,
+            toolbar_bottom: 0.0,
+            prefs: crate::prefs::Preferences::default(),
+            shading_set: false,
             geometry: Geometry::default(),
         }
     }
@@ -144,6 +152,13 @@ impl Panel for Viewport {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if rect.width() < 8.0 || rect.height() < 8.0 {
             return;
+        }
+        self.prefs = state.prefs.clone();
+        if !self.shading_set {
+            self.shading_set = true;
+            if self.prefs.solid_by_default {
+                self.shading = crate::engine::Shading::Solid;
+            }
         }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::VIEWPORT_BG);
@@ -176,6 +191,7 @@ impl Panel for Viewport {
                 state,
                 tool: &tool,
                 geometry: &self.geometry,
+                overlay_top: self.toolbar_bottom.max(rect.top() + 40.0),
             };
             consumed |= ext.interact(&mut ctx);
         }
@@ -281,10 +297,10 @@ impl Viewport {
         let view = view::look_at_mat4(eye, self.orbit.target, Vec3::Y);
         let aspect = rect.width() / rect.height();
         let proj = if self.orthographic {
-            let h = self.orbit.distance * (FOV_DEG.to_radians() * 0.5).tan();
+            let h = self.orbit.distance * (self.prefs.fov_deg.to_radians() * 0.5).tan();
             directx::orthographic(-h * aspect, h * aspect, -h, h, NEAR, FAR)
         } else {
-            directx::perspective(FOV_DEG.to_radians(), aspect, NEAR, FAR)
+            directx::perspective(self.prefs.fov_deg.to_radians(), aspect, NEAR, FAR)
         };
         ViewCamera {
             view,
@@ -367,14 +383,16 @@ impl Viewport {
             let scale = self.orbit.distance * 0.0016;
             self.orbit.target += (-r * delta.x + u * delta.y) * scale;
         } else if left && alt {
-            self.orbit.yaw -= delta.x * 0.008;
-            self.orbit.pitch = (self.orbit.pitch + delta.y * 0.008).clamp(-1.55, 1.55);
+            let (k, dy) = self.look(delta);
+            self.orbit.yaw -= delta.x * 0.008 * k;
+            self.orbit.pitch = (self.orbit.pitch + dy * 0.008 * k).clamp(-1.55, 1.55);
         } else if right && alt {
             self.zoom((delta.x - delta.y) * 0.01);
         } else if right {
             let eye = self.orbit.eye();
-            self.orbit.yaw -= delta.x * 0.005;
-            self.orbit.pitch = (self.orbit.pitch + delta.y * 0.005).clamp(-1.55, 1.55);
+            let (k, dy) = self.look(delta);
+            self.orbit.yaw -= delta.x * 0.005 * k;
+            self.orbit.pitch = (self.orbit.pitch + dy * 0.005 * k).clamp(-1.55, 1.55);
             self.orbit.target = eye - self.orbit.back() * self.orbit.distance;
         }
 
@@ -399,11 +417,12 @@ impl Viewport {
                 + right_v * axis(egui::Key::D, egui::Key::A)
                 + Vec3::Y * axis(egui::Key::E, egui::Key::Q);
             if mv != Vec3::ZERO {
-                self.orbit.target += mv.normalize() * 6.0 * self.fly_speed * boost * dt;
+                self.orbit.target +=
+                    mv.normalize() * self.prefs.fly_speed * self.fly_speed * boost * dt;
                 ui.ctx().request_repaint();
             }
         } else if scroll != 0.0 && response.hovered() {
-            self.zoom(-scroll * 0.0015);
+            self.zoom(-scroll * 0.0015 * self.prefs.zoom_speed);
         }
 
         if state.frame_selection
@@ -415,6 +434,16 @@ impl Viewport {
             self.orbit.distance = (scale.max_element() * 2.5).clamp(2.0, 800.0);
             state.frame_selection = false;
         }
+    }
+
+    /// Look sensitivity and the (optionally inverted) vertical delta.
+    fn look(&self, delta: Vec2) -> (f32, f32) {
+        let dy = if self.prefs.invert_y {
+            -delta.y
+        } else {
+            delta.y
+        };
+        (self.prefs.look_sensitivity, dy)
     }
 
     fn zoom(&mut self, amount: f32) {
@@ -433,7 +462,7 @@ impl Viewport {
             if !state.scene.active_in_hierarchy(e.id) {
                 continue;
             }
-            if let Some(poly) = &e.poly {
+            if let Some(poly) = e.poly.as_ref().filter(|_| e.brush.is_none()) {
                 let (pos, nrm, idx) = poly.triangulate();
                 let color = linear_color(e.mesh.as_ref().map_or([0.8; 4], |m| m.color));
                 for t in idx.as_chunks::<3>().0 {
@@ -507,7 +536,7 @@ impl Viewport {
             } else {
                 theme::SELECTED.gamma_multiply(0.6)
             };
-            if let Some(poly) = &e.poly {
+            if let Some(poly) = e.poly.as_ref().filter(|_| e.brush.is_none()) {
                 for [a, b] in poly.edges() {
                     let (a, b) = (poly.positions[a as usize], poly.positions[b as usize]);
                     camera.line(
@@ -867,7 +896,7 @@ impl Viewport {
     ) {
         let bar_rect = rect.shrink(6.0);
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
-        egui::Frame::new()
+        self.toolbar_bottom = egui::Frame::new()
             .fill(Color32::from_black_alpha(110))
             .corner_radius(5.0)
             .inner_margin(egui::Margin::symmetric(6, 3))
@@ -972,11 +1001,39 @@ impl Viewport {
                         state.frame_selection = true;
                     }
                 });
-            });
+            })
+            .response
+            .rect
+            .bottom();
 
         let painter = ui.painter_at(rect);
         draw_icons(&painter, camera, state);
         self.view_gizmo(ui, rect, camera);
+        if self.prefs.show_stats
+            && let Some(stats) = state.render_stats.get(&self.id)
+        {
+            let dt = ui.input(|i| i.stable_dt).max(1e-4);
+            let text = format!(
+                "{} draw calls · {} objects · {} culled · {:.1} ms ({:.0} fps)",
+                stats.draw_calls,
+                stats.instances,
+                stats.culled,
+                dt * 1000.0,
+                1.0 / dt
+            );
+            let galley = painter.layout_no_wrap(
+                text,
+                FontId::monospace(11.5),
+                Color32::from_white_alpha(220),
+            );
+            let at = rect.right_bottom() - vec2(galley.size().x + 14.0, galley.size().y + 12.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(at - vec2(6.0, 3.0), galley.size() + vec2(12.0, 6.0)),
+                6.0,
+                Color32::from_black_alpha(120),
+            );
+            painter.galley(at, galley, Color32::WHITE);
+        }
         if ui.input(|i| i.pointer.button_down(PointerButton::Secondary)) && self.fly_speed != 1.0 {
             painter.text(
                 rect.center_bottom() + vec2(0.0, -28.0),

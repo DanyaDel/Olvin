@@ -30,7 +30,11 @@ impl EditorInstall {
     }
 
     pub fn binary(&self) -> PathBuf {
-        let name = if cfg!(windows) { "olvin-editor.exe" } else { "olvin-editor" };
+        let name = if cfg!(windows) {
+            "olvin-editor.exe"
+        } else {
+            "olvin-editor"
+        };
         self.root.join("target/release").join(name)
     }
 
@@ -44,9 +48,15 @@ impl EditorInstall {
 
     /// Ids of installed editor elements, in catalog order.
     pub fn installed(&self, catalog: &Catalog) -> Vec<String> {
-        let Ok(text) = std::fs::read_to_string(self.root.join("Cargo.toml")) else { return Vec::new() };
-        let Ok(doc) = text.parse::<DocumentMut>() else { return Vec::new() };
-        let Some(deps) = doc.get("dependencies").and_then(Item::as_table_like) else { return Vec::new() };
+        let Ok(text) = std::fs::read_to_string(self.root.join("Cargo.toml")) else {
+            return Vec::new();
+        };
+        let Ok(doc) = text.parse::<DocumentMut>() else {
+            return Vec::new();
+        };
+        let Some(deps) = doc.get("dependencies").and_then(Item::as_table_like) else {
+            return Vec::new();
+        };
         catalog
             .editor_modules
             .iter()
@@ -60,7 +70,12 @@ impl EditorInstall {
         if self.is_generated() {
             self.installed(catalog)
         } else {
-            catalog.editor_modules.iter().filter(|m| m.default).map(|m| m.id.clone()).collect()
+            catalog
+                .editor_modules
+                .iter()
+                .filter(|m| m.default)
+                .map(|m| m.id.clone())
+                .collect()
         }
     }
 
@@ -70,7 +85,10 @@ impl EditorInstall {
         if let EngineSource::Path(path) = engine
             && !path.join("editor/olvin_editor/Cargo.toml").is_file()
         {
-            bail!("{}: в этой версии Olvin нет редактора (editor/olvin_editor)", path.display());
+            bail!(
+                "{}: в этой версии Olvin нет редактора (editor/olvin_editor)",
+                path.display()
+            );
         }
         for id in ids {
             if catalog.editor_module(id).is_none() {
@@ -78,20 +96,39 @@ impl EditorInstall {
             }
         }
         // Catalog order keeps the generated files stable.
-        let modules: Vec<_> = catalog.editor_modules.iter().filter(|m| ids.contains(&m.id)).collect();
+        let modules: Vec<_> = catalog
+            .editor_modules
+            .iter()
+            .filter(|m| ids.contains(&m.id))
+            .collect();
 
         let mut doc: DocumentMut = CARGO_TOML.parse().expect("template is valid TOML");
         let deps = doc["dependencies"].as_table_mut().unwrap();
-        deps.insert("olvin_editor", Item::Value(Value::InlineTable(engine.crate_dependency("editor/olvin_editor"))));
+        deps.insert(
+            "olvin_editor",
+            Item::Value(Value::InlineTable(
+                engine.crate_dependency("editor/olvin_editor"),
+            )),
+        );
         for m in &modules {
-            deps.insert(&m.package, Item::Value(Value::InlineTable(engine.crate_dependency(&m.path))));
+            deps.insert(
+                &m.package,
+                Item::Value(Value::InlineTable(engine.crate_dependency(&m.path))),
+            );
         }
 
-        let plugins: String = modules.iter().map(|m| format!("        Box::new({}),\n", m.plugin)).collect();
+        let plugins: String = modules
+            .iter()
+            .map(|m| format!("        Box::new({}),\n", m.plugin))
+            .collect();
         let names: Vec<_> = modules.iter().map(|m| m.name.as_str()).collect();
         let main = format!(
             "// Сгенерировано olvin-hub. Элементы: {}.\n// Не редактируй: файл перезаписывается командами `olvin-hub editor add/remove`.\n\nfn main() {{\n    olvin_editor::run(vec![\n{plugins}    ]);\n}}\n",
-            if names.is_empty() { "только база".into() } else { names.join(", ") },
+            if names.is_empty() {
+                "только база".into()
+            } else {
+                names.join(", ")
+            },
         );
 
         std::fs::create_dir_all(self.root.join("src"))?;
@@ -103,7 +140,8 @@ impl EditorInstall {
     /// `cargo build --release` of the installation. The caller decides how to run it.
     pub fn build_command(&self) -> Command {
         let mut cmd = Command::new("cargo");
-        cmd.args(["build", "--release", "--manifest-path"]).arg(self.root.join("Cargo.toml"));
+        cmd.args(["build", "--release", "--manifest-path"])
+            .arg(self.root.join("Cargo.toml"));
         cmd
     }
 
@@ -120,11 +158,17 @@ impl EditorInstall {
         if !self.is_built() {
             return false;
         }
-        let Some(current) = engine_fingerprint(engine) else { return false };
+        let Some(current) = engine_fingerprint(engine) else {
+            return false;
+        };
         let built = std::fs::read_to_string(self.root.join(STAMP))
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
-            .or_else(|| std::fs::metadata(self.binary()).ok().and_then(|m| mtime(&m)));
+            .or_else(|| {
+                std::fs::metadata(self.binary())
+                    .ok()
+                    .and_then(|m| mtime(&m))
+            });
         built.is_none_or(|b| current > b)
     }
 
@@ -144,17 +188,26 @@ const STAMP: &str = ".engine-stamp";
 
 /// Newest modification time (seconds) of the engine's sources: Rust, manifests, shaders.
 pub fn engine_fingerprint(engine: &EngineSource) -> Option<u64> {
-    let EngineSource::Path(root) = engine else { return None };
+    let EngineSource::Path(root) = engine else {
+        return None;
+    };
     fn walk(dir: &Path, newest: &mut u64) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
-                if path.file_name().is_some_and(|n| n != "target" && !n.to_string_lossy().starts_with('.')) {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n != "target" && !n.to_string_lossy().starts_with('.'))
+                {
                     walk(&path, newest);
                 }
-            } else if path.extension().is_some_and(|e| e == "rs" || e == "toml" || e == "wgsl")
+            } else if path
+                .extension()
+                .is_some_and(|e| e == "rs" || e == "toml" || e == "wgsl")
                 && let Some(t) = mtime(&meta)
             {
                 *newest = (*newest).max(t);
@@ -165,14 +218,21 @@ pub fn engine_fingerprint(engine: &EngineSource) -> Option<u64> {
     for dir in ["crates", "editor"] {
         walk(&root.join(dir), &mut newest);
     }
-    if let Some(t) = std::fs::metadata(root.join("Cargo.lock")).ok().and_then(|m| mtime(&m)) {
+    if let Some(t) = std::fs::metadata(root.join("Cargo.lock"))
+        .ok()
+        .and_then(|m| mtime(&m))
+    {
         newest = newest.max(t);
     }
     (newest > 0).then_some(newest)
 }
 
 fn mtime(meta: &std::fs::Metadata) -> Option<u64> {
-    meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+    meta.modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 const CARGO_TOML: &str = r#"# Сгенерировано olvin-hub: установка редактора Olvin.
@@ -209,15 +269,24 @@ mod tests {
         let catalog = Catalog::builtin();
         let engine = EngineSource::default();
 
-        assert_eq!(install.initial_selection(&catalog), ["console", "csg", "modeling"]);
-        install.write(&engine, &catalog, &["animator".into(), "console".into()]).unwrap();
+        assert_eq!(
+            install.initial_selection(&catalog),
+            ["console", "csg", "modeling"]
+        );
+        install
+            .write(&engine, &catalog, &["animator".into(), "console".into()])
+            .unwrap();
         assert_eq!(install.installed(&catalog), ["console", "animator"]);
         let main = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         assert!(main.find("ConsolePlugin").unwrap() < main.find("AnimatorPlugin").unwrap());
 
         install.write(&engine, &catalog, &[]).unwrap();
         assert!(install.installed(&catalog).is_empty());
-        assert!(std::fs::read_to_string(dir.join("src/main.rs")).unwrap().contains("vec![\n    ]"));
+        assert!(
+            std::fs::read_to_string(dir.join("src/main.rs"))
+                .unwrap()
+                .contains("vec![\n    ]")
+        );
         assert!(install.write(&engine, &catalog, &["nope".into()]).is_err());
         // Stale detection: no binary yet means "not built", not "stale".
         assert!(!install.is_stale(&engine));

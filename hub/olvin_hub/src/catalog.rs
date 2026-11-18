@@ -96,7 +96,9 @@ impl Catalog {
         order: &mut Vec<&'a Module>,
         stack: &mut Vec<String>,
     ) -> Result<()> {
-        let Some(module) = self.get(id) else { bail!("нет модуля `{id}`") };
+        let Some(module) = self.get(id) else {
+            bail!("нет модуля `{id}`")
+        };
         if order.iter().any(|m| m.id == id) {
             return Ok(());
         }
@@ -131,7 +133,12 @@ mod tests {
     #[test]
     fn builtin_parses_and_resolves_requires_first() {
         let c = Catalog::builtin();
-        let ids: Vec<_> = c.resolve("render").unwrap().iter().map(|m| m.id.as_str()).collect();
+        let ids: Vec<_> = c
+            .resolve("render")
+            .unwrap()
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
         assert_eq!(ids, ["window", "render"]);
         assert!(c.resolve("nope").is_err());
     }

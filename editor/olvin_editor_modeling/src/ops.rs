@@ -244,7 +244,9 @@ pub fn from_shape(shape: Shape) -> PolyMesh {
     }
 }
 
-/// Turns a primitive or a single CSG brush into an editable mesh in place.
+/// Makes the object editable in Edit Mode. A primitive becomes a mesh; a CSG
+/// brush stays a brush (operation, order and colour kept) and its shape becomes
+/// the edited cage, so the level is carved by exactly what you model.
 pub fn make_editable(state: &mut EditorState, id: u64) -> Result<(), String> {
     let Some(e) = state.scene.get(id) else {
         return Err("nothing selected".into());
@@ -252,28 +254,17 @@ pub fn make_editable(state: &mut EditorState, id: u64) -> Result<(), String> {
     if e.poly.is_some() {
         return Ok(());
     }
-    let (poly, color) = if let Some(brush) = &e.brush {
-        let input = olvin_csg::BrushInput {
-            id,
-            shape: brush.shape,
-            op: olvin_csg::CsgOp::Add,
-            transform: Mat4::IDENTITY,
-            color: brush.color,
-            vertices: brush.vertices.clone(),
-        };
-        let polys: Vec<Vec<Vec3>> = olvin_csg::build(&[input])
-            .into_iter()
-            .map(|p| p.vertices)
-            .collect();
-        (PolyMesh::from_polygons(&polys, 1e-4), brush.color)
-    } else if let Some(mesh) = &e.mesh {
-        (from_shape(mesh.shape), mesh.color)
-    } else {
+    let name = e.name.clone();
+    if e.brush.is_some() {
+        let poly = brush_cage(e).ok_or("empty brush")?;
+        state.scene.get_mut(id).unwrap().poly = Some(poly);
+        return Ok(());
+    }
+    let Some(mesh) = &e.mesh else {
         return Err("only meshes and CSG brushes can be edited".into());
     };
-    let name = e.name.clone();
+    let (poly, color) = (from_shape(mesh.shape), mesh.color);
     let e = state.scene.get_mut(id).unwrap();
-    e.brush = None;
     e.mesh = Some(MeshDesc {
         shape: Shape::Cube,
         color,
@@ -281,4 +272,56 @@ pub fn make_editable(state: &mut EditorState, id: u64) -> Result<(), String> {
     e.poly = Some(poly);
     state.info(format!("{name}: converted to an editable mesh"));
     Ok(())
+}
+
+/// A brush's current surface (shape or edited hull) as a polygon mesh.
+fn brush_cage(e: &olvin_editor::olvin_scene::file::EntityDesc) -> Option<PolyMesh> {
+    let mut input = e.brush_input(Mat4::IDENTITY)?;
+    input.op = olvin_csg::CsgOp::Add;
+    input.faces = None;
+    let polys: Vec<Vec<Vec3>> = olvin_csg::build(&[input])
+        .into_iter()
+        .map(|p| p.vertices)
+        .collect();
+    let mut poly = PolyMesh::from_polygons(&polys, 1e-4);
+    // CSG fragments of one flat side merge back into a single face.
+    let flat: Vec<[u32; 2]> = poly
+        .edges()
+        .into_iter()
+        .filter(|[a, b]| {
+            let f = poly.faces_with_edge(*a, *b);
+            f.len() == 2 && poly.face_normal(f[0]).dot(poly.face_normal(f[1])) > 0.9999
+        })
+        .collect();
+    poly.dissolve_edges(&flat);
+    (!poly.faces.is_empty()).then_some(poly)
+}
+
+/// Takes a modelled brush out of the CSG level: it becomes a plain mesh.
+pub fn detach_brush(state: &mut EditorState, id: u64) {
+    let Some(e) = state.scene.get(id) else { return };
+    let Some(color) = e.brush.as_ref().map(|b| b.color) else {
+        return;
+    };
+    let Some(poly) = e.poly.clone().or_else(|| brush_cage(e)) else {
+        return;
+    };
+    let e = state.scene.get_mut(id).unwrap();
+    e.brush = None;
+    e.poly = Some(poly);
+    e.mesh = Some(MeshDesc {
+        shape: Shape::Cube,
+        color,
+    });
+}
+
+/// Drops the modelled shape of a brush: back to its parametric shape.
+pub fn reset_brush(state: &mut EditorState, id: u64) {
+    if let Some(e) = state.scene.get_mut(id)
+        && let Some(b) = &mut e.brush
+    {
+        b.vertices = None;
+        e.poly = None;
+    }
+    shared(|s| s.verts.clear());
 }

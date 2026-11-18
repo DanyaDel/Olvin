@@ -5,7 +5,6 @@
 //! is rebuilt live whenever a brush changes, and games rebuild it on load.
 
 mod panel;
-mod poly;
 mod viewport;
 
 use std::cell::RefCell;
@@ -15,11 +14,14 @@ use olvin_editor::egui_dock::{DockState, NodeIndex};
 use olvin_editor::ext::{ComponentEditor, CreateItem};
 use olvin_editor::glam::Vec3;
 use olvin_editor::olvin_scene::file::{BrushDesc, BrushShape, CsgOp, EntityDesc};
-use olvin_editor::{EditorPlugin, EditorState, PanelKind, Registry, Tab, TabAlloc, WorkspaceTemplate, panels};
+use olvin_editor::{
+    EditorPlugin, EditorState, PanelKind, Registry, Tab, TabAlloc, WorkspaceTemplate, panels,
+};
 
 pub const DRAW_TOOL: &str = "csg.draw";
 pub const EDIT_TOOL: &str = "csg.edit";
-pub const POLY_TOOL: &str = "csg.poly";
+/// Edit Mode of the Modeling element: brushes are modelled there too.
+pub const MODEL_EDIT_TOOL: &str = "model.edit";
 const PANEL: &str = "csg.panel";
 
 pub struct CsgPlugin;
@@ -32,7 +34,11 @@ impl EditorPlugin for CsgPlugin {
     fn build(&self, registry: &mut Registry) {
         registry
             .add_viewport_extension(|| Box::<viewport::CsgViewport>::default())
-            .add_panel(PanelKind { id: PANEL, title: "◩ Mapping", factory: || Box::new(panel::CsgPanel) })
+            .add_panel(PanelKind {
+                id: PANEL,
+                title: "◩ Mapping",
+                factory: || Box::new(panel::CsgPanel),
+            })
             .add_component(ComponentEditor {
                 title: "CSG Brush",
                 has: |e| e.brush.is_some(),
@@ -40,7 +46,10 @@ impl EditorPlugin for CsgPlugin {
                 remove: |e| e.brush = None,
                 ui: brush_inspector,
             })
-            .add_workspace_template(WorkspaceTemplate { name: "Mapping", build: level_layout });
+            .add_workspace_template(WorkspaceTemplate {
+                name: "Mapping",
+                build: level_layout,
+            });
         for (path, create) in CREATE {
             registry.add_create_item(CreateItem { path, create });
         }
@@ -52,9 +61,15 @@ type Create = fn(&mut EditorState, Option<u64>) -> u64;
 const CREATE: [(&str, Create); 6] = [
     ("CSG/Box", |s, p| spawn(s, p, BrushShape::Box)),
     ("CSG/Wedge", |s, p| spawn(s, p, BrushShape::Wedge)),
-    ("CSG/Cylinder", |s, p| spawn(s, p, BrushShape::Cylinder { sides: 16 })),
-    ("CSG/Pyramid", |s, p| spawn(s, p, BrushShape::Pyramid { sides: 4 })),
-    ("CSG/Stairs", |s, p| spawn(s, p, BrushShape::Stairs { steps: 8 })),
+    ("CSG/Cylinder", |s, p| {
+        spawn(s, p, BrushShape::Cylinder { sides: 16 })
+    }),
+    ("CSG/Pyramid", |s, p| {
+        spawn(s, p, BrushShape::Pyramid { sides: 4 })
+    }),
+    ("CSG/Stairs", |s, p| {
+        spawn(s, p, BrushShape::Stairs { steps: 8 })
+    }),
     ("CSG/Room", spawn_room),
 ];
 
@@ -68,7 +83,6 @@ pub(crate) struct Shared {
     pub grid_texture: bool,
     pub wall: f32,
     pub stats: Stats,
-    pub poly: poly::PolyState,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -88,7 +102,6 @@ thread_local! {
         grid_texture: true,
         wall: 0.25,
         stats: Stats::default(),
-        poly: poly::PolyState::default(),
     });
 }
 
@@ -97,7 +110,12 @@ pub(crate) fn shared<R>(f: impl FnOnce(&mut Shared) -> R) -> R {
 }
 
 pub(crate) fn default_brush(shape: BrushShape) -> BrushDesc {
-    shared(|s| BrushDesc { shape, op: s.op, color: s.color, ..Default::default() })
+    shared(|s| BrushDesc {
+        shape,
+        op: s.op,
+        color: s.color,
+        ..Default::default()
+    })
 }
 
 fn spawn(state: &mut EditorState, parent: Option<u64>, shape: BrushShape) -> u64 {
@@ -132,7 +150,12 @@ pub(crate) fn hollow(state: &mut EditorState, id: u64) -> Option<u64> {
     let e = state.scene.get_mut(child).unwrap();
     e.name = "Hollow".into();
     e.scale = inner;
-    e.brush = Some(BrushDesc { shape: BrushShape::Box, op: CsgOp::Subtract, color, ..Default::default() });
+    e.brush = Some(BrushDesc {
+        shape: BrushShape::Box,
+        op: CsgOp::Subtract,
+        color,
+        ..Default::default()
+    });
     Some(child)
 }
 
@@ -164,26 +187,36 @@ pub(crate) fn op_buttons(ui: &mut egui::Ui, op: &mut CsgOp) {
 
 pub(crate) fn shape_editor(ui: &mut egui::Ui, shape: &mut BrushShape) {
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("csg-shape").selected_text(shape.label()).show_ui(ui, |ui| {
-            for candidate in [
-                BrushShape::Box,
-                BrushShape::Wedge,
-                BrushShape::Cylinder { sides: 16 },
-                BrushShape::Pyramid { sides: 4 },
-                BrushShape::Stairs { steps: 8 },
-            ] {
-                let same = std::mem::discriminant(shape) == std::mem::discriminant(&candidate);
-                if ui.selectable_label(same, candidate.label()).clicked() && !same {
-                    *shape = candidate;
+        egui::ComboBox::from_id_salt("csg-shape")
+            .selected_text(shape.label())
+            .show_ui(ui, |ui| {
+                for candidate in [
+                    BrushShape::Box,
+                    BrushShape::Wedge,
+                    BrushShape::Cylinder { sides: 16 },
+                    BrushShape::Pyramid { sides: 4 },
+                    BrushShape::Stairs { steps: 8 },
+                ] {
+                    let same = std::mem::discriminant(shape) == std::mem::discriminant(&candidate);
+                    if ui.selectable_label(same, candidate.label()).clicked() && !same {
+                        *shape = candidate;
+                    }
                 }
-            }
-        });
+            });
         match shape {
             BrushShape::Cylinder { sides } | BrushShape::Pyramid { sides } => {
-                ui.add(DragValue::new(sides).range(BrushShape::MIN_SIDES..=BrushShape::MAX_SIDES).prefix("sides "));
+                ui.add(
+                    DragValue::new(sides)
+                        .range(BrushShape::MIN_SIDES..=BrushShape::MAX_SIDES)
+                        .prefix("sides "),
+                );
             }
             BrushShape::Stairs { steps } => {
-                ui.add(DragValue::new(steps).range(1..=BrushShape::MAX_STEPS).prefix("steps "));
+                ui.add(
+                    DragValue::new(steps)
+                        .range(1..=BrushShape::MAX_STEPS)
+                        .prefix("steps "),
+                );
             }
             _ => {}
         }
@@ -192,16 +225,19 @@ pub(crate) fn shape_editor(ui: &mut egui::Ui, shape: &mut BrushShape) {
 
 fn brush_inspector(ui: &mut egui::Ui, e: &mut EntityDesc) {
     let Some(brush) = &mut e.brush else { return };
-    egui::Grid::new("csg-brush").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-        ui.label("Operation");
-        op_buttons(ui, &mut brush.op);
-        ui.end_row();
-        ui.label("Shape");
-        shape_editor(ui, &mut brush.shape);
-        ui.end_row();
-        ui.label("Color");
-        ui.color_edit_button_rgba_unmultiplied(&mut brush.color);
-        ui.end_row();
-    });
+    egui::Grid::new("csg-brush")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Operation");
+            op_buttons(ui, &mut brush.op);
+            ui.end_row();
+            ui.label("Shape");
+            shape_editor(ui, &mut brush.shape);
+            ui.end_row();
+            ui.label("Color");
+            ui.color_edit_button_rgba_unmultiplied(&mut brush.color);
+            ui.end_row();
+        });
     ui.weak("Size = Scale. Operations apply in hierarchy order.");
 }

@@ -1,4 +1,4 @@
-//! The Mapping window: tool modes, polygon editing actions, boolean
+//! The Mapping window: tool modes (Edit Shape is the Modeling Edit Mode), boolean
 //! operations on the selected brush, defaults for new brushes, build stats.
 
 use olvin_editor::egui::{self, DragValue, RichText};
@@ -6,82 +6,57 @@ use olvin_editor::glam::{EulerRot, Quat, Vec3};
 use olvin_editor::olvin_scene::file::{CsgOp, EntityDesc, euler_to_quat};
 use olvin_editor::{EditorState, Panel, tools};
 
-use crate::poly::{ElementMode, extrude_face, reset_shape};
-use crate::{DRAW_TOOL, EDIT_TOOL, POLY_TOOL, hollow, op_buttons, shape_editor, shared};
+use crate::{DRAW_TOOL, EDIT_TOOL, MODEL_EDIT_TOOL, hollow, op_buttons, shape_editor, shared};
 
 pub struct CsgPanel;
 
 impl Panel for CsgPanel {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // Tool modes, like Realtime CSG's Object / Generate / Edit.
-            ui.horizontal_wrapped(|ui| {
-                for (tool, label, key) in [
-                    (tools::MOVE, "⊹ Object", "W"),
-                    (DRAW_TOOL, "✏ Draw", "B"),
-                    (EDIT_TOOL, "⬚ Resize", "T"),
-                    (POLY_TOOL, "◆ Edit Polygons", "G"),
-                ] {
-                    let text = RichText::new(label).size(14.0);
-                    if ui.selectable_label(state.tool == tool, text).on_hover_text(key).clicked() {
-                        state.tool = tool.to_owned();
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                // Tool modes, like Realtime CSG's Object / Generate / Edit.
+                ui.horizontal_wrapped(|ui| {
+                    for (tool, label, key) in [
+                        (tools::MOVE, "⊹ Object", "W"),
+                        (DRAW_TOOL, "✏ Draw", "B"),
+                        (EDIT_TOOL, "⬚ Resize", "T"),
+                        (MODEL_EDIT_TOOL, "◆ Edit Shape", "Tab"),
+                    ] {
+                        let text = RichText::new(label).size(14.0);
+                        if ui
+                            .selectable_label(state.tool == tool, text)
+                            .on_hover_text(key)
+                            .clicked()
+                        {
+                            state.tool = tool.to_owned();
+                        }
                     }
-                }
-            });
-            ui.add_space(4.0);
+                });
+                ui.add_space(4.0);
 
-            let brush = state.selection.filter(|id| state.scene.get(*id).is_some_and(|e| e.brush.is_some()));
-            if state.tool == POLY_TOOL {
-                polygons(ui, state, brush.is_some());
-            }
-            booleans(ui, state, brush);
-            new_brushes(ui);
+                let brush = state
+                    .selection
+                    .filter(|id| state.scene.get(*id).is_some_and(|e| e.brush.is_some()));
+                booleans(ui, state, brush);
+                new_brushes(ui);
 
-            section(ui, "Display", |ui| {
-                shared(|s| {
-                    ui.checkbox(&mut s.outlines, "Brush outlines");
-                    ui.checkbox(&mut s.grid_texture, "Grid texture on surfaces");
+                section(ui, "Display", |ui| {
+                    shared(|s| {
+                        ui.checkbox(&mut s.outlines, "Brush outlines");
+                        ui.checkbox(&mut s.grid_texture, "Grid texture on surfaces");
+                    });
+                });
+                let stats = shared(|s| s.stats);
+                section(ui, "Build", |ui| {
+                    ui.label(format!(
+                        "{} brushes → {} polygons, {} triangles",
+                        stats.brushes, stats.polygons, stats.triangles
+                    ));
+                    ui.weak(format!("last rebuild {:.2} ms", stats.build_ms));
                 });
             });
-            let stats = shared(|s| s.stats);
-            section(ui, "Build", |ui| {
-                ui.label(format!("{} brushes → {} polygons, {} triangles", stats.brushes, stats.polygons, stats.triangles));
-                ui.weak(format!("last rebuild {:.2} ms", stats.build_ms));
-            });
-        });
     }
-}
-
-fn polygons(ui: &mut egui::Ui, state: &mut EditorState, has_brush: bool) {
-    section(ui, "Edit Polygons", |ui| {
-        if !has_brush {
-            ui.weak("Select a brush in the scene");
-            return;
-        }
-        ui.horizontal(|ui| {
-            shared(|s| {
-                for (mode, label) in [(ElementMode::Vertex, "Vertex  1"), (ElementMode::Edge, "Edge  2"), (ElementMode::Face, "Face  3")] {
-                    ui.selectable_value(&mut s.poly.mode, mode, label);
-                }
-            });
-        });
-        let count = shared(|s| s.poly.selected.len());
-        ui.weak(format!("{count} vertices selected · Shift adds · drag the arrows (cyan = face normal)"));
-        ui.horizontal(|ui| {
-            let mut depth = ui.data_mut(|d| *d.get_temp_mut_or(egui::Id::new("csg-extrude"), 1.0f32));
-            if ui.button("Extrude Face").on_hover_text("New brush: the selected face pushed out").clicked() {
-                extrude_face(state, depth);
-            }
-            ui.add(DragValue::new(&mut depth).range(0.01..=100.0).speed(0.05).prefix("depth "));
-            ui.data_mut(|d| d.insert_temp(egui::Id::new("csg-extrude"), depth));
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Reset to Shape").on_hover_text("Drop vertex edits").clicked() {
-                reset_shape(state);
-            }
-            ui.weak("Delete key removes selected vertices");
-        });
-    });
 }
 
 fn booleans(ui: &mut egui::Ui, state: &mut EditorState, brush: Option<u64>) {
@@ -101,7 +76,10 @@ fn booleans(ui: &mut egui::Ui, state: &mut EditorState, brush: Option<u64>) {
             if ui.button("▼ Later").clicked() {
                 state.move_sibling(id, 1);
             }
-            if ui.button("Duplicate as Carve").on_hover_text("Same volume, subtractive").clicked()
+            if ui
+                .button("Duplicate as Carve")
+                .on_hover_text("Same volume, subtractive")
+                .clicked()
                 && let Some(copy) = state.duplicate(id)
                 && let Some(b) = state.scene.get_mut(copy).and_then(|e| e.brush.as_mut())
             {
@@ -111,11 +89,20 @@ fn booleans(ui: &mut egui::Ui, state: &mut EditorState, brush: Option<u64>) {
         ui.horizontal(|ui| {
             let wall = shared(|s| s.wall);
             let mut w = wall;
-            if ui.button("Hollow").on_hover_text("Add a subtractive inner brush: a room").clicked() {
+            if ui
+                .button("Hollow")
+                .on_hover_text("Add a subtractive inner brush: a room")
+                .clicked()
+            {
                 hollow(state, id);
                 state.selection = Some(id);
             }
-            ui.add(DragValue::new(&mut w).range(0.01..=10.0).speed(0.01).prefix("wall "));
+            ui.add(
+                DragValue::new(&mut w)
+                    .range(0.01..=10.0)
+                    .speed(0.01)
+                    .prefix("wall "),
+            );
             if w != wall {
                 shared(|s| s.wall = w);
             }
@@ -141,17 +128,20 @@ fn booleans(ui: &mut egui::Ui, state: &mut EditorState, brush: Option<u64>) {
 fn new_brushes(ui: &mut egui::Ui) {
     section(ui, "New brushes", |ui| {
         shared(|s| {
-            egui::Grid::new("csg-new").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                ui.label("Operation");
-                op_buttons(ui, &mut s.op);
-                ui.end_row();
-                ui.label("Shape");
-                shape_editor(ui, &mut s.shape);
-                ui.end_row();
-                ui.label("Color");
-                ui.color_edit_button_rgba_unmultiplied(&mut s.color);
-                ui.end_row();
-            });
+            egui::Grid::new("csg-new")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Operation");
+                    op_buttons(ui, &mut s.op);
+                    ui.end_row();
+                    ui.label("Shape");
+                    shape_editor(ui, &mut s.shape);
+                    ui.end_row();
+                    ui.label("Color");
+                    ui.color_edit_button_rgba_unmultiplied(&mut s.color);
+                    ui.end_row();
+                });
         });
         ui.weak("Draw: drag on a surface, then move to set the height. Down carves, Shift forces Subtract, Esc/RMB cancels.");
     });
@@ -164,11 +154,13 @@ fn edit(state: &mut EditorState, id: u64, f: impl FnOnce(&mut EntityDesc)) {
 }
 
 fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::group(ui.style()).fill(ui.visuals().faint_bg_color).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(title).strong());
-        ui.add_space(2.0);
-        body(ui);
-    });
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).strong());
+            ui.add_space(2.0);
+            body(ui);
+        });
     ui.add_space(4.0);
 }

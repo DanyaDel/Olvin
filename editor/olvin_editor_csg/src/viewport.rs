@@ -3,27 +3,27 @@
 use std::time::Instant;
 
 use olvin_editor::egui::{self, Align2, Color32, FontId, Key, PointerButton, Pos2};
-use olvin_editor::ext::{Geometry, Snap, ToolDesc, ViewCamera, ViewportCtx, ViewportExtension, flags, linear_color};
+use olvin_editor::ext::{
+    Geometry, Snap, ToolDesc, ViewCamera, ViewportCtx, ViewportExtension, flags, linear_color,
+};
 use olvin_editor::glam::{Mat4, Vec3};
 use olvin_editor::olvin_scene::file::{BrushDesc, CsgOp};
 use olvin_editor::{EditorState, NewEntity, theme};
 
-use crate::poly::PolyTool;
-use crate::{DRAW_TOOL, EDIT_TOOL, POLY_TOOL, op_color, shared};
+use crate::{DRAW_TOOL, EDIT_TOOL, op_color, shared};
 
-const TOOLS: [ToolDesc; 3] = [
+const TOOLS: [ToolDesc; 2] = [
     ToolDesc {
         id: DRAW_TOOL,
         label: "Draw Brush",
         tooltip: "Drag a rectangle on any surface, then set the height: up adds, down carves. Shift: subtract",
         key: Some(Key::B),
     },
-    ToolDesc { id: EDIT_TOOL, label: "Resize", tooltip: "Drag the faces of the selected brush", key: Some(Key::T) },
     ToolDesc {
-        id: POLY_TOOL,
-        label: "Edit Polygons",
-        tooltip: "Select vertices / edges / faces (1/2/3, Shift adds) and move them; Delete removes vertices",
-        key: Some(Key::G),
+        id: EDIT_TOOL,
+        label: "Resize",
+        tooltip: "Drag the faces of the selected brush",
+        key: Some(Key::T),
     },
 ];
 
@@ -38,10 +38,20 @@ struct DrawPlane {
 impl DrawPlane {
     fn from_hit(point: Vec3, normal: Vec3) -> Self {
         let a = normal.abs();
-        let axis = if a.x >= a.y && a.x >= a.z { 0 } else if a.y >= a.z { 1 } else { 2 };
+        let axis = if a.x >= a.y && a.x >= a.z {
+            0
+        } else if a.y >= a.z {
+            1
+        } else {
+            2
+        };
         let mut n = Vec3::ZERO;
         n[axis] = normal[axis].signum();
-        Self { point, normal: n, axis }
+        Self {
+            point,
+            normal: n,
+            axis,
+        }
     }
 
     /// Snaps the in-plane coordinates, keeps the plane coordinate exact.
@@ -54,8 +64,17 @@ impl DrawPlane {
 
 enum Draw {
     Idle,
-    Base { plane: DrawPlane, start: Vec3, end: Vec3 },
-    Height { plane: DrawPlane, start: Vec3, end: Vec3, height: f32 },
+    Base {
+        plane: DrawPlane,
+        start: Vec3,
+        end: Vec3,
+    },
+    Height {
+        plane: DrawPlane,
+        start: Vec3,
+        end: Vec3,
+        height: f32,
+    },
 }
 
 struct FaceDrag {
@@ -76,12 +95,16 @@ pub struct CsgViewport {
     polygons: Vec<olvin_csg::Polygon>,
     draw: Draw,
     face: Option<FaceDrag>,
-    poly: PolyTool,
 }
 
 impl Default for CsgViewport {
     fn default() -> Self {
-        Self { cache_key: Vec::new(), polygons: Vec::new(), draw: Draw::Idle, face: None, poly: PolyTool::default() }
+        Self {
+            cache_key: Vec::new(),
+            polygons: Vec::new(),
+            draw: Draw::Idle,
+            face: None,
+        }
     }
 }
 
@@ -114,7 +137,11 @@ impl ViewportExtension for CsgViewport {
         let (grid, outlines) = shared(|s| (s.grid_texture, s.outlines));
         let base = if grid { flags::GRID } else { 0 };
         for p in &self.polygons {
-            let f = if state.selection == Some(p.brush) { base | flags::SELECTED } else { base };
+            let f = if state.selection == Some(p.brush) {
+                base | flags::SELECTED
+            } else {
+                base
+            };
             out.polygon(p.brush, &p.vertices, p.normal, linear_color(p.color), f);
         }
         if outlines {
@@ -133,15 +160,8 @@ impl ViewportExtension for CsgViewport {
     }
 
     fn interact(&mut self, ctx: &mut ViewportCtx) -> bool {
-        if ctx.tool != POLY_TOOL {
-            self.selected_outline(ctx);
-        }
+        self.selected_outline(ctx);
         match ctx.tool {
-            POLY_TOOL => {
-                self.draw = Draw::Idle;
-                self.face = None;
-                self.poly.interact(ctx)
-            }
             DRAW_TOOL => {
                 self.face = None;
                 self.draw_tool(ctx);
@@ -162,8 +182,12 @@ impl ViewportExtension for CsgViewport {
 
 impl CsgViewport {
     fn selected_outline(&self, ctx: &ViewportCtx) {
-        let Some(sel) = ctx.state.selection else { return };
-        let Some(b) = self.cache_key.iter().find(|b| b.id == sel) else { return };
+        let Some(sel) = ctx.state.selection else {
+            return;
+        };
+        let Some(b) = self.cache_key.iter().find(|b| b.id == sel) else {
+            return;
+        };
         for [a, e] in olvin_csg::brush_edges(b) {
             ctx.camera.line(ctx.painter, a, e, (2.0, theme::SELECTED));
         }
@@ -190,9 +214,20 @@ impl CsgViewport {
                 let Some(hit) = ctx.raycast(p) else { return };
                 let plane = DrawPlane::from_hit(hit.point, hit.normal);
                 let at = plane.snap(hit.point, &ctx.snap);
-                cross(ctx.painter, ctx.camera, at, plane, ctx.snap.step.max(0.1), theme::SELECTED);
+                cross(
+                    ctx.painter,
+                    ctx.camera,
+                    at,
+                    plane,
+                    ctx.snap.step.max(0.1),
+                    theme::SELECTED,
+                );
                 if pressed && hovered {
-                    self.draw = Draw::Base { plane, start: at, end: at };
+                    self.draw = Draw::Base {
+                        plane,
+                        start: at,
+                        end: at,
+                    };
                 }
             }
             Draw::Base { plane, start, end } => {
@@ -209,11 +244,21 @@ impl CsgViewport {
                     self.draw = if flat {
                         Draw::Idle
                     } else {
-                        Draw::Height { plane: *plane, start: *start, end: *end, height: 0.0 }
+                        Draw::Height {
+                            plane: *plane,
+                            start: *start,
+                            end: *end,
+                            height: 0.0,
+                        }
                     };
                 }
             }
-            Draw::Height { plane, start, end, height } => {
+            Draw::Height {
+                plane,
+                start,
+                end,
+                height,
+            } => {
                 if let Some(p) = pointer {
                     let center = (*start + *end) * 0.5;
                     if let Some(t) = ctx.camera.ray(p).closest_on_line(center, plane.normal) {
@@ -235,8 +280,12 @@ impl CsgViewport {
 
     /// Face handles on the selected brush. Returns true while a handle is hot.
     fn edit_tool(&mut self, ctx: &mut ViewportCtx) -> bool {
-        let Some(sel) = ctx.state.selection else { return false };
-        let Some(b) = self.cache_key.iter().find(|b| b.id == sel) else { return false };
+        let Some(sel) = ctx.state.selection else {
+            return false;
+        };
+        let Some(b) = self.cache_key.iter().find(|b| b.id == sel) else {
+            return false;
+        };
         let m = b.transform;
         let pointer = ctx.response.hover_pos();
 
@@ -263,8 +312,17 @@ impl CsgViewport {
         };
         for (axis, sign, _, _, s) in &faces {
             let is_hot = hot == Some((*axis, *sign));
-            let color = if is_hot { Color32::from_rgb(255, 225, 70) } else { theme::AXES[*axis] };
-            ctx.painter.circle(*s, if is_hot { 7.0 } else { 5.5 }, color, (1.0, Color32::BLACK));
+            let color = if is_hot {
+                Color32::from_rgb(255, 225, 70)
+            } else {
+                theme::AXES[*axis]
+            };
+            ctx.painter.circle(
+                *s,
+                if is_hot { 7.0 } else { 5.5 },
+                color,
+                (1.0, Color32::BLACK),
+            );
         }
 
         if self.face.is_none()
@@ -275,7 +333,10 @@ impl CsgViewport {
         {
             let press = ctx.ui.input(|i| i.pointer.press_origin()).unwrap_or(face.4);
             let worlds = ctx.state.scene.world_matrices();
-            let parent = e.parent.and_then(|p| worlds.get(&p).copied()).unwrap_or(Mat4::IDENTITY);
+            let parent = e
+                .parent
+                .and_then(|p| worlds.get(&p).copied())
+                .unwrap_or(Mat4::IDENTITY);
             let mut full = Vec3::ZERO;
             full[axis] = 1.0;
             self.face = Some(FaceDrag {
@@ -283,7 +344,11 @@ impl CsgViewport {
                 axis,
                 sign,
                 dir: face.3,
-                param: ctx.camera.ray(press).closest_on_line(face.2, face.3).unwrap_or(0.0),
+                param: ctx
+                    .camera
+                    .ray(press)
+                    .closest_on_line(face.2, face.3)
+                    .unwrap_or(0.0),
                 face: face.2,
                 position: e.position,
                 scale: e.scale,
@@ -335,23 +400,37 @@ fn corners(plane: DrawPlane, start: Vec3, end: Vec3) -> [Vec3; 4] {
         p[k] = b;
         p
     };
-    [at(start[j], start[k]), at(end[j], start[k]), at(end[j], end[k]), at(start[j], end[k])]
+    [
+        at(start[j], start[k]),
+        at(end[j], start[k]),
+        at(end[j], end[k]),
+        at(start[j], end[k]),
+    ]
 }
 
 fn rect_preview(ctx: &ViewportCtx, plane: DrawPlane, start: Vec3, end: Vec3, height: f32) {
     let base = corners(plane, start, end);
     let top = base.map(|c| c + plane.normal * height);
     let carve = height < 0.0 || ctx.ui.input(|i| i.modifiers.shift);
-    let color = if carve { op_color(CsgOp::Subtract) } else { op_color(CsgOp::Add) };
+    let color = if carve {
+        op_color(CsgOp::Subtract)
+    } else {
+        op_color(CsgOp::Add)
+    };
     for i in 0..4 {
-        ctx.camera.line(ctx.painter, base[i], base[(i + 1) % 4], (2.0, color));
+        ctx.camera
+            .line(ctx.painter, base[i], base[(i + 1) % 4], (2.0, color));
         if height != 0.0 {
-            ctx.camera.line(ctx.painter, top[i], top[(i + 1) % 4], (2.0, color));
+            ctx.camera
+                .line(ctx.painter, top[i], top[(i + 1) % 4], (2.0, color));
             ctx.camera.line(ctx.painter, base[i], top[i], (1.5, color));
         }
     }
     let size = (end - start).abs() + (plane.normal * height).abs();
-    if let Some(p) = ctx.camera.project((start + end) * 0.5 + plane.normal * height) {
+    if let Some(p) = ctx
+        .camera
+        .project((start + end) * 0.5 + plane.normal * height)
+    {
         ctx.painter.text(
             p,
             Align2::CENTER_BOTTOM,
@@ -362,7 +441,14 @@ fn rect_preview(ctx: &ViewportCtx, plane: DrawPlane, start: Vec3, end: Vec3, hei
     }
 }
 
-fn cross(painter: &egui::Painter, camera: &ViewCamera, at: Vec3, plane: DrawPlane, size: f32, color: Color32) {
+fn cross(
+    painter: &egui::Painter,
+    camera: &ViewCamera,
+    at: Vec3,
+    plane: DrawPlane,
+    size: f32,
+    color: Color32,
+) {
     let (j, k) = ((plane.axis + 1) % 3, (plane.axis + 2) % 3);
     let (mut u, mut v) = (Vec3::ZERO, Vec3::ZERO);
     u[j] = size * 0.5;
@@ -371,21 +457,57 @@ fn cross(painter: &egui::Painter, camera: &ViewCamera, at: Vec3, plane: DrawPlan
     camera.line(painter, at - v, at + v, (1.5, color));
 }
 
-fn create_brush(state: &mut EditorState, plane: DrawPlane, start: Vec3, end: Vec3, height: f32, force_subtract: bool) {
+fn create_brush(
+    state: &mut EditorState,
+    plane: DrawPlane,
+    start: Vec3,
+    end: Vec3,
+    height: f32,
+    force_subtract: bool,
+) {
     let far = (start + end) * 0.5 + plane.normal * height;
-    let pts = [start, end, start + plane.normal * height, end + plane.normal * height, far];
+    let pts = [
+        start,
+        end,
+        start + plane.normal * height,
+        end + plane.normal * height,
+        far,
+    ];
     let min = pts.iter().copied().fold(Vec3::splat(f32::MAX), Vec3::min);
     let max = pts.iter().copied().fold(Vec3::splat(f32::MIN), Vec3::max);
     let (shape, default_op, color) = shared(|s| (s.shape, s.op, s.color));
     // Extruding into a surface carves it, like Realtime CSG.
-    let op = if force_subtract || height < 0.0 { CsgOp::Subtract } else { default_op };
+    let op = if force_subtract || height < 0.0 {
+        CsgOp::Subtract
+    } else {
+        default_op
+    };
 
     let id = state.create(NewEntity::Empty, None);
     let e = state.scene.get_mut(id).unwrap();
-    e.name = format!("{} ({})", shape.label(), if op == CsgOp::Subtract { "carve" } else { "brush" });
+    e.name = format!(
+        "{} ({})",
+        shape.label(),
+        if op == CsgOp::Subtract {
+            "carve"
+        } else {
+            "brush"
+        }
+    );
     e.position = (min + max) * 0.5;
     e.scale = (max - min).max(Vec3::splat(0.01));
-    e.brush = Some(BrushDesc { shape, op, color, ..Default::default() });
-    let message = format!("{} {:.2}×{:.2}×{:.2}", op.label(), e.scale.x, e.scale.y, e.scale.z);
+    e.brush = Some(BrushDesc {
+        shape,
+        op,
+        color,
+        ..Default::default()
+    });
+    let message = format!(
+        "{} {:.2}×{:.2}×{:.2}",
+        op.label(),
+        e.scale.x,
+        e.scale.y,
+        e.scale.z
+    );
     state.info(message);
 }

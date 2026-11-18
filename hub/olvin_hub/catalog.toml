@@ -111,7 +111,7 @@ plugin = "olvin_editor_animator::AnimatorPlugin"
 [[editor_module]]
 id = "csg"
 name = "CSG (маппинг уровней)"
-description = "Браши с булевыми операциями, рисование по поверхности, ручки граней, адаптивная сетка, область «Level Design»"
+description = "Браши с булевыми операциями, рисование по поверхности, ручки граней, адаптивная сетка; форма брашей правится в Edit Mode элемента «Моделирование»"
 crate = "olvin_editor_csg"
 path = "editor/olvin_editor_csg"
 plugin = "olvin_editor_csg::CsgPlugin"

@@ -42,7 +42,11 @@ fn style(ctx: &egui::Context) {
     v.faint_bg_color = gray(38);
     v.selection.bg_fill = ACCENT;
     v.window_corner_radius = CornerRadius::same(8);
-    for (w, fill) in [(&mut v.widgets.inactive, 52), (&mut v.widgets.hovered, 64), (&mut v.widgets.active, 76)] {
+    for (w, fill) in [
+        (&mut v.widgets.inactive, 52),
+        (&mut v.widgets.hovered, 64),
+        (&mut v.widgets.active, 76),
+    ] {
         w.bg_fill = gray(fill);
         w.weak_bg_fill = gray(fill);
         w.corner_radius = CornerRadius::same(4);
@@ -85,10 +89,20 @@ enum Page {
 }
 
 enum Modal {
-    NewProject { template: usize, name: String, location: String },
-    AddExisting { path: String },
-    Modules { root: PathBuf },
-    EditorElements { wanted: Vec<String> },
+    NewProject {
+        template: usize,
+        name: String,
+        location: String,
+    },
+    AddExisting {
+        path: String,
+    },
+    Modules {
+        root: PathBuf,
+    },
+    EditorElements {
+        wanted: Vec<String>,
+    },
 }
 
 enum Status {
@@ -178,12 +192,19 @@ impl Hub {
                     root: root.clone(),
                     name: p.name().to_owned(),
                     modified: p.modified(),
-                    modules: p.installed(&self.catalog).iter().map(|m| m.name.clone()).collect(),
+                    modules: p
+                        .installed(&self.catalog)
+                        .iter()
+                        .map(|m| m.name.clone())
+                        .collect(),
                     missing: false,
                 },
                 Err(_) => Row {
                     root: root.clone(),
-                    name: root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    name: root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
                     modified: None,
                     modules: Vec::new(),
                     missing: true,
@@ -229,7 +250,13 @@ impl Hub {
             Ok((p.name().to_owned(), added))
         });
         let ok = result.is_ok();
-        self.report(result, |(name, added)| if added { format!("добавлен {name}") } else { format!("{name} уже в списке") });
+        self.report(result, |(name, added)| {
+            if added {
+                format!("добавлен {name}")
+            } else {
+                format!("{name} уже в списке")
+            }
+        });
         self.refresh();
         ok
     }
@@ -237,7 +264,9 @@ impl Hub {
     fn forget(&mut self, root: &Path) {
         self.config.forget(root);
         let result = self.config.save();
-        self.report(result, |()| format!("{} убран из списка (файлы на месте)", root.display()));
+        self.report(result, |()| {
+            format!("{} убран из списка (файлы на месте)", root.display())
+        });
         self.refresh();
     }
 
@@ -250,7 +279,10 @@ impl Hub {
         if release {
             cmd.arg("--release");
         }
-        let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         match cmd.spawn() {
             Ok(child) => {
                 self.status = Some(Status::Info(format!("{name}: сборка и запуск…")));
@@ -261,23 +293,31 @@ impl Hub {
     }
 
     fn editor_up_to_date(&self, wanted: &[String]) -> bool {
-        self.editor.as_ref().is_some_and(|e| e.is_built() && e.installed(&self.catalog) == wanted)
+        self.editor
+            .as_ref()
+            .is_some_and(|e| e.is_built() && e.installed(&self.catalog) == wanted)
     }
 
     fn start_build(&mut self, wanted: &[String]) {
         let Some(install) = &self.editor else { return };
-        let result = install.write(&self.config.engine, &self.catalog, wanted).and_then(|()| {
-            let mut child = install.build_command().stderr(Stdio::piped()).stdout(Stdio::null()).spawn()?;
-            let log = Arc::new(Mutex::new(Vec::new()));
-            let stderr = child.stderr.take().expect("stderr is piped");
-            let sink = log.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    sink.lock().unwrap().push(line);
-                }
+        let result = install
+            .write(&self.config.engine, &self.catalog, wanted)
+            .and_then(|()| {
+                let mut child = install
+                    .build_command()
+                    .stderr(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .spawn()?;
+                let log = Arc::new(Mutex::new(Vec::new()));
+                let stderr = child.stderr.take().expect("stderr is piped");
+                let sink = log.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        sink.lock().unwrap().push(line);
+                    }
+                });
+                Ok(Build { child, log })
             });
-            Ok(Build { child, log })
-        });
         match result {
             Ok(build) => {
                 self.build_log.clear();
@@ -304,7 +344,10 @@ impl Hub {
             self.start_build(&wanted);
             return;
         }
-        let name = project.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let name = project
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
         let result = install.launch(project.as_deref());
         self.report(result, |_| match name {
             Some(n) => format!("{n} открыт в редакторе"),
@@ -319,7 +362,9 @@ impl Hub {
             self.status = Some(if status.success() {
                 Status::Info(format!("{name} завершилась"))
             } else {
-                Status::Error(format!("{name}: ошибка ({status}), подробности в терминале"))
+                Status::Error(format!(
+                    "{name}: ошибка ({status}), подробности в терминале"
+                ))
             });
             self.game = None;
         }
@@ -338,7 +383,9 @@ impl Hub {
                     }
                 } else {
                     self.open_after_build = None;
-                    self.status = Some(Status::Error("сборка редактора не удалась, см. журнал на странице «Редактор»".into()));
+                    self.status = Some(Status::Error(
+                        "сборка редактора не удалась, см. журнал на странице «Редактор»".into(),
+                    ));
                 }
             }
         }
@@ -356,7 +403,10 @@ impl Hub {
             ui.label(RichText::new("Hub").size(20.0));
         });
         ui.add_space(16.0);
-        for (page, label) in [(Page::Projects, "📁  Проекты"), (Page::Editor, "✏  Редактор")] {
+        for (page, label) in [
+            (Page::Projects, "📁  Проекты"),
+            (Page::Editor, "✏  Редактор"),
+        ] {
             let selected = self.page == page;
             let button = egui::Button::selectable(selected, RichText::new(label).size(15.0))
                 .min_size(vec2(ui.available_width(), 34.0));
@@ -366,7 +416,8 @@ impl Hub {
         }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(6.0);
-            ui.small(format!("движок: {}", self.config.engine)).on_hover_text("olvin-hub engine --path/--git");
+            ui.small(format!("движок: {}", self.config.engine))
+                .on_hover_text("olvin-hub engine --path/--git");
             if self.build.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -385,7 +436,10 @@ impl Hub {
         {
             return stale;
         }
-        let stale = self.editor.as_ref().is_some_and(|e| e.is_stale(&self.config.engine));
+        let stale = self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.is_stale(&self.config.engine));
         self.stale = Some((std::time::Instant::now(), stale));
         stale
     }
@@ -416,7 +470,11 @@ impl Hub {
             });
         ui.add_space(8.0);
         if rebuild {
-            let wanted = self.editor.as_ref().map(|e| e.initial_selection(&self.catalog)).unwrap_or_default();
+            let wanted = self
+                .editor
+                .as_ref()
+                .map(|e| e.initial_selection(&self.catalog))
+                .unwrap_or_default();
             self.start_build(&wanted);
         }
     }
@@ -428,23 +486,44 @@ impl Hub {
             ui.heading(RichText::new("Проекты").size(24.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(accent_button("Новый проект")).clicked() {
-                    let location =
-                        dirs::home_dir().map(|h| h.join("OlvinProjects").display().to_string()).unwrap_or_default();
-                    self.modal = Some(Modal::NewProject { template: 0, name: String::new(), location });
+                    let location = dirs::home_dir()
+                        .map(|h| h.join("OlvinProjects").display().to_string())
+                        .unwrap_or_default();
+                    self.modal = Some(Modal::NewProject {
+                        template: 0,
+                        name: String::new(),
+                        location,
+                    });
                 }
-                if ui.button("Добавить").on_hover_text("Добавить существующий проект с диска").clicked() {
-                    self.modal = Some(Modal::AddExisting { path: String::new() });
+                if ui
+                    .button("Добавить")
+                    .on_hover_text("Добавить существующий проект с диска")
+                    .clicked()
+                {
+                    self.modal = Some(Modal::AddExisting {
+                        path: String::new(),
+                    });
                 }
             });
         });
         ui.add_space(6.0);
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("🔍 Поиск").desired_width(280.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("🔍 Поиск")
+                .desired_width(280.0),
+        );
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
             let w = ui.available_width();
-            ui.add_sized([w * 0.45, 18.0], egui::Label::new(RichText::new("НАЗВАНИЕ").small().weak()));
-            ui.add_sized([w * 0.17, 18.0], egui::Label::new(RichText::new("ИЗМЕНЁН").small().weak()));
+            ui.add_sized(
+                [w * 0.45, 18.0],
+                egui::Label::new(RichText::new("НАЗВАНИЕ").small().weak()),
+            );
+            ui.add_sized(
+                [w * 0.17, 18.0],
+                egui::Label::new(RichText::new("ИЗМЕНЁН").small().weak()),
+            );
             ui.label(RichText::new("МОДУЛИ").small().weak());
         });
         ui.separator();
@@ -452,23 +531,25 @@ impl Hub {
         let filter = self.search.trim().to_lowercase();
         let mut action: Option<(usize, RowAction)> = None;
         let running = self.game.is_some();
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            if self.rows.is_empty() {
-                ui.add_space(40.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Проектов пока нет").size(16.0));
-                    ui.weak("Создай новый или добавь существующий с диска");
-                });
-            }
-            for (i, row) in self.rows.iter().enumerate() {
-                if !filter.is_empty() && !row.name.to_lowercase().contains(&filter) {
-                    continue;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if self.rows.is_empty() {
+                    ui.add_space(40.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("Проектов пока нет").size(16.0));
+                        ui.weak("Создай новый или добавь существующий с диска");
+                    });
                 }
-                if let Some(a) = project_row(ui, row, running) {
-                    action = Some((i, a));
+                for (i, row) in self.rows.iter().enumerate() {
+                    if !filter.is_empty() && !row.name.to_lowercase().contains(&filter) {
+                        continue;
+                    }
+                    if let Some(a) = project_row(ui, row, running) {
+                        action = Some((i, a));
+                    }
                 }
-            }
-        });
+            });
 
         if let Some((i, a)) = action {
             let root = self.rows[i].root.clone();
@@ -493,7 +574,10 @@ impl Hub {
         ui.add_space(12.0);
 
         let Some(install) = &self.editor else {
-            ui.colored_label(ui.visuals().error_fg_color, "Нет папки данных для установки редактора");
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                "Нет папки данных для установки редактора",
+            );
             return;
         };
         let built = install.is_built();
@@ -502,38 +586,60 @@ impl Hub {
         let building = self.build.is_some();
 
         let (mut open, mut elements, mut rebuild) = (false, false, false);
-        egui::Frame::group(ui.style()).fill(ui.visuals().faint_bg_color).inner_margin(14).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Olvin Editor").size(18.0).strong());
-                ui.label(RichText::new(env!("CARGO_PKG_VERSION")).weak());
-                let (text, color) = match (building, built) {
-                    (true, _) => ("сборка…", ORANGE),
-                    (false, true) => ("установлен", Color32::from_rgb(110, 200, 120)),
-                    (false, false) => ("не установлен", Color32::from_gray(150)),
-                };
-                chip(ui, text, color);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if built {
-                        open = ui.add_enabled(!building, accent_button("Открыть")).clicked();
-                    } else {
-                        rebuild = ui.add_enabled(!building, accent_button("Установить")).clicked();
-                    }
-                    elements = ui.add_enabled(!building, egui::Button::new("Элементы…")).clicked();
-                    if built && ui.add_enabled(!building, egui::Button::new("Пересобрать")).clicked() {
-                        rebuild = true;
+        egui::Frame::group(ui.style())
+            .fill(ui.visuals().faint_bg_color)
+            .inner_margin(14)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Olvin Editor").size(18.0).strong());
+                    ui.label(RichText::new(env!("CARGO_PKG_VERSION")).weak());
+                    let (text, color) = match (building, built) {
+                        (true, _) => ("сборка…", ORANGE),
+                        (false, true) => ("установлен", Color32::from_rgb(110, 200, 120)),
+                        (false, false) => ("не установлен", Color32::from_gray(150)),
+                    };
+                    chip(ui, text, color);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if built {
+                            open = ui
+                                .add_enabled(!building, accent_button("Открыть"))
+                                .clicked();
+                        } else {
+                            rebuild = ui
+                                .add_enabled(!building, accent_button("Установить"))
+                                .clicked();
+                        }
+                        elements = ui
+                            .add_enabled(!building, egui::Button::new("Элементы…"))
+                            .clicked();
+                        if built
+                            && ui
+                                .add_enabled(!building, egui::Button::new("Пересобрать"))
+                                .clicked()
+                        {
+                            rebuild = true;
+                        }
+                    });
+                });
+                ui.weak(&root);
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    chip(
+                        ui,
+                        "Сцена · Иерархия · Инспектор · Ассеты",
+                        Color32::from_gray(160),
+                    );
+                    for m in self
+                        .catalog
+                        .editor_modules
+                        .iter()
+                        .filter(|m| installed.contains(&m.id))
+                    {
+                        chip(ui, &m.name, ACCENT);
                     }
                 });
             });
-            ui.weak(&root);
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                chip(ui, "Сцена · Иерархия · Инспектор · Ассеты", Color32::from_gray(160));
-                for m in self.catalog.editor_modules.iter().filter(|m| installed.contains(&m.id)) {
-                    chip(ui, &m.name, ACCENT);
-                }
-            });
-        });
 
         if building || !self.build_log.is_empty() {
             ui.add_space(10.0);
@@ -541,21 +647,37 @@ impl Hub {
                 if building {
                     ui.spinner();
                 }
-                let last = self.build_log.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
+                let last = self
+                    .build_log
+                    .iter()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_default();
                 ui.monospace(last.trim());
             });
             egui::CollapsingHeader::new("Журнал сборки").show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(260.0).stick_to_bottom(true).show(ui, |ui| {
-                    for line in &self.build_log {
-                        ui.monospace(line);
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for line in &self.build_log {
+                            ui.monospace(line);
+                        }
+                    });
             });
         }
 
-        let selection = || self.editor.as_ref().map(|e| e.initial_selection(&self.catalog)).unwrap_or_default();
+        let selection = || {
+            self.editor
+                .as_ref()
+                .map(|e| e.initial_selection(&self.catalog))
+                .unwrap_or_default()
+        };
         if elements {
-            self.modal = Some(Modal::EditorElements { wanted: selection() });
+            self.modal = Some(Modal::EditorElements {
+                wanted: selection(),
+            });
         }
         if rebuild {
             let wanted = selection();
@@ -569,10 +691,16 @@ impl Hub {
     // --- modals --------------------------------------------------------------
 
     fn modals(&mut self, ctx: &egui::Context) {
-        let Some(mut modal) = self.modal.take() else { return };
+        let Some(mut modal) = self.modal.take() else {
+            return;
+        };
         let mut keep = true;
         match &mut modal {
-            Modal::NewProject { template, name, location } => {
+            Modal::NewProject {
+                template,
+                name,
+                location,
+            } => {
                 let mut create = false;
                 let response = egui::Modal::new(egui::Id::new("new-project")).show(ctx, |ui| {
                     ui.set_width(640.0);
@@ -583,8 +711,11 @@ impl Hub {
                             ui.set_width(190.0);
                             ui.label(RichText::new("ШАБЛОНЫ").small().weak());
                             for (i, t) in TEMPLATES.iter().enumerate() {
-                                let b = egui::Button::selectable(*template == i, RichText::new(t.name).size(15.0))
-                                    .min_size(vec2(190.0, 40.0));
+                                let b = egui::Button::selectable(
+                                    *template == i,
+                                    RichText::new(t.name).size(15.0),
+                                )
+                                .min_size(vec2(190.0, 40.0));
                                 if ui.add(b).clicked() {
                                     *template = i;
                                 }
@@ -593,8 +724,13 @@ impl Hub {
                         // Not `ui.separator()`: in a horizontal layout it takes the
                         // available height, which in a modal comes from the previous
                         // frame's size, and the dialog grows every frame.
-                        let (line, _) = ui.allocate_exact_size(vec2(9.0, 3.0 * 46.0), Sense::hover());
-                        ui.painter().vline(line.center().x, line.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+                        let (line, _) =
+                            ui.allocate_exact_size(vec2(9.0, 3.0 * 46.0), Sense::hover());
+                        ui.painter().vline(
+                            line.center().x,
+                            line.y_range(),
+                            ui.visuals().widgets.noninteractive.bg_stroke,
+                        );
                         ui.vertical(|ui| {
                             let t = &TEMPLATES[*template];
                             ui.label(RichText::new(t.name).size(18.0).strong());
@@ -612,17 +748,29 @@ impl Hub {
                             });
                             ui.add_space(14.0);
                             ui.label("Название проекта");
-                            ui.add(egui::TextEdit::singleline(name).hint_text("my_game").desired_width(f32::INFINITY));
+                            ui.add(
+                                egui::TextEdit::singleline(name)
+                                    .hint_text("my_game")
+                                    .desired_width(f32::INFINITY),
+                            );
                             ui.label("Расположение");
-                            ui.add(egui::TextEdit::singleline(location).desired_width(f32::INFINITY));
+                            ui.add(
+                                egui::TextEdit::singleline(location).desired_width(f32::INFINITY),
+                            );
                             if !name.trim().is_empty() {
-                                ui.weak(format!("{}/{}", location.trim_end_matches('/'), name.trim()));
+                                ui.weak(format!(
+                                    "{}/{}",
+                                    location.trim_end_matches('/'),
+                                    name.trim()
+                                ));
                             }
                         });
                     });
                     ui.add_space(12.0);
                     buttons_row(ui, |ui| {
-                        create = ui.add_enabled(!name.trim().is_empty(), accent_button("Создать проект")).clicked();
+                        create = ui
+                            .add_enabled(!name.trim().is_empty(), accent_button("Создать проект"))
+                            .clicked();
                         if ui.button("Отмена").clicked() {
                             keep = false;
                         }
@@ -641,10 +789,16 @@ impl Hub {
                     ui.set_width(480.0);
                     ui.heading("Добавить проект");
                     ui.label("Папка с Cargo.toml игры на Olvin:");
-                    ui.add(egui::TextEdit::singleline(path).hint_text("/home/…/my_game").desired_width(f32::INFINITY));
+                    ui.add(
+                        egui::TextEdit::singleline(path)
+                            .hint_text("/home/…/my_game")
+                            .desired_width(f32::INFINITY),
+                    );
                     ui.add_space(8.0);
                     buttons_row(ui, |ui| {
-                        add = ui.add_enabled(!path.trim().is_empty(), accent_button("Добавить")).clicked();
+                        add = ui
+                            .add_enabled(!path.trim().is_empty(), accent_button("Добавить"))
+                            .clicked();
                         if ui.button("Отмена").clicked() {
                             keep = false;
                         }
@@ -668,24 +822,33 @@ impl Hub {
                     ui.heading(format!("Модули — {}", project.name()));
                     ui.weak("Правки сразу пишутся в Cargo.toml проекта.");
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                        for category in self.catalog.categories() {
-                            ui.add_space(4.0);
-                            ui.label(RichText::new(category).strong());
-                            for m in self.catalog.modules.iter().filter(|m| m.category == category) {
-                                let mut on = project.is_installed(m);
-                                ui.horizontal(|ui| {
-                                    if ui.checkbox(&mut on, &m.name).changed() {
-                                        toggled = Some((m.id.clone(), on));
+                    egui::ScrollArea::vertical()
+                        .max_height(420.0)
+                        .show(ui, |ui| {
+                            for category in self.catalog.categories() {
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(category).strong());
+                                for m in self
+                                    .catalog
+                                    .modules
+                                    .iter()
+                                    .filter(|m| m.category == category)
+                                {
+                                    let mut on = project.is_installed(m);
+                                    ui.horizontal(|ui| {
+                                        if ui.checkbox(&mut on, &m.name).changed() {
+                                            toggled = Some((m.id.clone(), on));
+                                        }
+                                        ui.weak(&m.description);
+                                    });
+                                    if !m.requires.is_empty() {
+                                        ui.indent(&m.id, |ui| {
+                                            ui.small(format!("требует: {}", m.requires.join(", ")))
+                                        });
                                     }
-                                    ui.weak(&m.description);
-                                });
-                                if !m.requires.is_empty() {
-                                    ui.indent(&m.id, |ui| ui.small(format!("требует: {}", m.requires.join(", "))));
                                 }
                             }
-                        }
-                    });
+                        });
                     ui.add_space(8.0);
                     buttons_row(ui, |ui| {
                         if ui.add(accent_button("Готово")).clicked() {
@@ -698,9 +861,13 @@ impl Hub {
                 }
                 if let Some((id, on)) = toggled {
                     let result = if on {
-                        project.add(&self.catalog, &id).map(|added| format!("+ {}", added.join(", ")))
+                        project
+                            .add(&self.catalog, &id)
+                            .map(|added| format!("+ {}", added.join(", ")))
                     } else {
-                        project.remove(&self.catalog, &id, false).map(|_| format!("- {id}"))
+                        project
+                            .remove(&self.catalog, &id, false)
+                            .map(|_| format!("- {id}"))
                     }
                     .and_then(|msg| project.save().map(|()| msg));
                     self.report(result, |m| m);
@@ -716,7 +883,10 @@ impl Hub {
                     ui.add_space(6.0);
                     for m in &self.catalog.editor_modules {
                         let mut on = wanted.contains(&m.id);
-                        if ui.checkbox(&mut on, RichText::new(&m.name).strong()).changed() {
+                        if ui
+                            .checkbox(&mut on, RichText::new(&m.name).strong())
+                            .changed()
+                        {
                             if on {
                                 wanted.push(m.id.clone());
                             } else {
@@ -735,7 +905,16 @@ impl Hub {
                     ui.add_space(10.0);
                     buttons_row(ui, |ui| {
                         let same = self.editor_up_to_date(wanted);
-                        apply = ui.add_enabled(!same, accent_button(if same { "Без изменений" } else { "Установить" })).clicked();
+                        apply = ui
+                            .add_enabled(
+                                !same,
+                                accent_button(if same {
+                                    "Без изменений"
+                                } else {
+                                    "Установить"
+                                }),
+                            )
+                            .clicked();
                         if ui.button("Отмена").clicked() {
                             keep = false;
                         }
@@ -790,20 +969,43 @@ fn project_row(ui: &mut egui::Ui, row: &Row, running: bool) -> Option<RowAction>
             ui.horizontal(|ui| {
                 let w = ui.available_width();
                 let cell = |ui: &mut egui::Ui, width: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
-                    ui.allocate_ui_with_layout(vec2(width, ROW_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), add);
+                    ui.allocate_ui_with_layout(
+                        vec2(width, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        add,
+                    );
                 };
                 cell(ui, w * 0.45, &mut |ui| {
                     let (rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-                    let fill = if row.missing { Color32::from_gray(70) } else { ACCENT.gamma_multiply(0.8) };
+                    let fill = if row.missing {
+                        Color32::from_gray(70)
+                    } else {
+                        ACCENT.gamma_multiply(0.8)
+                    };
                     ui.painter().rect_filled(rect, 6.0, fill);
-                    let letter = row.name.chars().next().unwrap_or('?').to_uppercase().to_string();
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(17.0), Color32::WHITE);
+                    let letter = row
+                        .name
+                        .chars()
+                        .next()
+                        .unwrap_or('?')
+                        .to_uppercase()
+                        .to_string();
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        letter,
+                        egui::FontId::proportional(17.0),
+                        Color32::WHITE,
+                    );
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
                         ui.label(RichText::new(&row.name).strong().size(15.0));
                         let path = row.root.display().to_string();
                         if row.missing {
-                            ui.colored_label(ui.visuals().error_fg_color, format!("{path} — не найден"));
+                            ui.colored_label(
+                                ui.visuals().error_fg_color,
+                                format!("{path} — не найден"),
+                            );
                         } else {
                             ui.add(egui::Label::new(RichText::new(path).small().weak()).truncate());
                         }
@@ -844,7 +1046,10 @@ fn project_row(ui: &mut egui::Ui, row: &Row, running: bool) -> Option<RowAction>
         })
         .response;
     if response.hovered() {
-        ui.painter().set(bg, egui::Shape::rect_filled(response.rect, 6.0, Color32::from_gray(44)));
+        ui.painter().set(
+            bg,
+            egui::Shape::rect_filled(response.rect, 6.0, Color32::from_gray(44)),
+        );
     }
     if response.clicked() && action.is_none() && !row.missing {
         action = Some(RowAction::Open);
@@ -875,7 +1080,10 @@ fn accent_button(text: &str) -> egui::Button<'_> {
 }
 
 fn ago(t: SystemTime) -> String {
-    let secs = SystemTime::now().duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = SystemTime::now()
+        .duration_since(t)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     match secs {
         0..60 => "только что".into(),
         60..3600 => format!("{} мин назад", secs / 60),
@@ -897,11 +1105,19 @@ impl Hub {
         egui::Panel::left("nav")
             .exact_size(190.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(Color32::from_gray(26)).inner_margin(12))
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_gray(26))
+                    .inner_margin(12),
+            )
             .show(ui, |ui| self.sidebar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default_margins()
-            .frame(egui::Frame::new().fill(Color32::from_gray(32)).inner_margin(egui::Margin::symmetric(24, 8)))
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_gray(32))
+                    .inner_margin(egui::Margin::symmetric(24, 8)),
+            )
             .show(ui, |ui| match self.page {
                 Page::Projects => self.projects_page(ui),
                 Page::Editor => self.editor_page(ui),
@@ -933,20 +1149,39 @@ mod tests {
             ctx.run_ui(input, |ui| hub.draw(ui)).textures_delta.clear();
         }
         assert!(hub.modal.is_some(), "dialog closed by itself");
-        ctx.memory(|m| m.area_rect(egui::Id::new(id))).expect("dialog was shown")
+        ctx.memory(|m| m.area_rect(egui::Id::new(id)))
+            .expect("dialog was shown")
     }
 
     #[test]
     fn dialogs_fit_their_content() {
         let cases = [
-            (Modal::NewProject { template: 0, name: String::new(), location: "/tmp".into() }, "new-project"),
-            (Modal::AddExisting { path: String::new() }, "add-existing"),
-            (Modal::EditorElements { wanted: Vec::new() }, "editor-elements"),
+            (
+                Modal::NewProject {
+                    template: 0,
+                    name: String::new(),
+                    location: "/tmp".into(),
+                },
+                "new-project",
+            ),
+            (
+                Modal::AddExisting {
+                    path: String::new(),
+                },
+                "add-existing",
+            ),
+            (
+                Modal::EditorElements { wanted: Vec::new() },
+                "editor-elements",
+            ),
         ];
         for (modal, id) in cases {
             let rect = modal_rect(modal, id);
             assert!(rect.height() < 600.0, "{id}: {rect:?}");
-            assert!(rect.top() > 0.0 && rect.bottom() < 999.0, "{id} off screen: {rect:?}");
+            assert!(
+                rect.top() > 0.0 && rect.bottom() < 999.0,
+                "{id} off screen: {rect:?}"
+            );
         }
     }
 }

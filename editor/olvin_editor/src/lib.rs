@@ -25,12 +25,28 @@ pub use egui_dock;
 pub use glam;
 pub use olvin_scene;
 
+/// Window and taskbar icon: `assets/logo/png/olvin-icon-256.png` (mark on the dark tile).
+fn window_icon() -> egui::IconData {
+    const PNG: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/logo/png/olvin-icon-256.png"
+    ));
+    eframe::icon_data::from_png_bytes(PNG).expect("olvin-icon-256.png is not a valid PNG")
+}
+
 /// Starts the editor. The first command-line argument is the project folder.
 pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
     let project = std::env::args_os()
         .nth(1)
         .map(std::path::PathBuf::from)
         .map(|p| p.canonicalize().unwrap_or(p));
+
+    // Log and crash reports go next to the project, like the game's own.
+    let mut logging = olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn");
+    if let Some(project) = &project {
+        logging = logging.file(project.join("logs/editor.log"));
+    }
+    logging.init();
 
     let mut registry = Registry::default();
     panels::register(&mut registry);
@@ -44,7 +60,8 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
             .with_title("Olvin Editor")
             .with_app_id("olvin-editor")
             .with_inner_size([1600.0, 940.0])
-            .with_min_inner_size([900.0, 560.0]),
+            .with_min_inner_size([900.0, 560.0])
+            .with_icon(window_icon()),
         // The scene view draws into egui's pass and needs depth + MSAA.
         depth_buffer: render::DEPTH_BITS,
         multisampling: render::MSAA as u16,

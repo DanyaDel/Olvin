@@ -7,6 +7,7 @@ use crate::EditorState;
 use crate::panels::inspector::{grid, row, section};
 use crate::panels::lighting::{environment_ui, presets};
 use crate::prefs::Preferences;
+use crate::theme::ThemeKind;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -79,7 +80,7 @@ pub(crate) fn window(ctx: &egui::Context, state: &mut EditorState) {
 }
 
 fn heading(ui: &mut egui::Ui, text: &str, sub: &str) {
-    ui.label(RichText::new(text).heading());
+    ui.label(RichText::new(text.to_uppercase()).heading());
     ui.weak(sub);
     ui.add_space(6.0);
 }
@@ -148,7 +149,22 @@ fn camera(ui: &mut egui::Ui, p: &mut Preferences) {
 }
 
 fn interface(ui: &mut egui::Ui, p: &mut Preferences) {
-    heading(ui, "Interface", "Theme: Olvin Night.");
+    heading(
+        ui,
+        "Interface",
+        "Theme, motion and scale of the editor chrome. Scene views keep their colours.",
+    );
+    section(ui, "Theme", None, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for kind in ThemeKind::ALL {
+                if theme_card(ui, kind, p.theme == kind).clicked() {
+                    p.theme = kind;
+                }
+            }
+        });
+        ui.checkbox(&mut p.reduce_motion, "Reduce motion")
+            .on_hover_text("No fades or easing, and the logo cursor stops blinking.");
+    });
     section(ui, "Scale", None, |ui| {
         ui.add(
             Slider::new(&mut p.ui_scale, 0.75..=2.0)
@@ -163,6 +179,57 @@ fn interface(ui: &mut egui::Ui, p: &mut Preferences) {
             }
         });
     });
+}
+
+/// A theme choice: a small preview of its panel, text and accent, then the name.
+fn theme_card(ui: &mut egui::Ui, kind: ThemeKind, selected: bool) -> egui::Response {
+    let swatch = kind.palette();
+    let current = crate::theme::palette(ui.ctx());
+    let size = egui::vec2(104.0, 70.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover = crate::theme::anim::hover_t(ui.ctx(), response.id, response.hovered());
+    let border = if selected {
+        egui::Stroke::new(2.0, current.accent)
+    } else {
+        let idle = current.line;
+        egui::Stroke::new(
+            1.0,
+            crate::theme::anim::lerp_color(idle, current.accent_border, hover),
+        )
+    };
+    let painter = ui.painter();
+    let preview = egui::Rect::from_min_size(rect.min, egui::vec2(size.x, 46.0));
+    painter.rect_filled(preview, crate::theme::RADIUS_SM, swatch.bg);
+    let panel = preview.shrink(6.0);
+    painter.rect_filled(panel, crate::theme::RADIUS_XS, swatch.surface);
+    let line = |y: f32, w: f32, c: egui::Color32| {
+        let r = egui::Rect::from_min_size(panel.min + egui::vec2(6.0, y), egui::vec2(w, 4.0));
+        painter.rect_filled(r, 2.0, c);
+    };
+    line(6.0, 44.0, swatch.text);
+    line(14.0, 30.0, swatch.muted);
+    line(22.0, 18.0, swatch.accent);
+    painter.rect_stroke(
+        preview,
+        crate::theme::RADIUS_SM,
+        border,
+        egui::StrokeKind::Inside,
+    );
+    let text_color = if selected {
+        current.accent
+    } else {
+        current.text_2
+    };
+    painter.text(
+        egui::pos2(rect.left() + 2.0, preview.bottom() + 6.0),
+        egui::Align2::LEFT_TOP,
+        kind.label(),
+        egui::FontId::proportional(crate::theme::FS_SM),
+        text_color,
+    );
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(kind.label())
 }
 
 const KEYS: [(&str, &[(&str, &str)]); 4] = [
@@ -236,7 +303,10 @@ mod tests {
     fn every_page_draws_headless() {
         let mut state = EditorState::new(None);
         let ctx = egui::Context::default();
-        for (page, _) in Page::ALL {
+        crate::theme::apply(&ctx);
+        for (i, (page, _)) in Page::ALL.into_iter().enumerate() {
+            // Each page under a different theme, the Interface page included.
+            crate::theme::apply_kind(&ctx, ThemeKind::ALL[i % ThemeKind::ALL.len()]);
             state.settings_page = Some(page);
             for _ in 0..3 {
                 let input = egui::RawInput {

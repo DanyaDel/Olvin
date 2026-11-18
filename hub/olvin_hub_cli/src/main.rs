@@ -7,8 +7,25 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use olvin_hub::{Catalog, EditorInstall, EngineSource, HubConfig, Project};
 
+/// Text logo for the help header: `Olvin_` with a green underscore cursor
+/// (assets/logo/README.md). clap drops the colour itself under NO_COLOR or
+/// when the output is not a terminal.
+fn logo() -> clap::builder::StyledStr {
+    use clap::builder::styling::{AnsiColor, Style};
+    let cursor = Style::new()
+        .fg_color(Some(AnsiColor::BrightGreen.into()))
+        .bold();
+    format!("Olvin{cursor}_{cursor:#}").into()
+}
+
 #[derive(Parser)]
-#[command(name = "olvin-hub", version, about = "Хаб Olvin: проекты игр и модули")]
+#[command(
+    name = "olvin-hub",
+    version,
+    about = "Olvin hub: game projects and modules",
+    before_help = logo(),
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -16,54 +33,54 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Создать проект игры
+    /// Create a game project
     New {
         name: String,
-        /// Папка, в которой создать проект (по умолчанию текущая)
+        /// Folder to create the project in (default: the current one)
         #[arg(long)]
         dir: Option<PathBuf>,
     },
-    /// Каталог модулей; [x] — установлен в текущий проект
+    /// Module catalog; [x] marks modules installed in the current project
     List {
         #[arg(short, long)]
         project: Option<PathBuf>,
     },
-    /// Установить модули (вместе с зависимостями)
+    /// Install modules (with what they require)
     Add {
         #[arg(required = true)]
         modules: Vec<String>,
         #[arg(short, long)]
         project: Option<PathBuf>,
     },
-    /// Удалить модули
+    /// Remove modules
     Remove {
         #[arg(required = true)]
         modules: Vec<String>,
         #[arg(short, long)]
         project: Option<PathBuf>,
-        /// Удалить, даже если от модуля зависят другие
+        /// Remove even if other modules require it
         #[arg(long)]
         force: bool,
     },
-    /// Собрать и запустить игру
+    /// Build and run the game
     Run {
         #[arg(short, long)]
         project: Option<PathBuf>,
         #[arg(long)]
         release: bool,
     },
-    /// Известные хабу проекты
+    /// Projects the hub knows about
     Projects,
-    /// Запомнить существующий проект
+    /// Add an existing project to the list
     Register { path: PathBuf },
-    /// Забыть проект (файлы не трогаются)
+    /// Remove a project from the list (files stay)
     Forget { path: PathBuf },
-    /// Редактор: установка, элементы, запуск
+    /// Editor: install, elements, launch
     Editor {
         #[command(subcommand)]
         command: EditorCmd,
     },
-    /// Показать или сменить источник движка для новых проектов
+    /// Show or change the engine source for new projects
     Engine {
         #[arg(long, conflicts_with = "git")]
         path: Option<PathBuf>,
@@ -74,21 +91,21 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum EditorCmd {
-    /// Собрать редактор (с элементами по умолчанию при первой установке)
+    /// Build the editor (default elements on first install)
     Install,
-    /// Элементы редактора; [x] — установлен
+    /// Editor elements; [x] marks installed ones
     List,
-    /// Добавить элементы и пересобрать
+    /// Add elements and rebuild
     Add {
         #[arg(required = true)]
         elements: Vec<String>,
     },
-    /// Убрать элементы и пересобрать
+    /// Remove elements and rebuild
     Remove {
         #[arg(required = true)]
         elements: Vec<String>,
     },
-    /// Открыть проект в редакторе (по умолчанию — проект в текущей папке)
+    /// Open a project in the editor (default: the project in the current folder)
     Open { project: Option<PathBuf> },
 }
 
@@ -96,7 +113,7 @@ fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("ошибка: {err:#}");
+            eprintln!("error: {err:#}");
             ExitCode::FAILURE
         }
     }
@@ -121,13 +138,13 @@ fn run(cli: Cli) -> Result<()> {
                 .map(|m| m.id.as_str())
                 .collect();
             println!(
-                "создан {} (движок: {})",
+                "created {} (engine: {})",
                 project.root().display(),
                 config.engine
             );
-            println!("модули: {}", installed.join(", "));
+            println!("modules: {}", installed.join(", "));
             println!(
-                "запуск: cd {} && cargo run --release",
+                "run: cd {} && cargo run --release",
                 project.root().display()
             );
         }
@@ -145,8 +162,8 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             match project {
-                Some(p) => println!("\nпроект: {} ({})", p.name(), p.root().display()),
-                None => println!("\n(вне проекта: отметки установки не показаны)"),
+                Some(p) => println!("\nproject: {} ({})", p.name(), p.root().display()),
+                None => println!("\n(outside a project: install marks not shown)"),
             }
         }
         Cmd::Add { modules, project } => {
@@ -154,7 +171,7 @@ fn run(cli: Cli) -> Result<()> {
             for id in &modules {
                 let added = project.add(&catalog, id)?;
                 if added.is_empty() {
-                    println!("{id}: уже установлен");
+                    println!("{id}: already installed");
                 } else {
                     println!("+ {}", added.join(", "));
                 }
@@ -171,7 +188,7 @@ fn run(cli: Cli) -> Result<()> {
                 if project.remove(&catalog, id, force)? {
                     println!("- {id}");
                 } else {
-                    println!("{id}: не был установлен");
+                    println!("{id}: was not installed");
                 }
             }
             project.save()?;
@@ -183,19 +200,19 @@ fn run(cli: Cli) -> Result<()> {
             if release {
                 cmd.arg("--release");
             }
-            let status = cmd.status().context("не удалось запустить cargo")?;
+            let status = cmd.status().context("could not start cargo")?;
             if !status.success() {
-                bail!("cargo завершился с {status}");
+                bail!("cargo exited with {status}");
             }
         }
         Cmd::Projects => {
             if config.projects.is_empty() {
-                println!("проектов нет: olvin-hub new <имя>");
+                println!("No projects yet. Create one: olvin-hub new <name>");
             }
             for root in &config.projects {
                 match Project::open(root) {
                     Ok(p) => println!("{:<20} {}", p.name(), root.display()),
-                    Err(_) => println!("{:<20} {} (не найден)", "?", root.display()),
+                    Err(_) => println!("{:<20} {} (not found)", "?", root.display()),
                 }
             }
         }
@@ -203,17 +220,17 @@ fn run(cli: Cli) -> Result<()> {
             let project = Project::open(&path)?;
             if config.register(project.root())? {
                 config.save()?;
-                println!("добавлен {}", project.name());
+                println!("added {}", project.name());
             } else {
-                println!("{} уже в списке", project.name());
+                println!("{} is already in the list", project.name());
             }
         }
         Cmd::Forget { path } => {
             if config.forget(&path) {
                 config.save()?;
-                println!("забыт {}", path.display());
+                println!("removed {} from the list", path.display());
             } else {
-                println!("{} не было в списке", path.display());
+                println!("{} was not in the list", path.display());
             }
         }
         Cmd::Editor { command } => editor(command, &catalog, &config)?,
@@ -228,7 +245,7 @@ fn run(cli: Cli) -> Result<()> {
                 config.engine = engine;
                 config.save()?;
             }
-            println!("движок: {}", config.engine);
+            println!("engine: {}", config.engine);
         }
     }
     Ok(())
@@ -241,7 +258,7 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
     match command {
         EditorCmd::Install => {}
         EditorCmd::List => {
-            println!("База (всегда): сцена, иерархия, инспектор, ассеты");
+            println!("Core (always): scene, hierarchy, inspector, assets");
             for m in &catalog.editor_modules {
                 let mark = if install.is_generated() && current.contains(&m.id) {
                     "[x]"
@@ -251,18 +268,20 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
                 println!("  {mark} {:<9} {} — {}", m.id, m.name, m.description);
             }
             if install.is_stale(&config.engine) {
-                println!("\n⚠ движок изменился после сборки: olvin-hub editor install");
+                println!(
+                    "\n⚠ the engine changed after the build. Rebuild: olvin-hub editor install"
+                );
             }
             match install.is_built() {
-                true => println!("\nустановлен: {}", install.binary().display()),
-                false => println!("\nне установлен: olvin-hub editor install"),
+                true => println!("\ninstalled: {}", install.binary().display()),
+                false => println!("\nnot installed. Install: olvin-hub editor install"),
             }
             return Ok(());
         }
         EditorCmd::Add { elements } => {
             for id in elements {
                 if catalog.editor_module(&id).is_none() {
-                    bail!("нет элемента редактора `{id}` (список: olvin-hub editor list)");
+                    bail!("no editor element `{id}`. See the list: olvin-hub editor list");
                 }
                 if !selection.contains(&id) {
                     selection.push(id);
@@ -278,13 +297,13 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
             if !install.is_built() {
                 build_editor(&install, catalog, config, &selection)?;
             } else if install.is_stale(&config.engine) {
-                println!("движок изменился после сборки редактора — пересобираю");
+                println!("the engine changed after the editor build, rebuilding");
                 build_editor(&install, catalog, config, &selection)?;
             }
             install.launch(project.as_ref().map(Project::root))?;
             match &project {
-                Some(p) => println!("редактор открыт: {}", p.name()),
-                None => println!("редактор открыт без проекта"),
+                Some(p) => println!("editor opened: {}", p.name()),
+                None => println!("editor opened without a project"),
             }
             return Ok(());
         }
@@ -306,9 +325,9 @@ fn build_editor(
         .map(|m| m.name.as_str())
         .collect();
     println!(
-        "сборка редактора (элементы: {})…",
+        "building the editor (elements: {})…",
         if names.is_empty() {
-            "только база".into()
+            "core only".into()
         } else {
             names.join(", ")
         }
@@ -316,12 +335,12 @@ fn build_editor(
     let status = install
         .build_command()
         .status()
-        .context("не удалось запустить cargo")?;
+        .context("could not start cargo")?;
     if !status.success() {
-        bail!("сборка редактора не удалась ({status})");
+        bail!("editor build failed ({status})");
     }
     install.mark_built(&config.engine);
-    println!("готово: {}", install.binary().display());
+    println!("done: {}", install.binary().display());
     Ok(())
 }
 

@@ -274,6 +274,7 @@ mod tests {
         state.create(NewEntity::Light(LightKind::Spot), None);
         state.scene.environment = (Environment::PRESETS[2].1)();
         let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
         let mut panel = Lighting;
         for _ in 0..3 {
             let input = egui::RawInput {

@@ -64,11 +64,11 @@ impl Catalog {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let catalog: Self = toml::from_str(text).context("каталог модулей повреждён")?;
+        let catalog: Self = toml::from_str(text).context("module catalog is damaged")?;
         for m in &catalog.modules {
             for r in &m.requires {
                 if catalog.get(r).is_none() {
-                    bail!("модуль `{}` требует несуществующий `{r}`", m.id);
+                    bail!("module `{}` requires unknown module `{r}`", m.id);
                 }
             }
         }
@@ -97,13 +97,13 @@ impl Catalog {
         stack: &mut Vec<String>,
     ) -> Result<()> {
         let Some(module) = self.get(id) else {
-            bail!("нет модуля `{id}`")
+            bail!("no module `{id}`. See the list: olvin-hub list")
         };
         if order.iter().any(|m| m.id == id) {
             return Ok(());
         }
         if stack.iter().any(|s| s == id) {
-            bail!("циклическая зависимость: {} -> {id}", stack.join(" -> "));
+            bail!("circular dependency: {} -> {id}", stack.join(" -> "));
         }
         stack.push(id.to_owned());
         for r in &module.requires {

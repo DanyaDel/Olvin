@@ -1,0 +1,65 @@
+# CI: формат, clippy, тесты всего workspace, сборка бинарников (хаб, редактор, примеры).
+# GPU в раннере нет: рендер-тесты идут через Mesa llvmpipe на GL (тир Compat),
+# так же, как это проверяется локально.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # Безголовый GL: wgpu берёт EGL от Mesa (llvmpipe), а не от проприетарного драйвера.
+  WGPU_BACKEND: gl
+  __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
+  LIBGL_ALWAYS_SOFTWARE: 1
+  GALLIUM_DRIVER: llvmpipe
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  check:
+    name: clippy, тесты, сборка
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Системные зависимости (winit, wgpu, egui, kira, gilrs, Mesa)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libudev-dev libasound2-dev \
+            libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libx11-xcb1 libxcb1 \
+            libegl1 libegl-mesa0 libgl1-mesa-dri libgles2 mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: тесты
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: сборка бинарников (olvin-hub, olvin-hub-gui, olvin-editor-dev, примеры)
+        run: cargo build --workspace --bins --locked

@@ -679,4 +679,152 @@ mod tests {
         let world = scene.world_matrices()[&2].transform_point3(Vec3::ZERO);
         assert!(world.abs_diff_eq(Vec3::new(9.0, 0.0, 0.0), 1e-5), "{world}");
     }
+
+    /// Сцена, где заполнено всё, что умеет формат: компоненты, окружение, расширения.
+    fn full_scene() -> SceneFile {
+        let mut root = EntityDesc::new(1, "Уровень");
+        root.tag = "Level".into();
+        root.layer = 3;
+        root.brush = Some(BrushDesc {
+            shape: BrushShape::Cylinder { sides: 12 },
+            op: CsgOp::Subtract,
+            color: [0.2, 0.4, 0.6, 1.0],
+            vertices: None,
+        });
+
+        let mut cam = EntityDesc::new(2, "Camera");
+        cam.parent = Some(1);
+        cam.position = Vec3::new(0.25, 1.75, -3.5);
+        cam.rotation = Vec3::new(-15.0, 30.0, 0.0);
+        cam.camera = Some(CameraDesc::default());
+        cam.audio_listener = true;
+
+        let mut sun = EntityDesc::new(3, "Sun");
+        sun.rotation = Vec3::new(-50.0, 0.0, 0.0);
+        sun.light = Some(LightDesc::new(LightKind::Directional));
+
+        let mut player = EntityDesc::new(4, "Player");
+        player.parent = Some(1);
+        player.scale = Vec3::new(1.0, 2.0, 1.0);
+        player.mesh = Some(MeshDesc {
+            shape: Shape::Capsule,
+            color: [0.9, 0.1, 0.1, 1.0],
+        });
+        player.material = Some("materials/player.mat.ron".into());
+        player.character_controller = Some(CharacterControllerDesc::default());
+        player.audio_source = Some(AudioSourceDesc {
+            clip: "audio/steps.ogg".into(),
+            looping: true,
+            ..Default::default()
+        });
+        player.scripts = vec![ScriptDesc {
+            name: "PlayerMove".into(),
+            params: BTreeMap::from([("speed".into(), "4.5".into())]),
+        }];
+
+        let mut crate_ = EntityDesc::new(5, "Crate");
+        crate_.active = false;
+        crate_.poly = Some(PolyMesh::cube(1.0));
+        let mut collider = ColliderDesc::new(ColliderShape::Box {
+            size: Vec3::splat(1.0),
+        });
+        collider.center = Vec3::new(0.0, 0.5, 0.0);
+        crate_.collider = Some(collider);
+        crate_.rigidbody = Some(RigidbodyDesc {
+            kind: BodyKind::Kinematic,
+            freeze_rotation: [true, false, true],
+            ccd: true,
+            ..Default::default()
+        });
+
+        let mut trigger = EntityDesc::new(6, "Trigger");
+        trigger.parent = Some(5);
+        let mut zone = ColliderDesc::new(ColliderShape::Sphere { radius: 2.5 });
+        zone.is_trigger = true;
+        trigger.collider = Some(zone);
+
+        SceneFile {
+            entities: vec![root, cam, player, sun, crate_, trigger],
+            environment: Environment {
+                fog: Some(FogDesc {
+                    color: [0.5, 0.6, 0.7],
+                    start: 10.0,
+                    end: 80.0,
+                }),
+                skybox: Sky::Texture {
+                    path: "sky/day.hdr".into(),
+                    rotation_deg: 90.0,
+                    intensity: 1.25,
+                },
+                filmic: false,
+                shadow_resolution: 4096,
+                ..Default::default()
+            },
+            extensions: BTreeMap::from([("animator".into(), "(clips: [])".into())]),
+        }
+    }
+
+    #[test]
+    fn file_roundtrip_keeps_everything() {
+        let dir = std::env::temp_dir().join(format!("olvin_scene_rt_{}", std::process::id()));
+        let path = dir.join("scenes/main.scene.ron");
+        let scene = full_scene();
+        // save сам создаёт недостающие папки.
+        scene.save(&path).unwrap();
+        let back = SceneFile::load(&path).unwrap();
+        assert_eq!(back, scene);
+
+        // Второй круг даёт тот же текст: формат стабилен.
+        let first = std::fs::read_to_string(&path).unwrap();
+        back.save(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+
+        // Значения по умолчанию не пишутся, но читаются обратно.
+        let minimal = SceneFile {
+            entities: vec![EntityDesc::new(7, "Empty")],
+            ..Default::default()
+        };
+        minimal.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("environment") && !text.contains("extensions"));
+        assert_eq!(SceneFile::load(&path).unwrap(), minimal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_reports_missing_and_broken_files() {
+        let dir = std::env::temp_dir().join(format!("olvin_scene_err_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("nope.scene.ron");
+        let err = SceneFile::load(&missing).unwrap_err();
+        assert!(err.contains("nope.scene.ron"), "{err}");
+
+        let broken = dir.join("broken.scene.ron");
+        std::fs::write(&broken, "(entities: [ (id: 1, name: ").unwrap();
+        let err = SceneFile::load(&broken).unwrap_err();
+        assert!(err.contains("broken.scene.ron"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hierarchy_order_activity_and_sun() {
+        let scene = full_scene();
+        let order: Vec<u64> = scene
+            .hierarchy_order()
+            .into_iter()
+            .map(|i| scene.entities[i].id)
+            .collect();
+        // Обход в глубину, братья в порядке файла.
+        assert_eq!(order, vec![1, 2, 4, 3, 5, 6]);
+        assert!(scene.active_in_hierarchy(4));
+        assert!(!scene.active_in_hierarchy(5));
+        assert!(
+            !scene.active_in_hierarchy(6),
+            "ребёнок выключенного объекта выключен"
+        );
+        let (dir, _, intensity) = scene.sun().expect("направленный свет");
+        assert!(dir.y < -0.5, "солнце светит вниз: {dir}");
+        assert!(intensity > 0.0);
+        assert_eq!(scene.csg_brushes().len(), 1);
+    }
 }

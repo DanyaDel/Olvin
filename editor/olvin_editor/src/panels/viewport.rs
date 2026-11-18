@@ -154,6 +154,9 @@ impl Panel for Viewport {
             return;
         }
         self.prefs = state.prefs.clone();
+        // The view is always dark, so its overlays keep the Dark theme's
+        // widgets whatever the chrome uses.
+        *ui.visuals_mut() = olvin_ui::visuals(&theme::Palette::DARK);
         if !self.shading_set {
             self.shading_set = true;
             if self.prefs.solid_by_default {

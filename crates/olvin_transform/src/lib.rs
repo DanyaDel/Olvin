@@ -181,4 +181,79 @@ mod tests {
         world.insert_one(a, Parent(b)).unwrap();
         propagate(&mut world);
     }
+
+    #[test]
+    fn plugin_propagates_in_post_update() {
+        let mut app = App::new();
+        app.add_plugin(TransformPlugin);
+        let (root, child) = {
+            let mut world = app.resources.fetch_mut::<World>();
+            let root = world.spawn((Transform::from_xyz(1.0, 2.0, 3.0),));
+            let child = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0), Parent(root)));
+            (root, child)
+        };
+        // Игровая система в Update двигает корень — рендер в этом же кадре видит новое.
+        app.add_system(Stage::Update, move |res| {
+            res.fetch_mut::<World>()
+                .get::<&mut Transform>(root)
+                .unwrap()
+                .translation
+                .x += 1.0;
+        });
+        app.startup();
+        app.update();
+        let world = app.resources.fetch::<World>();
+        let pos = world
+            .get::<&GlobalTransform>(child)
+            .expect("GlobalTransform добавлен сам")
+            .0
+            .transform_point3(Vec3::ZERO);
+        assert!(pos.abs_diff_eq(Vec3::new(2.0, 3.0, 3.0), 1e-5), "{pos}");
+    }
+
+    #[test]
+    fn scale_and_rotation_compose_and_unparenting_makes_a_root() {
+        let mut world = World::new();
+        let root = world.spawn((Transform::IDENTITY.with_scale(Vec3::splat(2.0)),));
+        let child = world.spawn((
+            Transform::from_xyz(1.0, 0.0, 0.0)
+                .with_rotation(Quat::from_rotation_z(90f32.to_radians())),
+            Parent(root),
+        ));
+        propagate(&mut world);
+        let g = world.get::<&GlobalTransform>(child).unwrap().to_transform();
+        // Смещение ребёнка растягивается масштабом родителя, масштаб наследуется.
+        assert!(g.translation.abs_diff_eq(Vec3::new(2.0, 0.0, 0.0), 1e-5));
+        assert!(g.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
+        assert!((g.rotation * Vec3::X).abs_diff_eq(Vec3::Y, 1e-5));
+
+        // Без Parent объект становится корнем: глобальная матрица = локальная.
+        world.remove_one::<Parent>(child).unwrap();
+        propagate(&mut world);
+        let g = world.get::<&GlobalTransform>(child).unwrap().0;
+        assert!(g.abs_diff_eq(world.get::<&Transform>(child).unwrap().matrix(), 1e-6));
+    }
+
+    #[test]
+    fn despawned_parent_leaves_child_at_its_local_pose() {
+        let mut world = World::new();
+        let root = world.spawn((Transform::from_xyz(5.0, 0.0, 0.0),));
+        let child = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0), Parent(root)));
+        world.despawn(root).unwrap();
+        propagate(&mut world);
+        let pos = world
+            .get::<&GlobalTransform>(child)
+            .unwrap()
+            .0
+            .transform_point3(Vec3::ZERO);
+        assert!(pos.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-5), "{pos}");
+        // world_matrix ведёт себя так же: висячий родитель = единичная матрица.
+        assert!(
+            world_matrix(&world, child)
+                .unwrap()
+                .transform_point3(Vec3::ZERO)
+                .abs_diff_eq(pos, 1e-5)
+        );
+        assert!(world_matrix(&world, root).is_none());
+    }
 }

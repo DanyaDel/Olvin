@@ -19,6 +19,8 @@ olvin_physics = { path = "crates/olvin_physics" }
 olvin_transform = { path = "crates/olvin_transform" }
 olvin_mesh = { path = "crates/olvin_mesh" }
 olvin = { path = "crates/olvin" }
+# Shared UI kit (themes, fonts, logo, motion) for the editor and the hub.
+olvin_ui = { path = "crates/olvin_ui" }
 
 glam = { version = "0.34", features = ["bytemuck", "serde"] }
 hecs = "0.11"
@@ -28,7 +30,6 @@ raw-window-handle = "0.6"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
 log = "0.4"
-env_logger = "0.11"
 
 # Hub (olvin-hub): project and module manager, separate from the engine.
 olvin_hub = { path = "hub/olvin_hub" }

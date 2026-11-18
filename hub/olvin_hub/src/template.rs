@@ -10,7 +10,6 @@ edition = "2024"
 
 [dependencies]
 log = "0.4"
-env_logger = "0.11"
 
 # Engine and libraries are always optimized, the game itself compiles fast.
 [profile.dev.package."*"]
@@ -30,12 +29,12 @@ pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
     let main = if graphical { MAIN_RS } else { HEADLESS_RS };
     [
         ("src/main.rs", main.replace("{name}", name)),
-        (".gitignore", "/target\n".into()),
+        (".gitignore", "/target\n/logs\n".into()),
         (
             "README.md",
             format!(
-                "# {name}\n\nИгра на Olvin. Модули ставятся через `olvin-hub add <модуль>` \
-                 (список: `olvin-hub list`), сцена редактируется в `olvin-hub editor open`.\n\n```sh\ncargo run --release\n```\n"
+                "# {name}\n\nA game made with Olvin. Add modules with `olvin-hub add <module>` \
+                 (list: `olvin-hub list`), edit the scene with `olvin-hub editor open`.\n\n```sh\ncargo run --release\n```\n"
             ),
         ),
     ]
@@ -46,10 +45,10 @@ const MAIN_RS: &str = r#"use olvin::prelude::*;
 struct Spin(f32);
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .init();
+    // Log to stderr and logs/game.log; panic reports go to logs/crash-*.txt.
+    olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
+        .file("logs/game.log")
+        .init();
 
     let mut app = App::new();
     app.add_plugin(DefaultPlugins {
@@ -69,9 +68,9 @@ fn main() {
 fn setup(res: &mut Resources) {
     // The scene saved in olvin-editor, if there is one.
     match olvin::scene_file::load(res, "assets/scenes/main.scene.ron") {
-        Ok(count) => log::info!("сцена загружена: {count} объектов"),
+        Ok(count) => log::info!("scene loaded: {count} objects"),
         Err(err) => {
-            log::info!("сцены из редактора нет ({err}), показываю куб");
+            log::info!("no editor scene ({err}), showing a cube");
             let cube = res.fetch_mut::<Meshes>().add(MeshData::cube(1.0));
             let mut world = res.fetch_mut::<World>();
             world.spawn((
@@ -100,7 +99,7 @@ const HEADLESS_RS: &str = r#"//! Headless Olvin app: core + ECS, no window. Add 
 use olvin::prelude::*;
 
 fn main() {
-    env_logger::init();
+    olvin::core::Logging::new("info").file("logs/game.log").init();
     let mut app = App::new();
     app.add_plugin(olvin::ecs::EcsPlugin).add_system(Stage::Update, |res| {
         if res.fetch::<Time>().frame() >= 3 {

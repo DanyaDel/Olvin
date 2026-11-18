@@ -24,6 +24,10 @@ pub struct Preferences {
     pub viewport_fog: bool,
     /// Draw calls, objects and frame time in the scene view corner.
     pub show_stats: bool,
+    /// Interface palette (STYLE.md "Themes"). Scene views keep their colours.
+    pub theme: olvin_ui::ThemeKind,
+    /// No transitions or blinking cursor (STYLE.md §7).
+    pub reduce_motion: bool,
 }
 
 impl Default for Preferences {
@@ -39,6 +43,8 @@ impl Default for Preferences {
             viewport_shadows: true,
             viewport_fog: true,
             show_stats: false,
+            theme: olvin_ui::ThemeKind::default(),
+            reduce_motion: false,
         }
     }
 }

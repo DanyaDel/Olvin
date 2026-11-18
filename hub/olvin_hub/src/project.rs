@@ -18,14 +18,14 @@ impl Project {
         let root = root.into();
         let path = root.join("Cargo.toml");
         let text = fs::read_to_string(&path)
-            .with_context(|| format!("не удалось прочитать {}", path.display()))?;
+            .with_context(|| format!("could not read {}", path.display()))?;
         let doc: DocumentMut = text
             .parse()
-            .with_context(|| format!("не удалось разобрать {}", path.display()))?;
+            .with_context(|| format!("could not parse {}", path.display()))?;
         let project = Self { root, doc };
         if project.olvin().is_none() {
             bail!(
-                "{} не проект Olvin: нет зависимости `olvin`",
+                "{} is not an Olvin project: it has no `olvin` dependency",
                 path.display()
             );
         }
@@ -38,7 +38,7 @@ impl Project {
             .ancestors()
             .filter(|dir| dir.join("Cargo.toml").is_file())
             .find_map(|dir| Self::open(dir).ok())
-            .with_context(|| format!("в {} и выше нет проекта Olvin", start.display()))
+            .with_context(|| format!("no Olvin project in {} or above", start.display()))
     }
 
     /// Creates `<parent>/<name>` with the catalog's default modules.
@@ -72,7 +72,7 @@ impl Project {
         engine.validate()?;
         let root = parent.join(name);
         if root.exists() {
-            bail!("{} уже существует", root.display());
+            bail!("{} already exists. Pick another name", root.display());
         }
         fs::create_dir_all(root.join("src"))?;
         let graphical = ["window", "render", "scenes"]
@@ -149,7 +149,7 @@ impl Project {
     /// Uninstalls a module. Refuses if installed modules require it, unless `force`.
     pub fn remove(&mut self, catalog: &Catalog, id: &str, force: bool) -> Result<bool> {
         let Some(module) = catalog.get(id) else {
-            bail!("нет модуля `{id}`")
+            bail!("no module `{id}`. See the list: olvin-hub list")
         };
         if !self.is_installed(module) {
             return Ok(false);
@@ -161,7 +161,10 @@ impl Project {
             .map(|m| m.id.as_str())
             .collect();
         if !dependents.is_empty() && !force {
-            bail!("`{id}` нужен модулям: {}", dependents.join(", "));
+            bail!(
+                "`{id}` is required by {}. Remove those first",
+                dependents.join(", ")
+            );
         }
         match &module.source {
             Source::Olvin { feature } => {
@@ -184,7 +187,7 @@ impl Project {
     pub fn save(&self) -> Result<()> {
         let path = self.root.join("Cargo.toml");
         fs::write(&path, self.doc.to_string())
-            .with_context(|| format!("не удалось записать {}", path.display()))
+            .with_context(|| format!("could not write {}", path.display()))
     }
 
     fn install(&mut self, module: &Module) -> Result<()> {
@@ -197,7 +200,7 @@ impl Project {
                 let features = olvin
                     .get_mut("features")
                     .and_then(Item::as_array_mut)
-                    .context("`olvin.features` не массив")?;
+                    .context("`olvin.features` is not an array")?;
                 features.push(feature.as_str());
                 features.fmt();
             }
@@ -248,7 +251,7 @@ impl Project {
         self.deps_mut()
             .get_mut("olvin")
             .and_then(Item::as_table_like_mut)
-            .context("зависимость `olvin` отсутствует или записана не таблицей")
+            .context("the `olvin` dependency is missing or not a table")
     }
 
     fn olvin_features(&self) -> Vec<String> {
@@ -273,7 +276,7 @@ fn validate_name(name: &str) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if !ok {
-        bail!("`{name}`: только латиница, цифры, `_` и `-`, начинаться с буквы");
+        bail!("`{name}`: use Latin letters, digits, `_` and `-`, starting with a letter");
     }
     Ok(())
 }

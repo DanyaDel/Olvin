@@ -8,6 +8,6 @@ mod project;
 mod template;
 
 pub use catalog::{Catalog, EditorModule, Module, Source};
-pub use config::{ENGINE_GIT, EngineSource, HubConfig};
+pub use config::{ENGINE_GIT, EngineSource, GuiSettings, HubConfig};
 pub use editor::{EditorInstall, engine_fingerprint};
 pub use project::Project;

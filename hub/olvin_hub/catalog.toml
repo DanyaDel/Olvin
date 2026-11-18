@@ -1,22 +1,22 @@
-# Каталог модулей olvin-hub.
-#   kind = "olvin": фича фасадного крейта `olvin`, плагин подключается через DefaultPlugins.
-#   kind = "crate": обычная зависимость с crates.io, подключается как библиотека.
-# requires: какие модули ставятся вместе с этим.
+# olvin-hub module catalog.
+#   kind = "olvin": a feature of the `olvin` facade crate; its plugin comes in through DefaultPlugins.
+#   kind = "crate": a plain crates.io dependency, used as a library.
+# requires: modules installed together with this one.
 
 [[module]]
 id = "window"
-name = "Окно и ввод"
+name = "Window"
 category = "Olvin"
-description = "winit: окно, клавиатура, мышь, главный цикл"
+description = "winit: the window, keyboard, mouse and main loop"
 kind = "olvin"
 feature = "window"
 default = true
 
 [[module]]
 id = "render"
-name = "3D-рендер"
+name = "3D rendering"
 category = "Olvin"
-description = "wgpu: instancing, отсечение по камере; Vulkan / Metal / DX12 / GL / WebGL2"
+description = "wgpu: instancing, frustum culling; Vulkan / Metal / DX12 / GL / WebGL2"
 kind = "olvin"
 feature = "render"
 requires = ["window"]
@@ -24,9 +24,9 @@ default = true
 
 [[module]]
 id = "scenes"
-name = "Сцены из редактора"
+name = "Editor scenes"
 category = "Olvin"
-description = "Загрузка .scene.ron из olvin-editor: материалы, текстуры, небо, шейдеры, glTF"
+description = "Loads .scene.ron from olvin-editor: materials, textures, sky, shaders, glTF"
 kind = "olvin"
 feature = "scene"
 requires = ["render"]
@@ -34,26 +34,26 @@ default = true
 
 [[module]]
 id = "physics"
-name = "Физика 3D"
-category = "Геймплей"
-description = "Rapier: коллайдеры и Rigidbody из редактора работают в игре, у CSG-уровня статический коллайдер"
+name = "3D physics"
+category = "Gameplay"
+description = "Rapier: colliders and rigidbodies from the editor work in the game; the CSG level gets a static collider"
 kind = "olvin"
 feature = "physics"
 
 [[module]]
 id = "scripts"
-name = "Скрипты (Behaviour)"
-category = "Геймплей"
-description = "Поведения на Rust как в Unity: start/update/fixed_update, коллизии и триггеры, параметры из редактора, готовые Rotator, FollowTarget, контроллер игрока"
+name = "Scripts"
+category = "Gameplay"
+description = "Unity-style behaviours in Rust: start/update/fixed_update, collisions and triggers, parameters from the editor, built-in Rotator, FollowTarget and a player controller"
 kind = "olvin"
 feature = "script"
 default = true
 
 [[module]]
 id = "input"
-name = "Ввод (действия)"
-category = "Геймплей"
-description = "Карты действий: клавиатура, мышь, геймпады (gilrs), WASD-композиты, assets/input.ron"
+name = "Input actions"
+category = "Gameplay"
+description = "Action maps: keyboard, mouse, gamepads (gilrs), WASD composites, assets/input.ron"
 kind = "olvin"
 feature = "input"
 requires = ["window"]
@@ -61,35 +61,35 @@ default = true
 
 [[module]]
 id = "audio"
-name = "Звук"
-category = "Геймплей"
-description = "Kira: Audio Source / Listener из редактора, 3D-затухание, музыка потоком"
+name = "Audio"
+category = "Gameplay"
+description = "Kira: Audio Source / Listener from the editor, 3D falloff, streamed music"
 kind = "olvin"
 feature = "audio"
 
 [[module]]
 id = "gltf"
-name = "Загрузка glTF"
-category = "Ассеты"
-description = "Чтение моделей .gltf / .glb"
+name = "glTF loading"
+category = "Assets"
+description = "Reads .gltf / .glb models"
 kind = "crate"
 crate = "gltf"
 version = "1.4"
 
 [[module]]
 id = "rand"
-name = "Случайные числа"
-category = "Утилиты"
-description = "rand: генераторы, распределения, перемешивание"
+name = "Random numbers"
+category = "Utilities"
+description = "rand: generators, distributions, shuffling"
 kind = "crate"
 crate = "rand"
 version = "0.10"
 
 [[module]]
 id = "serde"
-name = "Сериализация"
-category = "Утилиты"
-description = "serde с derive: основа для сохранений и конфигов"
+name = "Serialization"
+category = "Utilities"
+description = "serde with derive: the base for saves and configs"
 kind = "crate"
 crate = "serde"
 version = "1"
@@ -97,22 +97,22 @@ features = ["derive"]
 
 [[module]]
 id = "saves"
-name = "Сохранения (RON)"
-category = "Утилиты"
-description = "ron: читаемый формат для сохранений и настроек"
+name = "Saves (RON)"
+category = "Utilities"
+description = "ron: a readable format for saves and settings"
 kind = "crate"
 crate = "ron"
 version = "0.12"
 requires = ["serde"]
 
-# --- Элементы редактора -------------------------------------------------
-# Ставятся в установку olvin-editor (olvin-hub editor add <id>).
-# База редактора (сцена, иерархия, инспектор, ассеты) есть всегда.
+# --- Editor elements ------------------------------------------------------
+# Installed into the olvin-editor build (olvin-hub editor add <id>).
+# The editor core (scene, hierarchy, inspector, assets) is always there.
 
 [[editor_module]]
 id = "console"
-name = "Консоль"
-description = "Лог редактора: сохранения, ошибки, сообщения элементов"
+name = "Console"
+description = "The editor log: saves, errors, messages from elements"
 crate = "olvin_editor_console"
 path = "editor/olvin_editor_console"
 plugin = "olvin_editor_console::ConsolePlugin"
@@ -120,16 +120,16 @@ default = true
 
 [[editor_module]]
 id = "animator"
-name = "Аниматор"
-description = "Таймлайн с ключами Transform, превью во вьюпорте, рабочая область «Анимация»"
+name = "Animator"
+description = "A timeline with Transform keys, viewport preview and the Animation workspace"
 crate = "olvin_editor_animator"
 path = "editor/olvin_editor_animator"
 plugin = "olvin_editor_animator::AnimatorPlugin"
 
 [[editor_module]]
 id = "csg"
-name = "CSG (маппинг уровней)"
-description = "Браши с булевыми операциями, рисование по поверхности, ручки граней, адаптивная сетка; форма брашей правится в Edit Mode элемента «Моделирование»"
+name = "CSG level mapping"
+description = "Brushes with boolean operations, drawing on surfaces, face handles, an adaptive grid; brush shapes are edited in the Modeling Edit Mode"
 crate = "olvin_editor_csg"
 path = "editor/olvin_editor_csg"
 plugin = "olvin_editor_csg::CsgPlugin"
@@ -137,8 +137,8 @@ default = true
 
 [[editor_module]]
 id = "modeling"
-name = "Моделирование (Edit Mode)"
-description = "Редактирование мешей как в Blender: вершины/рёбра/грани, extrude, inset, loop cut, нож, заполнение, слияние, сглаживание"
+name = "Modeling"
+description = "Blender-style mesh editing: vertices, edges and faces, extrude, inset, loop cut, knife, fill, merge, subdivide"
 crate = "olvin_editor_modeling"
 path = "editor/olvin_editor_modeling"
 plugin = "olvin_editor_modeling::ModelingPlugin"
@@ -146,8 +146,8 @@ default = true
 
 [[editor_module]]
 id = "ide"
-name = "IDE (код и шейдеры)"
-description = "Редактор кода в движке: дерево проекта, подсветка Rust/WGSL/RON/TOML/Markdown, поиск и замена, cargo check/build/run с панелями Problems и Output, проверка surface-шейдеров через naga, палитра команд"
+name = "IDE"
+description = "Code and shaders inside the editor: project tree, Rust/WGSL/RON/TOML/Markdown highlighting, find and replace, cargo check/build/run with Problems and Output, naga checks for surface shaders, a command palette"
 crate = "olvin_editor_ide"
 path = "editor/olvin_editor_ide"
 plugin = "olvin_editor_ide::IdePlugin"
@@ -155,8 +155,8 @@ default = false
 
 [[editor_module]]
 id = "uv"
-name = "UV-редактор"
-description = "Развёртка как в Blender: LSCM-unwrap по швам, проекции (box/planar/cylinder/sphere), упаковка островов, G/R/S в UV, рабочая область «UV Editing»"
+name = "UV Editor"
+description = "Blender-style unwrapping: LSCM along seams, box/planar/cylinder/sphere projections, island packing, G/R/S in UV, the UV Editing workspace"
 crate = "olvin_editor_uv"
 path = "editor/olvin_editor_uv"
 plugin = "olvin_editor_uv::UvPlugin"

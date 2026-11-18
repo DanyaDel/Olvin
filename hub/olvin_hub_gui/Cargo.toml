@@ -12,6 +12,11 @@ path = "src/main.rs"
 
 [dependencies]
 olvin_hub.workspace = true
+olvin_ui.workspace = true
 eframe.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

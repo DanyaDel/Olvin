@@ -109,7 +109,9 @@ impl Behaviour for Thud {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    olvin::core::Logging::new("warn")
+        .file("logs/script_demo.log")
+        .init();
     let audio = std::env::args().any(|a| a == "--audio");
 
     let mut app = App::new();

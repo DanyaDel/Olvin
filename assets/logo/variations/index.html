@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Olvin: логотип</title>
+<!-- Галерея вариантов логотипа. Каждый вариант показан на том фоне, для которого он сделан:
+     on-dark / white / dark → чёрный, on-light / black / light → белый. Токены из STYLE.md. -->
+<style>
+:root{--bg:#000;--surface:#0f0f0f;--text:#f5f5f7;--text-2:#ccc;--muted:#999;--accent:#4cd964;--line:rgba(255,255,255,.08);--line-soft:rgba(255,255,255,.05);--paper:#fff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 "JetBrains Mono","Fira Code","DejaVu Sans Mono",ui-monospace,monospace;padding:32px 16px 48px}
+main{max-width:1100px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px;font-weight:700}
+.cur{color:var(--accent)}
+p.sub{color:var(--text-2);margin:0 0 8px}
+p.legend{color:var(--muted);margin:0 0 24px;font-size:12px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:32px 0 12px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.card{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.card .v{height:160px;display:flex;align-items:center;justify-content:center;padding:24px}
+.card.dark .v{background:var(--bg)}
+.card.light .v{background:var(--paper)}
+.card img{max-width:100%;max-height:100%}
+figcaption{padding:8px 12px;color:var(--text-2);font-size:12px;border-top:1px solid var(--line-soft);overflow-wrap:anywhere}
+.card.dark figcaption::after{content:"тёмный фон";display:block;font-size:11px;color:var(--muted)}
+.card.light figcaption::after{content:"светлый фон";display:block;font-size:11px;color:var(--muted)}
+.card:hover{border-color:rgba(76,217,100,.3)}
+</style>
+</head>
+<body>
+<main>
+<h1>Olvin<span class="cur">_</span> логотип</h1>
+<p class="sub">Все SVG-варианты из <code>assets/logo/variations/</code> и основные файлы из <code>assets/logo/</code>.</p>
+<p class="legend">Фон карточки показывает, для какого фона сделан вариант. Что куда ставить: <a href="../README.md" style="color:var(--text-2)">assets/logo/README.md</a>.</p>
+
+<h2>Основные файлы</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="../olvin-mark.svg" alt="olvin-mark.svg"></div><figcaption>olvin-mark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="../olvin-mark-light.svg" alt="olvin-mark-light.svg"></div><figcaption>olvin-mark-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="../olvin-mark-animated.svg" alt="olvin-mark-animated.svg"></div><figcaption>olvin-mark-animated.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="../olvin-wordmark.svg" alt="olvin-wordmark.svg"></div><figcaption>olvin-wordmark.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="../olvin-icon.svg" alt="olvin-icon.svg"></div><figcaption>olvin-icon.svg</figcaption></figure>
+</div>
+<h2>Без подложки: плоские (flat)</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="mark-flat-on-dark.svg" alt="mark-flat-on-dark.svg"></div><figcaption>mark-flat-on-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="mark-flat-on-light.svg" alt="mark-flat-on-light.svg"></div><figcaption>mark-flat-on-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="wordmark-flat-on-dark.svg" alt="wordmark-flat-on-dark.svg"></div><figcaption>wordmark-flat-on-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="wordmark-flat-on-light.svg" alt="wordmark-flat-on-light.svg"></div><figcaption>wordmark-flat-on-light.svg</figcaption></figure>
+</div>
+<h2>Без подложки: одноцветные (mono)</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="mark-mono-white.svg" alt="mark-mono-white.svg"></div><figcaption>mark-mono-white.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="mark-mono-black.svg" alt="mark-mono-black.svg"></div><figcaption>mark-mono-black.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="wordmark-mono-white.svg" alt="wordmark-mono-white.svg"></div><figcaption>wordmark-mono-white.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="wordmark-mono-black.svg" alt="wordmark-mono-black.svg"></div><figcaption>wordmark-mono-black.svg</figcaption></figure>
+</div>
+<h2>Без подложки: контурные (line)</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="mark-line-white.svg" alt="mark-line-white.svg"></div><figcaption>mark-line-white.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="mark-line-black.svg" alt="mark-line-black.svg"></div><figcaption>mark-line-black.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="wordmark-line-white.svg" alt="wordmark-line-white.svg"></div><figcaption>wordmark-line-white.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="wordmark-line-black.svg" alt="wordmark-line-black.svg"></div><figcaption>wordmark-line-black.svg</figcaption></figure>
+</div>
+<h2>Без подложки: Liquid Glass</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="mark-glass-on-dark.svg" alt="mark-glass-on-dark.svg"></div><figcaption>mark-glass-on-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="mark-glass-on-light.svg" alt="mark-glass-on-light.svg"></div><figcaption>mark-glass-on-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="wordmark-glass-on-dark.svg" alt="wordmark-glass-on-dark.svg"></div><figcaption>wordmark-glass-on-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="wordmark-glass-on-light.svg" alt="wordmark-glass-on-light.svg"></div><figcaption>wordmark-glass-on-light.svg</figcaption></figure>
+</div>
+<h2>С подложкой: плитка (plate)</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="plate-dark.svg" alt="plate-dark.svg"></div><figcaption>plate-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="plate-light.svg" alt="plate-light.svg"></div><figcaption>plate-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="plate-green.svg" alt="plate-green.svg"></div><figcaption>plate-green.svg</figcaption></figure>
+</div>
+<h2>С подложкой: круг (circle)</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="circle-dark.svg" alt="circle-dark.svg"></div><figcaption>circle-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="circle-light.svg" alt="circle-light.svg"></div><figcaption>circle-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="circle-green.svg" alt="circle-green.svg"></div><figcaption>circle-green.svg</figcaption></figure>
+</div>
+<h2>С подложкой: Liquid Glass</h2>
+<div class="grid">
+<figure class="card dark"><div class="v"><img src="glass-icon-dark.svg" alt="glass-icon-dark.svg"></div><figcaption>glass-icon-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="glass-icon-light.svg" alt="glass-icon-light.svg"></div><figcaption>glass-icon-light.svg</figcaption></figure>
+<figure class="card dark"><div class="v"><img src="glass-circle-dark.svg" alt="glass-circle-dark.svg"></div><figcaption>glass-circle-dark.svg</figcaption></figure>
+<figure class="card light"><div class="v"><img src="glass-circle-light.svg" alt="glass-circle-light.svg"></div><figcaption>glass-circle-light.svg</figcaption></figure>
+</div>
+</main>
+</body>
+</html>

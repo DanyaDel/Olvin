@@ -13,10 +13,9 @@ struct FlyCamera {
 }
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .init();
+    olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
+        .file("logs/sandbox.log")
+        .init();
 
     let mut app = App::new();
     app.add_plugin(DefaultPlugins {

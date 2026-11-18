@@ -6,7 +6,7 @@ use egui::{Align2, Color32, FontId, Sense};
 use olvin::render::camera_view_proj;
 
 use crate::render::Frame;
-use crate::{EditorState, Panel};
+use crate::{EditorState, Panel, theme};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1 << 32);
 
@@ -28,6 +28,9 @@ impl Panel for GameView {
         if rect.width() < 8.0 || rect.height() < 8.0 {
             return;
         }
+        // The view is always dark, so its overlays keep the Dark theme's
+        // widgets whatever the chrome uses.
+        *ui.visuals_mut() = olvin_ui::visuals(&theme::Palette::DARK);
         // The game gets the keyboard and mouse while the pointer is over this view.
         if let Some(play) = &mut state.play {
             let focused = response.hovered() && !ui.ctx().egui_wants_keyboard_input();

@@ -14,6 +14,7 @@ path = "src/main.rs"
 olvin_scene = { workspace = true, features = ["serde"] }
 olvin_assets = { path = "../../crates/olvin_assets" }
 olvin = { workspace = true, default-features = false, features = ["render", "scene", "physics", "window", "script", "input"] }
+olvin_ui.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_dock.workspace = true

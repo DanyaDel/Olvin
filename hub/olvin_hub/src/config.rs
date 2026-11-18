@@ -31,7 +31,10 @@ impl EngineSource {
         if let Self::Path(path) = self
             && !path.join("crates/olvin/Cargo.toml").is_file()
         {
-            bail!("{} не похоже на Olvin: нет crates/olvin", path.display());
+            bail!(
+                "{} is not an Olvin checkout: crates/olvin is missing",
+                path.display()
+            );
         }
         Ok(())
     }
@@ -71,21 +74,51 @@ impl std::fmt::Display for EngineSource {
 pub struct HubConfig {
     pub engine: EngineSource,
     pub projects: Vec<PathBuf>,
+    /// Desktop app preferences; the CLI ignores them.
+    pub gui: GuiSettings,
+}
+
+/// `[gui]` in the hub config: look and layout of `olvin-hub-gui`. Plain
+/// strings, so the core doesn't depend on UI types; unknown values fall back
+/// to the defaults in the app.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GuiSettings {
+    /// `dark`, `light`, `graphite` or `high-contrast`.
+    pub theme: String,
+    /// Turns off slides, lifts and typing; colour changes stay.
+    pub reduce_motion: bool,
+    /// Project view: `list` or `grid`.
+    pub view: String,
+    /// Project order: `modified` or `name`.
+    pub sort: String,
+}
+
+impl Default for GuiSettings {
+    fn default() -> Self {
+        Self {
+            theme: "dark".into(),
+            reduce_motion: false,
+            view: "list".into(),
+            sort: "modified".into(),
+        }
+    }
 }
 
 impl HubConfig {
     pub fn path() -> Result<PathBuf> {
-        let dir = dirs::config_dir().context("на этой платформе нет папки конфигов")?;
+        let dir = dirs::config_dir().context("this platform has no config directory")?;
         Ok(dir.join("olvin-hub/config.toml"))
     }
 
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
         match fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text)
-                .with_context(|| format!("не удалось прочитать {}", path.display())),
+            Ok(text) => {
+                toml::from_str(&text).with_context(|| format!("could not read {}", path.display()))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).with_context(|| format!("не удалось прочитать {}", path.display())),
+            Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
         }
     }
 
@@ -93,7 +126,7 @@ impl HubConfig {
         let path = Self::path()?;
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(&path, toml::to_string_pretty(self)?)
-            .with_context(|| format!("не удалось записать {}", path.display()))
+            .with_context(|| format!("could not write {}", path.display()))
     }
 
     /// Remembers a project; returns false if it was already known.

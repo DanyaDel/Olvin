@@ -856,4 +856,95 @@ mod tests {
             last = at.z;
         }
     }
+
+    #[test]
+    fn filtered_queries_skip_the_caster_and_see_triggers_on_request() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let (floor, caster, zone) = {
+            let mut world = res.fetch_mut::<World>();
+            let floor = ground(&mut world);
+            let caster = world.spawn((
+                Transform::from_xyz(0.0, 3.0, 0.0),
+                ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+            ));
+            let mut t = ColliderDesc::new(ColliderShape::Box {
+                size: Vec3::new(2.0, 0.5, 2.0),
+            });
+            t.is_trigger = true;
+            let zone = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0), t));
+            (floor, caster, zone)
+        };
+        step(&res, FIXED_DT);
+        let physics = res.fetch::<Physics>();
+        let from = Vec3::new(0.0, 3.0, 0.0);
+
+        // Луч из центра сферы сначала попадает в неё саму.
+        let hit = physics.raycast(from, Vec3::NEG_Y, 10.0).unwrap();
+        assert_eq!(hit.entity, caster);
+        // Без себя и без триггеров — пол.
+        let hit = physics
+            .raycast_filtered(from, Vec3::NEG_Y, 10.0, Some(caster), false)
+            .unwrap();
+        assert_eq!(hit.entity, floor);
+        assert!((hit.distance - 3.0).abs() < 1e-3, "{hit:?}");
+        // С триггерами — зона над полом (верх на y = 1.25).
+        let hit = physics
+            .raycast_filtered(from, Vec3::NEG_Y, 10.0, Some(caster), true)
+            .unwrap();
+        assert_eq!(hit.entity, zone);
+        assert!((hit.distance - 1.75).abs() < 1e-3, "{hit:?}");
+        // Нулевое направление — не луч.
+        assert!(physics.raycast(from, Vec3::ZERO, 10.0).is_none());
+
+        let hit = physics
+            .spherecast_filtered(from, 0.25, Vec3::NEG_Y, 10.0, Some(caster))
+            .unwrap();
+        assert_eq!(hit.entity, floor, "spherecast не видит триггеры");
+        assert!((hit.distance - 2.75).abs() < 1e-3, "{hit:?}");
+
+        let mut around = physics.overlap_sphere(Vec3::new(0.0, 1.0, 0.0), 0.3);
+        around.sort();
+        assert_eq!(around, vec![zone]);
+    }
+
+    #[test]
+    fn fixed_steps_accumulate_and_are_capped() {
+        let mut physics = Physics::new(Vec3::new(0.0, -9.81, 0.0));
+        assert_eq!(physics.gravity(), Vec3::new(0.0, -9.81, 0.0));
+        // Пол-шага ещё не шаг, вторая половина добивает до одного.
+        assert_eq!(physics.advance(FIXED_DT * 0.5), 0);
+        assert_eq!(physics.advance(FIXED_DT * 0.5 + 1e-6), 1);
+        assert_eq!(physics.advance(FIXED_DT * 3.0 + 1e-5), 3);
+        // Долгий кадр (подвисание) не превращается в лавину шагов.
+        assert_eq!(physics.advance(10.0), MAX_STEPS_PER_FRAME);
+        assert_eq!(physics.advance(0.0), 0);
+    }
+
+    #[test]
+    fn collision_events_of_puts_the_other_entity_first() {
+        let mut world = World::new();
+        let [a, b, c] = [(); 3].map(|_| world.spawn((Transform::IDENTITY,)));
+        let events = CollisionEvents {
+            events: vec![
+                CollisionEvent {
+                    a,
+                    b,
+                    started: true,
+                    sensor: false,
+                },
+                CollisionEvent {
+                    a: c,
+                    b: a,
+                    started: false,
+                    sensor: true,
+                },
+            ],
+        };
+        let of_a: Vec<Entity> = events.of(a).map(|(other, _)| other).collect();
+        assert_eq!(of_a, vec![b, c]);
+        assert_eq!(events.of(b).count(), 1);
+        let mut events = events;
+        events.clear();
+        assert_eq!(events.iter().count(), 0);
+    }
 }

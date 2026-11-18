@@ -1,0 +1,16 @@
+[package]
+name = "olvin_ui"
+description = "Olvin UI kit shared by the editor and the hub: STYLE.md themes, fonts, the painted logo, motion helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+egui.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# Off-screen renders of the logo and a themed sample (tests/render.rs, ignored by default).
+egui_kittest = { version = "0.36", features = ["wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -148,6 +148,11 @@ pub struct EditorState {
     pub settings_page: Option<crate::settings::Page>,
     /// Last frame's render statistics per view.
     pub render_stats: HashMap<u64, olvin::render::RenderStats>,
+    /// Material, texture and shader assets of the project.
+    pub materials: crate::materials::MaterialLibrary,
+    /// Mesh Edit Mode selection (entity, selected vertices), published by the
+    /// editing element for others (the UV editor's "only selected in 3D").
+    pub mesh_selection: Option<(u64, Vec<u32>)>,
     /// Set every frame by a tool in a modal operation (grab, inset...): the
     /// whole operation becomes one undo step. Cleared every frame.
     pub busy: bool,
@@ -185,6 +190,8 @@ impl EditorState {
             prefs: crate::prefs::Preferences::default(),
             settings_page: None,
             render_stats: HashMap::new(),
+            materials: Default::default(),
+            mesh_selection: None,
             busy: false,
             ext: Extensions::default(),
             gpu: None,
@@ -378,7 +385,8 @@ impl EditorState {
     pub fn start_play(&mut self) {
         if self.play.is_none() {
             self.commit();
-            self.play = Some(PlaySession::start(&self.scene, self.undo.len()));
+            let assets = self.assets_dir();
+            self.play = Some(PlaySession::start(&self.scene, self.undo.len(), assets));
             self.info("play");
         }
     }
@@ -475,6 +483,41 @@ impl EditorState {
 
     fn next_id(&self) -> u64 {
         self.scene.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1
+    }
+
+    /// Imports a model (`.gltf`/`.glb` under assets/) into the scene: its node
+    /// hierarchy with editable meshes and per-face UVs, plus `.mat.ron`
+    /// materials next to it. Returns the root's id.
+    pub fn import_model(&mut self, path: &std::path::Path) -> Result<u64, String> {
+        let root_dir = self.assets_dir().ok_or("open a project first")?;
+        let mut root = olvin_assets::AssetRoot::new(&root_dir);
+        root.scan();
+        let rel = root
+            .relative(path)
+            .ok_or("the model must be inside assets/")?;
+        let model = root.import_model(&rel)?;
+        let dir = format!("materials/{}", model.name);
+        let materials = root.write_materials(&model, &dir)?;
+        let imported = olvin_assets::model_to_entities(&model, self.next_id(), &materials);
+        let first = imported
+            .entities
+            .first()
+            .map(|e| e.id)
+            .ok_or("the model has no nodes")?;
+        for mut e in imported.entities {
+            if let (Some(poly), Some(uvs)) = (&mut e.poly, imported.uvs_per_face.get(&e.id))
+                && uvs.len() == poly.faces.len()
+            {
+                poly.uvs = uvs.clone();
+            }
+            self.scene.entities.push(e);
+        }
+        for warning in &model.skipped {
+            self.warn(format!("{}: {warning}", model.name));
+        }
+        self.info(format!("imported {rel}: {} materials", materials.len()));
+        self.select(Some(first));
+        Ok(first)
     }
 
     pub fn create(&mut self, kind: NewEntity, parent: Option<u64>) -> u64 {

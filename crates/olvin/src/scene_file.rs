@@ -11,11 +11,24 @@ use olvin_scene::primitives::Primitive;
 use olvin_scene::{Camera, MeshGeometry, Name, Tag, Transform};
 use olvin_transform::{GlobalTransform, Parent};
 
+// Gameplay components. With the `script` / `audio` features they are the
+// types those plugins consume, so spawned scenes run scripts and play sound
+// with no extra wiring (CharacterControllerDesc and AudioSourceDesc are picked
+// up by olvin_physics / olvin_audio directly). Without them: plain data.
+
 /// Behaviours attached in the editor; game code looks them up by name.
+#[cfg(feature = "script")]
+pub use olvin_script::Scripts;
+/// Behaviours attached in the editor; game code looks them up by name.
+#[cfg(not(feature = "script"))]
 #[derive(Clone, Debug, Default)]
 pub struct Scripts(pub Vec<ScriptDesc>);
 
 /// Marks the entity that hears audio (usually the camera).
+#[cfg(feature = "audio")]
+pub use olvin_audio::AudioListener;
+/// Marks the entity that hears audio (usually the camera).
+#[cfg(not(feature = "audio"))]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AudioListener;
 
@@ -56,16 +69,14 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         }
         if let Some(poly) = e.poly.as_ref().filter(|_| e.brush.is_none()) {
             // Edited mesh: its own geometry, and the triangles for a Mesh Collider.
-            let (positions, normals, indices) = poly.triangulate();
+            let (parts, data) = crate::render_assets::poly_mesh_data(poly);
+            let (positions, indices) = (parts.positions, parts.indices);
             let color = e.mesh.as_ref().map_or([0.8; 4], |m| m.color);
-            let handle = meshes.add(MeshData::from_triangles(
-                &positions,
-                &normals,
-                indices.clone(),
-            ));
+            let handle = meshes.add(data);
             b.add(MeshRenderer {
                 mesh: handle,
                 color: Color(color),
+                material: crate::render_assets::material_in(res, e.material.as_deref()),
             });
             b.add(MeshGeometry {
                 positions,
@@ -78,6 +89,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             b.add(MeshRenderer {
                 mesh: handle,
                 color: Color(mesh.color),
+                material: crate::render_assets::material_in(res, e.material.as_deref()),
             });
         }
         if let Some(camera) = &e.camera {
@@ -94,10 +106,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
                 .positions
                 .iter()
                 .zip(&tri.normals)
-                .map(|(p, n)| Vertex {
-                    position: p.to_array(),
-                    normal: n.to_array(),
-                })
+                .map(|(p, n)| Vertex::new(p.to_array(), n.to_array()))
                 .collect();
             let mesh = meshes.add(MeshData {
                 vertices,
@@ -106,6 +115,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             b.add(MeshRenderer {
                 mesh,
                 color: Color(brush.color),
+                material: None,
             });
             b.add(MeshGeometry {
                 positions: tri.positions,
@@ -153,9 +163,15 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
 
     if let Some(mut settings) = res.get_mut::<RenderSettings>() {
         apply_lighting(scene, &mut settings);
+        if let (Some(mut assets), Some(mut textures)) = (
+            res.get_mut::<crate::render_assets::RenderAssets>(),
+            res.get_mut::<olvin_render::Textures>(),
+        ) {
+            settings.sky = assets.sky(&scene.environment.skybox, &mut textures);
+        }
     }
 
-    // CSG: one static mesh per face colour, and one mesh collider for the level.
+    // CSG: one static mesh per face colour and material, one mesh collider for the level.
     let brushes: Vec<_> = scene
         .csg_brushes()
         .into_iter()
@@ -165,33 +181,31 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         })
         .collect();
     let polygons = olvin_csg::build(&brushes);
-    let mut by_color: HashMap<[u32; 4], Vec<&olvin_csg::Polygon>> = HashMap::new();
+    let mut by_color: HashMap<([u32; 4], Option<String>), Vec<&olvin_csg::Polygon>> =
+        HashMap::new();
     for p in &polygons {
         by_color
-            .entry(p.color.map(f32::to_bits))
+            .entry((
+                p.color.map(f32::to_bits),
+                scene.get(p.brush).and_then(|e| e.material.clone()),
+            ))
             .or_default()
             .push(p);
     }
-    for (color, polys) in by_color {
+    for ((color, material), polys) in by_color {
         let tri = olvin_csg::TriMesh::from_polygons(polys);
-        let vertices = tri
-            .positions
-            .iter()
-            .zip(&tri.normals)
-            .map(|(p, n)| Vertex {
-                position: p.to_array(),
-                normal: n.to_array(),
-            })
-            .collect();
-        let mesh = meshes.add(MeshData {
-            vertices,
-            indices: tri.indices,
-        });
+        // Box-projected UVs, one repeat per metre (triplanar materials look best).
+        let mesh = meshes.add(MeshData::from_triangles(
+            &tri.positions,
+            &tri.normals,
+            tri.indices,
+        ));
         world.spawn((
             Transform::IDENTITY,
             MeshRenderer {
                 mesh,
                 color: Color(color.map(f32::from_bits)),
+                material: crate::render_assets::material_in(res, material.as_deref()),
             },
         ));
     }
@@ -256,6 +270,13 @@ pub fn runtime_light(d: &LightDesc) -> olvin_render::Light {
 
 /// Loads a scene file and spawns it.
 pub fn load(res: &Resources, path: impl AsRef<Path>) -> Result<usize, String> {
+    let path = path.as_ref();
+    // Materials and textures resolve against the project's assets/ folder.
+    if let Some(mut assets) = res.get_mut::<crate::render_assets::RenderAssets>()
+        && assets.root().is_none()
+    {
+        assets.set_root(crate::render_assets::RenderAssets::root_for_scene(path));
+    }
     let scene = SceneFile::load(path)?;
     Ok(spawn(res, &scene))
 }

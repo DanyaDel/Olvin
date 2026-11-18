@@ -9,6 +9,12 @@ use crate::{PolyMesh, Remap, edge_key, loop_edges};
 /// merging and dissolving can produce. The result may have fewer than 3
 /// vertices; callers drop it then.
 pub(crate) fn clean_loop(face: &mut Vec<u32>) {
+    clean_loop_with(face, |_| {});
+}
+
+/// [`clean_loop`] that reports every removed position (in removal order,
+/// each relative to the loop at that moment) so parallel data can follow.
+pub(crate) fn clean_loop_with(face: &mut Vec<u32>, mut removed: impl FnMut(usize)) {
     loop {
         let n = face.len();
         if n < 2 {
@@ -16,6 +22,7 @@ pub(crate) fn clean_loop(face: &mut Vec<u32>) {
         }
         if let Some(i) = (0..n).find(|&i| face[i] == face[(i + 1) % n]) {
             face.remove(i);
+            removed(i);
             continue;
         }
         if n >= 3
@@ -25,7 +32,9 @@ pub(crate) fn clean_loop(face: &mut Vec<u32>) {
             let tip = (i + 1) % n;
             let (hi, lo) = if tip > i { (tip, i) } else { (i, tip) };
             face.remove(hi);
+            removed(hi);
             face.remove(lo);
+            removed(lo);
             continue;
         }
         return;
@@ -39,12 +48,23 @@ impl PolyMesh {
     fn apply_merge(&mut self, map: &[u32]) -> Remap {
         let mut collapsed = Vec::new();
         let mut remove_f = vec![false; self.faces.len()];
-        for (face, removed) in self.faces.iter_mut().zip(&mut remove_f) {
+        let has_uvs = self.has_uvs();
+        for (fi, (face, removed)) in self.faces.iter_mut().zip(&mut remove_f).enumerate() {
             for v in face.iter_mut() {
                 *v = map[*v as usize];
             }
             let edges: Vec<[u32; 2]> = loop_edges(face).map(|(a, b)| edge_key(a, b)).collect();
-            clean_loop(face);
+            let uv = if has_uvs {
+                Some(&mut self.uvs[fi])
+            } else {
+                None
+            };
+            let mut uv = uv;
+            clean_loop_with(face, |i| {
+                if let Some(uv) = uv.as_mut() {
+                    uv.remove(i);
+                }
+            });
             if face.iter().collect::<HashSet<_>>().len() < 3 {
                 // Keep the folded face's edges, as Blender does.
                 *removed = true;
@@ -52,7 +72,7 @@ impl PolyMesh {
             }
         }
         let faces = self.remove_faces_mask(&remove_f);
-        for e in &mut self.wire {
+        for e in self.wire.iter_mut().chain(&mut self.seams) {
             *e = edge_key(map[e[0] as usize], map[e[1] as usize]);
         }
         self.wire.extend(collapsed);

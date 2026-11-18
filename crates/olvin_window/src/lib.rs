@@ -4,6 +4,24 @@
 mod input;
 
 pub use input::Input;
+
+/// What gameplay wants the OS cursor to do; the window applies changes after
+/// each frame. `grabbed` locks the cursor to the window (falls back to
+/// confining it where locking is unsupported) for mouse look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CursorOptions {
+    pub grabbed: bool,
+    pub visible: bool,
+}
+
+impl Default for CursorOptions {
+    fn default() -> Self {
+        Self {
+            grabbed: false,
+            visible: true,
+        }
+    }
+}
 pub use winit::event::MouseButton;
 pub use winit::keyboard::KeyCode;
 
@@ -12,10 +30,10 @@ use std::sync::Arc;
 use olvin_core::{App, Plugin, Stage, SurfaceTarget};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{DeviceEvent, DeviceId, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 #[derive(Clone, Debug)]
 pub struct WindowPlugin {
@@ -39,6 +57,7 @@ impl Default for WindowPlugin {
 impl Plugin for WindowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Input>()
+            .init_resource::<CursorOptions>()
             .add_system(Stage::Last, |res| res.fetch_mut::<Input>().end_frame());
         let config = self.clone();
         app.set_runner(move |app| run(app, config));
@@ -52,6 +71,7 @@ fn run(app: App, config: WindowPlugin) {
         app,
         config,
         window: None,
+        cursor: CursorOptions::default(),
     };
     if let Err(err) = event_loop.run_app(&mut runner) {
         log::error!("event loop error: {err}");
@@ -62,6 +82,36 @@ struct Runner {
     app: App,
     config: WindowPlugin,
     window: Option<Arc<Window>>,
+    /// Last cursor state applied to the window.
+    cursor: CursorOptions,
+}
+
+impl Runner {
+    fn apply_cursor(&mut self) {
+        let Some(window) = &self.window else { return };
+        let Some(wanted) = self.app.resources.get::<CursorOptions>().map(|c| *c) else {
+            return;
+        };
+        if wanted == self.cursor {
+            return;
+        }
+        if wanted.grabbed != self.cursor.grabbed {
+            let result = if wanted.grabbed {
+                window
+                    .set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+            } else {
+                window.set_cursor_grab(CursorGrabMode::None)
+            };
+            if let Err(err) = result {
+                log::warn!("cursor grab: {err}");
+            }
+        }
+        if wanted.visible != self.cursor.visible {
+            window.set_cursor_visible(wanted.visible);
+        }
+        self.cursor = wanted;
+    }
 }
 
 impl ApplicationHandler for Runner {
@@ -115,9 +165,18 @@ impl ApplicationHandler for Runner {
             WindowEvent::CursorMoved { position, .. } => {
                 res.fetch_mut::<Input>().cursor = glam::vec2(position.x as f32, position.y as f32);
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => glam::vec2(x, y),
+                    // Touchpads report pixels; ~20 px per notch.
+                    MouseScrollDelta::PixelDelta(p) => glam::vec2(p.x as f32, p.y as f32) / 20.0,
+                };
+                res.fetch_mut::<Input>().scroll += lines;
+            }
             WindowEvent::Focused(false) => res.fetch_mut::<Input>().release_all(),
             WindowEvent::RedrawRequested => {
                 self.app.update();
+                self.apply_cursor();
                 if self.app.exit_requested() {
                     event_loop.exit();
                 } else if let Some(window) = &self.window {

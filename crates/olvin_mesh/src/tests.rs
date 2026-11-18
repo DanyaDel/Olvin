@@ -185,6 +185,7 @@ fn split_wire_edge() {
         positions: vec![Vec3::ZERO, Vec3::X],
         faces: vec![],
         wire: vec![[0, 1]],
+        ..Default::default()
     };
     let v = m.split_edge(0, 1, 0.5).unwrap();
     assert_eq!(m.edges(), vec![[0, v], [1, v]]);

@@ -16,3 +16,5 @@ glam.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
 log.workspace = true
+# Same naga as wgpu 30: validates surface shaders before they reach the GPU.
+naga = { version = "30.0.2", features = ["wgsl-in"] }

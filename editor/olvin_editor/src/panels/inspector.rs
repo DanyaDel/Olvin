@@ -140,6 +140,9 @@ impl Panel for Inspector {
             return;
         };
         let components = state.ext.components.clone();
+        let assets = state.assets_dir();
+        state.materials.refresh(assets.as_deref());
+        let mut log = None;
         let Some(e) = state.scene.get_mut(id) else {
             return;
         };
@@ -180,6 +183,9 @@ impl Panel for Inspector {
                             });
                         });
                     });
+                }
+                if e.mesh.is_some() || e.poly.is_some() || e.brush.is_some() {
+                    log = material_section(ui, e, &mut state.materials);
                 }
                 if let Some(cam) = &mut e.camera {
                     section(ui, "🎥 Camera", Some((&mut remove, "camera")), |ui| {
@@ -301,7 +307,103 @@ impl Panel for Inspector {
                     egui::Popup::menu(&response).show(|ui| self.add_menu(ui, e, &components));
                 });
             });
+        match log {
+            Some(Ok(msg)) => state.info(msg),
+            Some(Err(msg)) => state.warn(msg),
+            None => {}
+        }
     }
+}
+
+/// The object's material: pick or create a `*.mat.ron`, and edit it in place.
+fn material_section(
+    ui: &mut egui::Ui,
+    e: &mut EntityDesc,
+    lib: &mut crate::materials::MaterialLibrary,
+) -> Option<Result<String, String>> {
+    use crate::materials::{material_ui, presets_ui, short_name};
+    let mut log = None;
+    let mut clear = None::<&'static str>;
+    section(ui, "🎨 Material", Some((&mut clear, "material")), |ui| {
+        ui.horizontal(|ui| {
+            let shown = e
+                .material
+                .as_deref()
+                .map_or("Default (colour only)".to_owned(), short_name);
+            egui::ComboBox::from_id_salt("material-asset")
+                .width(180.0)
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut e.material, None, "Default (colour only)");
+                    for m in &lib.materials {
+                        ui.selectable_value(&mut e.material, Some(m.clone()), short_name(m));
+                    }
+                });
+            if ui
+                .button("New")
+                .on_hover_text("Create materials/<name>.mat.ron from this object's colour")
+                .clicked()
+            {
+                let color = e
+                    .mesh
+                    .as_ref()
+                    .map(|m| m.color)
+                    .or(e.brush.as_ref().map(|b| b.color))
+                    .unwrap_or([0.8; 4]);
+                let desc = olvin_scene::material::MaterialDesc {
+                    base_color: color,
+                    ..Default::default()
+                };
+                match lib.create(&e.name, desc) {
+                    Ok(rel) => {
+                        log = Some(Ok(format!("created {rel}")));
+                        e.material = Some(rel);
+                    }
+                    Err(err) => log = Some(Err(err)),
+                }
+            }
+        });
+        let Some(rel) = e.material.clone() else {
+            ui.weak("Textures, PBR, emission and custom shaders live in material assets.");
+            return;
+        };
+        let (textures, shaders) = (lib.textures.clone(), lib.shaders.clone());
+        let Some(m) = lib.get(&rel) else {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("{rel}: missing or unreadable"),
+            );
+            return;
+        };
+        let mut changed = presets_ui(ui, m);
+        changed |= material_ui(ui, m, &textures, &shaders);
+        ui.horizontal(|ui| {
+            ui.weak(format!("{rel} · shared by every object using it"));
+            if ui
+                .small_button("New shader")
+                .on_hover_text("shaders/<material>.wgsl from the surface shader template")
+                .clicked()
+            {
+                match lib.create_shader(&short_name(&rel)) {
+                    Ok(path) => {
+                        if let Some(m) = lib.get(&rel) {
+                            m.shader = Some(path.clone());
+                        }
+                        changed = true;
+                        log = Some(Ok(format!("created {path}")));
+                    }
+                    Err(err) => log = Some(Err(err)),
+                }
+            }
+        });
+        if changed && let Err(err) = lib.save(&rel) {
+            log = Some(Err(err));
+        }
+    });
+    if clear.is_some() {
+        e.material = None;
+    }
+    log
 }
 
 impl Inspector {

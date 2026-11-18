@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 use crate::query::find_directed;
 use crate::{PolyMesh, edge_key, loop_edges};
@@ -66,10 +66,16 @@ impl PolyMesh {
         }
 
         let mut walls = Vec::new();
+        let mut wall_uvs = Vec::new();
         for &f in &selected {
             for (a, b) in loop_edges(&self.faces[f]) {
                 if is_boundary(a, b) {
                     walls.push(vec![a, b, top[&b], top[&a]]);
+                    if self.has_uvs() {
+                        let others: Vec<usize> =
+                            selected.iter().copied().filter(|&g| g != f).collect();
+                        wall_uvs.push(self.wall_uvs(a, b, offset, &others));
+                    }
                 }
             }
             for v in &mut self.faces[f] {
@@ -79,6 +85,7 @@ impl PolyMesh {
             }
         }
         self.faces.extend(walls);
+        self.uvs.extend(wall_uvs);
         self.normalize_wire();
         selected
     }
@@ -107,12 +114,12 @@ impl PolyMesh {
         }
         for &[a, b] in &edges {
             let forward = self.faces.iter().any(|f| find_directed(f, a, b).is_some());
-            let quad = if forward {
-                vec![b, a, top[&a], top[&b]]
-            } else {
-                vec![a, b, top[&b], top[&a]]
-            };
-            self.faces.push(quad);
+            let (p, q) = if forward { (b, a) } else { (a, b) };
+            if self.has_uvs() {
+                let uv = self.wall_uvs(p, q, offset, &[]);
+                self.uvs.push(uv);
+            }
+            self.faces.push(vec![p, q, top[&q], top[&p]]);
         }
         self.normalize_wire();
         new_verts
@@ -163,6 +170,19 @@ impl PolyMesh {
                     self.add_vertex(p)
                 })
                 .collect();
+            if self.has_uvs() {
+                let outer = self.uvs[f].clone();
+                let inner_uv: Vec<Vec2> = inner
+                    .iter()
+                    .map(|&v| self.face_uv_at(f, self.positions[v as usize]))
+                    .collect();
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    self.uvs
+                        .push(vec![outer[i], outer[j], inner_uv[j], inner_uv[i]]);
+                }
+                self.uvs[f] = inner_uv;
+            }
             for i in 0..n {
                 let j = (i + 1) % n;
                 self.faces

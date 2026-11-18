@@ -1,0 +1,13 @@
+[package]
+name = "script_demo"
+description = "Olvin headless gameplay demo: scripts, character controller, triggers, input actions, audio API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+olvin = { path = "../../crates/olvin", default-features = false, features = ["physics", "script", "input", "audio"] }
+log.workspace = true
+env_logger.workspace = true

@@ -302,7 +302,7 @@ mod tests {
                 .map(|m| m.id.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(&p), ["window", "render", "scenes"]);
+        assert_eq!(ids(&p), ["window", "render", "scenes", "scripts", "input"]);
 
         // requires pulls in serde; re-adding is a no-op.
         assert_eq!(p.add(&catalog, "saves").unwrap(), ["serde", "saves"]);
@@ -315,7 +315,10 @@ mod tests {
 
         let reopened = Project::open(p.root()).unwrap();
         assert_eq!(reopened.name(), "my_game");
-        assert_eq!(ids(&reopened), ["render", "scenes", "serde"]);
+        assert_eq!(
+            ids(&reopened),
+            ["render", "scenes", "scripts", "input", "serde"]
+        );
         let text = fs::read_to_string(p.root().join("Cargo.toml")).unwrap();
         assert!(
             text.contains(r#"serde = { version = "1", features = ["derive"] }"#),

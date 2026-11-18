@@ -91,7 +91,9 @@ fn rendering(ui: &mut egui::Ui, state: &mut EditorState) {
         "Saved in the scene: the game looks exactly like this.",
     );
     presets(ui, state);
-    environment_ui(ui, &mut state.scene.environment);
+    let assets = state.assets_dir();
+    state.materials.refresh(assets.as_deref());
+    environment_ui(ui, &mut state.scene.environment, &state.materials.textures);
     ui.add_space(8.0);
     heading(
         ui,

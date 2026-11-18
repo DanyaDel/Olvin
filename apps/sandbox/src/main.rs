@@ -57,6 +57,7 @@ fn setup(res: &mut Resources) {
         MeshRenderer {
             mesh: ground,
             color: Color::rgb(0.12, 0.13, 0.15),
+            material: None,
         },
     ));
 
@@ -70,6 +71,7 @@ fn setup(res: &mut Resources) {
             MeshRenderer {
                 mesh: cube,
                 color: Color::rgb(0.25 + 0.75 * u, 0.4, 0.25 + 0.75 * v),
+                material: None,
             },
             Spin(0.5 + (i % 7) as f32 * 0.25),
         )

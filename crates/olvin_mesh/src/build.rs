@@ -27,7 +27,7 @@ impl PolyMesh {
         Self {
             positions,
             faces,
-            wire: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -42,7 +42,7 @@ impl PolyMesh {
                 Vec3::new(h, 0.0, -h),
             ],
             faces: vec![vec![0, 1, 2, 3]],
-            wire: Vec::new(),
+            ..Default::default()
         }
     }
 

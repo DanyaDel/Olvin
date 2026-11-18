@@ -142,6 +142,17 @@ impl ViewportExtension for CsgViewport {
             } else {
                 base
             };
+            // Brushes with a material are drawn textured by the engine; keep them pickable.
+            if state
+                .scene
+                .get(p.brush)
+                .is_some_and(|e| e.material.is_some())
+            {
+                for i in 1..p.vertices.len().saturating_sub(1) {
+                    out.pick_triangle(p.brush, [p.vertices[0], p.vertices[i], p.vertices[i + 1]]);
+                }
+                continue;
+            }
             out.polygon(p.brush, &p.vertices, p.normal, linear_color(p.color), f);
         }
         if outlines {

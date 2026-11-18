@@ -23,6 +23,12 @@ pub struct Assets {
     selected: Option<PathBuf>,
     filter: String,
     creating: Option<(bool, String)>,
+    /// Image previews: decoded by olvin_assets, uploaded to egui once.
+    thumbs: olvin_assets::ThumbnailCache,
+    textures: std::collections::HashMap<
+        PathBuf,
+        (std::sync::Arc<olvin_assets::ImageData>, egui::TextureHandle),
+    >,
 }
 
 impl Panel for Assets {
@@ -55,14 +61,15 @@ impl Panel for Assets {
                 if self.entries.is_empty() {
                     ui.weak("Empty folder. Right-click or \"+\" to create a folder or a scene");
                 }
+                let entries = std::mem::take(&mut self.entries);
                 ui.horizontal_wrapped(|ui| {
-                    for entry in self
-                        .entries
+                    for entry in entries
                         .iter()
                         .filter(|e| filter.is_empty() || e.name.to_lowercase().contains(&filter))
                     {
                         let selected = self.selected.as_ref() == Some(&entry.path);
-                        let response = tile(ui, entry, selected);
+                        let thumb = self.thumbnail(ui.ctx(), &entry.path);
+                        let response = tile(ui, entry, selected, thumb.as_ref());
                         if response.clicked() {
                             self.selected = Some(entry.path.clone());
                         }
@@ -73,12 +80,19 @@ impl Panel for Assets {
                             if is_scene(&entry.path) && ui.button("Open scene").clicked() {
                                 state.request_open(entry.path.clone());
                             }
+                            if is_model(&entry.path) && ui.button("Import into scene").clicked() {
+                                import(state, &entry.path);
+                            }
+                            if is_image(&entry.path) && ui.button("Create material").clicked() {
+                                material_from_texture(state, &root, &entry.path);
+                            }
                             if ui.button("Show in file manager").clicked() {
                                 reveal(entry.path.parent().unwrap_or(&entry.path));
                             }
                         });
                     }
                 });
+                self.entries = entries;
                 let rest = ui.allocate_response(
                     ui.available_size().max(egui::vec2(0.0, 30.0)),
                     Sense::click(),
@@ -94,6 +108,8 @@ impl Panel for Assets {
                 self.scanned = None;
             } else if is_scene(&path) {
                 state.request_open(path);
+            } else if is_model(&path) {
+                import(state, &path);
             } else {
                 reveal(&path);
             }
@@ -102,6 +118,27 @@ impl Panel for Assets {
 }
 
 impl Assets {
+    /// An egui texture with the image's thumbnail (re-uploaded when it changes).
+    fn thumbnail(&mut self, ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+        if !is_image(path) {
+            return None;
+        }
+        let image = self.thumbs.get(path, 96)?;
+        if let Some((data, tex)) = self.textures.get(path)
+            && std::sync::Arc::ptr_eq(data, &image)
+        {
+            return Some(tex.clone());
+        }
+        let color = egui::ColorImage::from_rgba_unmultiplied(
+            [image.width as usize, image.height as usize],
+            &image.pixels,
+        );
+        let tex = ctx.load_texture(path.to_string_lossy(), color, egui::TextureOptions::LINEAR);
+        self.textures
+            .insert(path.to_path_buf(), (image, tex.clone()));
+        Some(tex)
+    }
+
     fn rescan(&mut self, dir: &Path) {
         let _ = std::fs::create_dir_all(dir);
         self.entries = std::fs::read_dir(dir)
@@ -214,7 +251,12 @@ fn create_menu(ui: &mut egui::Ui, creating: &mut Option<(bool, String)>) {
     }
 }
 
-fn tile(ui: &mut egui::Ui, entry: &Entry, selected: bool) -> egui::Response {
+fn tile(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    selected: bool,
+    thumb: Option<&egui::TextureHandle>,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
     let visuals = ui.style().interact_selectable(&response, selected);
     if selected || response.hovered() {
@@ -226,13 +268,25 @@ fn tile(ui: &mut egui::Ui, entry: &Entry, selected: bool) -> egui::Response {
         ui.painter().rect_filled(rect, 4.0, fill);
     }
     let painter = ui.painter();
-    painter.text(
-        rect.center_top() + egui::vec2(0.0, 26.0),
-        egui::Align2::CENTER_CENTER,
-        icon(entry),
-        egui::FontId::proportional(28.0),
-        ui.visuals().text_color(),
-    );
+    if let Some(tex) = thumb {
+        let size = tex.size_vec2();
+        let fit = (44.0 / size.x.max(size.y)).min(1.0) * size;
+        let r = egui::Rect::from_center_size(rect.center_top() + egui::vec2(0.0, 26.0), fit);
+        painter.image(
+            tex.id(),
+            r,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        painter.text(
+            rect.center_top() + egui::vec2(0.0, 26.0),
+            egui::Align2::CENTER_CENTER,
+            icon(entry),
+            egui::FontId::proportional(28.0),
+            ui.visuals().text_color(),
+        );
+    }
     let name = if entry.name.chars().count() > 12 {
         format!("{}…", entry.name.chars().take(11).collect::<String>())
     } else {
@@ -263,8 +317,52 @@ fn icon(entry: &Entry) -> &'static str {
         "png" | "jpg" | "jpeg" | "tga" | "bmp" | "webp" | "ktx2" => "🖼",
         "gltf" | "glb" | "obj" | "fbx" => "📦",
         "wav" | "ogg" | "mp3" | "flac" => "🔊",
+        _ if entry.name.ends_with(".mat.ron") => "🎨",
+        "wgsl" => "🧪",
+        "hdr" | "exr" => "🌅",
+        "rs" => "🦀",
         "ron" | "toml" | "json" => "📝",
         _ => "📄",
+    }
+}
+
+fn is_model(path: &Path) -> bool {
+    let p = path.to_string_lossy().to_lowercase();
+    p.ends_with(".gltf") || p.ends_with(".glb")
+}
+
+fn is_image(path: &Path) -> bool {
+    let p = path.to_string_lossy().to_lowercase();
+    ["png", "jpg", "jpeg", "tga", "bmp", "webp", "hdr", "exr"]
+        .iter()
+        .any(|e| p.ends_with(&format!(".{e}")))
+}
+
+fn import(state: &mut EditorState, path: &Path) {
+    if let Err(e) = state.import_model(path) {
+        state.warn(format!("import: {e}"));
+    }
+}
+
+/// `materials/<texture>.mat.ron` using the image as base colour.
+fn material_from_texture(state: &mut EditorState, root: &Path, path: &Path) {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return;
+    };
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let desc = olvin_scene::material::MaterialDesc {
+        base_color: [1.0; 4],
+        base_texture: Some(rel),
+        ..Default::default()
+    };
+    state.materials.refresh(Some(root));
+    match state.materials.create(&name, desc) {
+        Ok(m) => state.info(format!("created {m}")),
+        Err(e) => state.warn(e),
     }
 }
 

@@ -13,6 +13,9 @@ impl PolyMesh {
             if f < self.faces.len() && !flipped[f] {
                 flipped[f] = true;
                 self.faces[f].reverse();
+                if let Some(uv) = self.uvs.get_mut(f) {
+                    uv.reverse();
+                }
             }
         }
     }
@@ -46,6 +49,9 @@ impl PolyMesh {
                         // A consistent neighbour walks the shared edge backwards.
                         if find_directed(&self.faces[g], a, b).is_some() {
                             self.faces[g].reverse();
+                            if let Some(uv) = self.uvs.get_mut(g) {
+                                uv.reverse();
+                            }
                         }
                         done[g] = true;
                         component.push(g);
@@ -78,6 +84,9 @@ impl PolyMesh {
             if outward < 0.0 {
                 for &f in &component {
                     self.faces[f].reverse();
+                    if let Some(uv) = self.uvs.get_mut(f) {
+                        uv.reverse();
+                    }
                 }
             }
         }

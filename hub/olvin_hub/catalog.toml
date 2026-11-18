@@ -26,7 +26,7 @@ default = true
 id = "scenes"
 name = "Сцены из редактора"
 category = "Olvin"
-description = "Загрузка .scene.ron, сохранённых в olvin-editor"
+description = "Загрузка .scene.ron из olvin-editor: материалы, текстуры, небо, шейдеры, glTF"
 kind = "olvin"
 feature = "scene"
 requires = ["render"]
@@ -41,13 +41,31 @@ kind = "olvin"
 feature = "physics"
 
 [[module]]
-id = "audio"
-name = "Аудио"
+id = "scripts"
+name = "Скрипты (Behaviour)"
 category = "Геймплей"
-description = "Kira: звуки, музыка, твины громкости, микшер"
-kind = "crate"
-crate = "kira"
-version = "0.12"
+description = "Поведения на Rust как в Unity: start/update/fixed_update, коллизии и триггеры, параметры из редактора, готовые Rotator, FollowTarget, контроллер игрока"
+kind = "olvin"
+feature = "script"
+default = true
+
+[[module]]
+id = "input"
+name = "Ввод (действия)"
+category = "Геймплей"
+description = "Карты действий: клавиатура, мышь, геймпады (gilrs), WASD-композиты, assets/input.ron"
+kind = "olvin"
+feature = "input"
+requires = ["window"]
+default = true
+
+[[module]]
+id = "audio"
+name = "Звук"
+category = "Геймплей"
+description = "Kira: Audio Source / Listener из редактора, 3D-затухание, музыка потоком"
+kind = "olvin"
+feature = "audio"
 
 [[module]]
 id = "gltf"
@@ -124,4 +142,22 @@ description = "Редактирование мешей как в Blender: вер
 crate = "olvin_editor_modeling"
 path = "editor/olvin_editor_modeling"
 plugin = "olvin_editor_modeling::ModelingPlugin"
+default = true
+
+[[editor_module]]
+id = "ide"
+name = "IDE (код и шейдеры)"
+description = "Редактор кода в движке: дерево проекта, подсветка Rust/WGSL/RON/TOML/Markdown, поиск и замена, cargo check/build/run с панелями Problems и Output, проверка surface-шейдеров через naga, палитра команд"
+crate = "olvin_editor_ide"
+path = "editor/olvin_editor_ide"
+plugin = "olvin_editor_ide::IdePlugin"
+default = false
+
+[[editor_module]]
+id = "uv"
+name = "UV-редактор"
+description = "Развёртка как в Blender: LSCM-unwrap по швам, проекции (box/planar/cylinder/sphere), упаковка островов, G/R/S в UV, рабочая область «UV Editing»"
+crate = "olvin_editor_uv"
+path = "editor/olvin_editor_uv"
+plugin = "olvin_editor_uv::UvPlugin"
 default = true

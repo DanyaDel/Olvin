@@ -71,8 +71,9 @@ impl MaterialDesc {
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
-        let text = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::new().struct_names(false))
-            .map_err(|e| e.to_string())?;
+        let text =
+            ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::new().struct_names(false))
+                .map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -81,9 +82,14 @@ impl MaterialDesc {
 
     /// Every texture path this material references.
     pub fn textures(&self) -> impl Iterator<Item = &str> {
-        [&self.base_texture, &self.normal_texture, &self.orm_texture, &self.emissive_texture]
-            .into_iter()
-            .filter_map(|t| t.as_deref())
+        [
+            &self.base_texture,
+            &self.normal_texture,
+            &self.orm_texture,
+            &self.emissive_texture,
+        ]
+        .into_iter()
+        .filter_map(|t| t.as_deref())
     }
 }
 

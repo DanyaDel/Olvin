@@ -5,6 +5,7 @@
 mod app;
 pub mod engine;
 pub mod ext;
+pub mod materials;
 pub mod panels;
 pub mod prefs;
 mod registry;

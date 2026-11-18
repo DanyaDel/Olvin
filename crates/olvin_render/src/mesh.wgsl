@@ -1,62 +1,83 @@
-// Instanced mesh shader. Written to WebGL2 / GLES 3.0 limits: one uniform
-// buffer (std140-safe: only vec4 / mat4 / arrays of vec4 structs), one depth
-// texture with a comparison sampler, 7 vertex attributes, no storage buffers.
+// ---- Engine: instanced PBR mesh shader template. The surface shader
+// (`fn surface`) is pasted in front of this file and the globals.
 //
-// Lighting, Unity built-in style: hemisphere ambient, a sun with PCF shadows,
-// up to 16 point / spot / extra directional lights, normalized Blinn-Phong
-// specular at a fixed roughness, linear fog, exposure + ACES, then sRGB.
+// WebGL2 limits: 9 vertex attributes (4 vertex + 5 instance), 5 varyings,
+// group 0 = view globals, group 1 = material (uniform + 4 textures + sampler),
+// 6 sampled textures in the fragment stage.
+//
+// Lighting, Unity built-in style: hemisphere ambient + roughness-faded sky
+// reflection, a sun with PCF shadows, up to 16 point / spot / extra
+// directional lights, GGX + height-correlated Smith + Schlick
+// (metallic-roughness), linear fog (towards the sky at the horizon when a sky
+// is set), exposure + ACES, then sRGB.
 
-const MAX_LIGHTS: u32 = 16u;
-// Fixed "material" for now: dielectric F0 and a moderate gloss.
-const SPEC_POWER: f32 = 48.0;
-const F0: f32 = 0.04;
-
-struct Light {
-    // xyz: world position; w: range (0 = directional).
-    position_range: vec4<f32>,
-    // rgb: colour * intensity; w: spot cone scale.
-    color_spot_scale: vec4<f32>,
-    // xyz: direction the light travels; w: spot cone offset.
-    direction_spot_offset: vec4<f32>,
+struct SurfaceInput {
+    world_position: vec3<f32>,
+    // World space, normalized, normal map applied.
+    normal: vec3<f32>,
+    // After uv_scale / uv_offset.
+    uv: vec2<f32>,
+    // base_color * base_texture * instance colour.
+    color: vec4<f32>,
+    // Seconds since start.
+    time: f32,
 };
 
-struct Globals {
-    view_proj: mat4x4<f32>,
-    shadow_view_proj: mat4x4<f32>,
-    // Perspective: (eye, 1); orthographic: (direction towards the camera, 0).
-    camera: vec4<f32>,
-    // View depth of p = dot(xyz, p) + w.
-    view_plane: vec4<f32>,
-    // xyz: direction the sun travels, normalized; w = 1: sample the shadow map.
-    sun_dir: vec4<f32>,
-    // rgb: sun colour * intensity; w = 1: encode sRGB here (the target isn't
-    // an sRGB format, e.g. the editor's egui pass).
-    sun_color: vec4<f32>,
-    // rgb: sky ambient; w: exposure.
-    sky: vec4<f32>,
-    // rgb: ground ambient; w: number of lights.
-    ground: vec4<f32>,
-    // rgb: fog colour; w = 1: fog on.
-    fog_color: vec4<f32>,
-    // x: fog start; y: fog end; z: 1 / shadow map size; w: shadow distance.
+struct SurfaceOutput {
+    // Albedo + alpha.
+    color: vec4<f32>,
+    // World space.
+    normal: vec3<f32>,
+    metallic: f32,
+    roughness: f32,
+    emissive: vec3<f32>,
+};
+
+struct Material {
+    base_color: vec4<f32>,
+    // rgb: emissive; w: normal strength.
+    emissive: vec4<f32>,
+    // x: metallic; y: roughness; z: alpha cutoff.
     params: vec4<f32>,
-    // x: normal offset (world units); y: shadow fade start; z = 1: ACES.
-    shadow_params: vec4<f32>,
-    lights: array<Light, 16>,
+    // xy: scale; zw: offset.
+    uv: vec4<f32>,
+    // x: unlit; y: triplanar; z: has a normal map.
+    flags: vec4<f32>,
 };
 
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var shadow_map: texture_depth_2d;
-@group(0) @binding(2) var shadow_sampler: sampler_comparison;
+@group(1) @binding(0) var<uniform> material: Material;
+@group(1) @binding(1) var base_texture: texture_2d<f32>;
+@group(1) @binding(2) var normal_texture: texture_2d<f32>;
+@group(1) @binding(3) var orm_texture: texture_2d<f32>;
+@group(1) @binding(4) var emissive_texture: texture_2d<f32>;
+@group(1) @binding(5) var material_sampler: sampler;
+
+// The material's sampled ORM and emissive texels for this pixel (sampled in
+// uniform control flow before `surface` runs).
+var<private> sampled_orm: vec3<f32>;
+var<private> sampled_emissive: vec3<f32>;
+
+// The standard material.
+fn default_surface(in: SurfaceInput) -> SurfaceOutput {
+    var out: SurfaceOutput;
+    out.color = in.color;
+    out.normal = in.normal;
+    out.metallic = material.params.x * sampled_orm.b;
+    out.roughness = material.params.y * sampled_orm.g;
+    out.emissive = material.emissive.rgb * sampled_emissive;
+    return out;
+}
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) model_0: vec4<f32>,
-    @location(3) model_1: vec4<f32>,
-    @location(4) model_2: vec4<f32>,
-    @location(5) model_3: vec4<f32>,
-    @location(6) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec4<f32>,
+    @location(4) model_0: vec4<f32>,
+    @location(5) model_1: vec4<f32>,
+    @location(6) model_2: vec4<f32>,
+    @location(7) model_3: vec4<f32>,
+    @location(8) color: vec4<f32>,
 };
 
 struct VertexOut {
@@ -64,6 +85,8 @@ struct VertexOut {
     @location(0) normal: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) world: vec3<f32>,
+    @location(3) uv: vec2<f32>,
+    @location(4) tangent: vec4<f32>,
 };
 
 @vertex
@@ -76,17 +99,45 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.normal = (model * vec4<f32>(in.normal, 0.0)).xyz;
     out.color = in.color;
     out.world = world.xyz;
+    out.uv = in.uv;
+    out.tangent = vec4<f32>((model * vec4<f32>(in.tangent.xyz, 0.0)).xyz, in.tangent.w);
     return out;
 }
 
-// Diffuse + specular from one light; `l` points towards the light.
-fn shade(albedo: vec3<f32>, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
-    let ndl = max(dot(n, l), 0.0);
+// GGX / height-correlated Smith / Schlick, Unity's convention (the lambert
+// term isn't divided by pi, so a white light of 1 gives the full albedo).
+// `l` points towards the light.
+fn brdf(albedo: vec3<f32>, metallic: f32, roughness: f32, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
+    let nl = dot(n, l);
+    if (nl <= 0.0) {
+        return vec3<f32>(0.0);
+    }
     let h = normalize(l + v + vec3<f32>(0.0, 1e-5, 0.0));
-    let fresnel = F0 + (1.0 - F0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
-    // Normalized Blinn-Phong: energy stays put as the gloss changes.
-    let spec = fresnel * (SPEC_POWER + 8.0) * 0.0397887 * pow(max(dot(n, h), 0.0), SPEC_POWER);
-    return (albedo * (1.0 - F0) + spec) * radiance * ndl;
+    let nv = max(dot(n, v), 1e-4);
+    let nh = max(dot(n, h), 0.0);
+    let vh = max(dot(v, h), 0.0);
+    let a = max(roughness * roughness, 2e-3);
+    let a2 = a * a;
+    let dd = nh * nh * (a2 - 1.0) + 1.0;
+    let d = a2 / (PI * dd * dd);
+    let gv = nl * sqrt(nv * nv * (1.0 - a2) + a2);
+    let gl = nv * sqrt(nl * nl * (1.0 - a2) + a2);
+    let vis = 0.5 / max(gv + gl, 1e-5);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0);
+    let spec = d * vis * f * PI;
+    let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
+    return (kd * albedo + spec) * radiance * nl;
+}
+
+// Karis' analytic fit of the split-sum environment BRDF.
+fn env_brdf(f0: vec3<f32>, roughness: f32, nv: f32) -> vec3<f32> {
+    let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
+    let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let r = roughness * c0 + c1;
+    let a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+    let ab = vec2<f32>(-1.04, 1.04) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
 }
 
 // 1 = lit, 0 = in the sun's shadow. 3x3 taps of a linear comparison sampler.
@@ -116,65 +167,141 @@ fn sun_shadow(p: vec3<f32>, n: vec3<f32>) -> f32 {
     return select(1.0, lit, inside);
 }
 
+// Tangent-space normal (green up) to world space.
+fn perturb(n: vec3<f32>, tangent: vec4<f32>, tn: vec3<f32>) -> vec3<f32> {
+    let t0 = tangent.xyz - n * dot(n, tangent.xyz);
+    if (dot(t0, t0) < 1e-12) {
+        return n;
+    }
+    let t = normalize(t0);
+    let b = cross(n, t) * select(1.0, -1.0, tangent.w < 0.0);
+    return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
+fn unpack_normal(texel: vec4<f32>) -> vec3<f32> {
+    let n = texel.xyz * 2.0 - 1.0;
+    return vec3<f32>(n.xy * material.emissive.w, n.z);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let n = normalize(in.normal);
+    let geo_n = normalize(in.normal);
     let p = in.world;
     let v = normalize(globals.camera.xyz - p * globals.camera.w);
-    let albedo = in.color.rgb;
+    let uv = in.uv * material.uv.xy + material.uv.zw;
 
-    let hemi = mix(globals.ground.rgb, globals.sky.rgb, n.y * 0.5 + 0.5);
-    var color = albedo * hemi;
-    color += shade(albedo, n, v, -globals.sun_dir.xyz, globals.sun_color.rgb * sun_shadow(p, n));
+    // Textures, all in uniform control flow (branches on the material uniform).
+    var n = geo_n;
+    var base: vec4<f32>;
+    var orm: vec4<f32>;
+    var emissive: vec4<f32>;
+    if (material.flags.y > 0.5) {
+        // Triplanar: world projections blended by the normal.
+        let w4 = pow(abs(geo_n), vec3<f32>(4.0));
+        let w = w4 / max(w4.x + w4.y + w4.z, 1e-5);
+        let ux = vec2<f32>(p.z, -p.y) * material.uv.xy + material.uv.zw;
+        let uy = vec2<f32>(p.x, p.z) * material.uv.xy + material.uv.zw;
+        let uz = vec2<f32>(p.x, -p.y) * material.uv.xy + material.uv.zw;
+        base = textureSample(base_texture, material_sampler, ux) * w.x
+            + textureSample(base_texture, material_sampler, uy) * w.y
+            + textureSample(base_texture, material_sampler, uz) * w.z;
+        orm = textureSample(orm_texture, material_sampler, ux) * w.x
+            + textureSample(orm_texture, material_sampler, uy) * w.y
+            + textureSample(orm_texture, material_sampler, uz) * w.z;
+        emissive = textureSample(emissive_texture, material_sampler, ux) * w.x
+            + textureSample(emissive_texture, material_sampler, uy) * w.y
+            + textureSample(emissive_texture, material_sampler, uz) * w.z;
+        if (material.flags.z > 0.5) {
+            // Whiteout blend (Golus): each projection's tangent normal swizzled to world.
+            let nx = unpack_normal(textureSample(normal_texture, material_sampler, ux));
+            let ny = unpack_normal(textureSample(normal_texture, material_sampler, uy));
+            let nz = unpack_normal(textureSample(normal_texture, material_sampler, uz));
+            let tx = vec3<f32>(nx.xy + geo_n.zy, abs(nx.z) * geo_n.x);
+            let ty = vec3<f32>(ny.xy + geo_n.xz, abs(ny.z) * geo_n.y);
+            let tz = vec3<f32>(nz.xy + geo_n.xy, abs(nz.z) * geo_n.z);
+            n = normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
+        }
+    } else {
+        base = textureSample(base_texture, material_sampler, uv);
+        orm = textureSample(orm_texture, material_sampler, uv);
+        emissive = textureSample(emissive_texture, material_sampler, uv);
+        if (material.flags.z > 0.5) {
+            n = perturb(geo_n, in.tangent, unpack_normal(textureSample(normal_texture, material_sampler, uv)));
+        }
+    }
+    sampled_orm = orm.rgb;
+    sampled_emissive = emissive.rgb;
 
-    let count = min(u32(globals.ground.w), MAX_LIGHTS);
-    for (var i = 0u; i < count; i++) {
-        let light = globals.lights[i];
-        let range = light.position_range.w;
-        let dir = light.direction_spot_offset.xyz;
-        var l = -dir;
-        var atten = 1.0;
-        if (range > 0.0) {
-            let to_light = light.position_range.xyz - p;
-            let d2 = max(dot(to_light, to_light), 1e-8);
-            l = to_light * inverseSqrt(d2);
-            // Unity-style: inverse square with a smooth window to zero at `range`.
-            let f = d2 / (range * range);
-            let window = clamp(1.0 - f * f, 0.0, 1.0);
-            atten = window * window / (d2 + 1.0);
-            // Spot cone (scale 0, offset 1 for point lights).
-            let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
-            atten *= cone * cone;
+    var si: SurfaceInput;
+    si.world_position = p;
+    si.normal = n;
+    si.uv = uv;
+    si.color = material.base_color * base * in.color;
+    si.time = globals.shadow_params.w;
+    let s = surface(si);
+    if (s.color.a < material.params.z) {
+        discard;
+    }
+
+    var color: vec3<f32>;
+    if (material.flags.x > 0.5) {
+        color = s.color.rgb + s.emissive;
+    } else {
+        let sn = normalize(s.normal);
+        let albedo = s.color.rgb;
+        let metallic = clamp(s.metallic, 0.0, 1.0);
+        let roughness = clamp(s.roughness, 0.03, 1.0);
+        let ao = sampled_orm.r;
+        let nv = max(dot(sn, v), 1e-4);
+        let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+
+        // Ambient: hemisphere diffuse + the sky along the reflection, faded
+        // towards the normal (a cheap blur) as roughness grows.
+        color = albedo * (1.0 - metallic) * hemisphere(sn) * ao;
+        let r = reflect(-v, sn);
+        let spec_dir = normalize(mix(r, sn, roughness * roughness));
+        color += env_brdf(f0, roughness, nv) * sky_radiance(spec_dir, roughness) * ao;
+
+        color += brdf(albedo, metallic, roughness, sn, v, -globals.sun_dir.xyz, globals.sun_color.rgb * sun_shadow(p, geo_n));
+
+        let count = min(u32(globals.ground.w), MAX_LIGHTS);
+        for (var i = 0u; i < count; i++) {
+            let light = globals.lights[i];
+            let range = light.position_range.w;
+            let dir = light.direction_spot_offset.xyz;
+            var l = -dir;
+            var atten = 1.0;
+            if (range > 0.0) {
+                let to_light = light.position_range.xyz - p;
+                let d2 = max(dot(to_light, to_light), 1e-8);
+                l = to_light * inverseSqrt(d2);
+                // Unity-style: inverse square with a smooth window to zero at `range`.
+                let f = d2 / (range * range);
+                let window = clamp(1.0 - f * f, 0.0, 1.0);
+                atten = window * window / (d2 + 1.0);
+                // Spot cone (scale 0, offset 1 for point lights).
+                let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
+                atten *= cone * cone;
+            }
+            if (atten > 0.0) {
+                color += brdf(albedo, metallic, roughness, sn, v, l, light.color_spot_scale.rgb * atten);
+            }
         }
-        if (atten > 0.0) {
-            color += shade(albedo, n, v, l, light.color_spot_scale.rgb * atten);
-        }
+        color += s.emissive;
     }
 
     if (globals.fog_color.w > 0.5) {
         let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
         let fog = clamp((depth - globals.params.x) / max(globals.params.y - globals.params.x, 1e-3), 0.0, 1.0);
-        color = mix(color, globals.fog_color.rgb, fog);
+        var fog_color = globals.fog_color.rgb;
+        if (globals.sky_params.x > 0.5) {
+            // Into the sky at the horizon behind the fragment.
+            let flat_dir = vec3<f32>(-v.x, 0.0, -v.z);
+            let d = select(vec3<f32>(0.0, 0.0, -1.0), normalize(flat_dir), dot(flat_dir, flat_dir) > 1e-8);
+            fog_color = sky_radiance(d, 0.5);
+        }
+        color = mix(color, fog_color, fog);
     }
 
-    color *= globals.sky.w;
-    if (globals.shadow_params.z > 0.5) {
-        color = aces(color);
-    }
-    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    if (globals.sun_color.w > 0.5) {
-        color = linear_to_srgb(color);
-    }
-    return vec4<f32>(color, in.color.a);
-}
-
-// Narkowicz's ACES filmic fit.
-fn aces(x: vec3<f32>) -> vec3<f32> {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let lo = c * 12.92;
-    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(hi, lo, c <= vec3<f32>(0.0031308));
+    return vec4<f32>(finish(color), s.color.a);
 }

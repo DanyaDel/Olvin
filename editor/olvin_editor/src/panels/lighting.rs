@@ -2,7 +2,7 @@
 //! environment itself is edited in Settings → Rendering (`environment_ui`).
 
 use egui::{DragValue, RichText};
-use olvin_scene::file::{Environment, FogDesc, LightKind};
+use olvin_scene::file::{Environment, FogDesc, LightKind, Sky};
 
 use super::inspector::{drag, grid, row, section};
 use crate::{EditorState, Panel};
@@ -32,7 +32,8 @@ impl Panel for Lighting {
 }
 
 /// The scene's environment: ambient, camera, fog and shadows (Settings → Rendering).
-pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment) {
+pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures: &[String]) {
+    sky_ui(ui, env, textures);
     section(ui, "🌤 Environment", None, |ui| {
         grid(ui, "env", |ui| {
             row(ui, "Sky", |ui| {
@@ -174,6 +175,92 @@ fn lights(ui: &mut egui::Ui, state: &mut EditorState) {
     if let Some(id) = select {
         state.select(Some(id));
     }
+}
+
+/// Skybox: flat colour, procedural gradient with a sun, or a panorama texture.
+fn sky_ui(ui: &mut egui::Ui, env: &mut Environment, textures: &[String]) {
+    section(ui, "🌌 Skybox", None, |ui| {
+        ui.horizontal(|ui| {
+            let kind = match env.skybox {
+                Sky::Color => 0,
+                Sky::Procedural { .. } => 1,
+                Sky::Texture { .. } => 2,
+            };
+            if ui.selectable_label(kind == 0, "Color").clicked() && kind != 0 {
+                env.skybox = Sky::Color;
+            }
+            if ui.selectable_label(kind == 1, "Procedural").clicked() && kind != 1 {
+                env.skybox = Sky::procedural();
+            }
+            if ui.selectable_label(kind == 2, "Panorama").clicked() && kind != 2 {
+                let path = textures
+                    .iter()
+                    .find(|t| t.ends_with(".hdr") || t.ends_with(".exr"))
+                    .or(textures.first());
+                env.skybox = Sky::Texture {
+                    path: path.cloned().unwrap_or_default(),
+                    rotation_deg: 0.0,
+                    intensity: 1.0,
+                };
+            }
+        });
+        match &mut env.skybox {
+            Sky::Color => {
+                ui.weak("Uses the Background colour.");
+            }
+            Sky::Procedural {
+                zenith,
+                horizon,
+                ground,
+                sun_size,
+            } => {
+                grid(ui, "sky-proc", |ui| {
+                    row(ui, "Zenith", |ui| {
+                        ui.color_edit_button_rgb(zenith);
+                    });
+                    row(ui, "Horizon", |ui| {
+                        ui.color_edit_button_rgb(horizon);
+                    });
+                    row(ui, "Ground", |ui| {
+                        ui.color_edit_button_rgb(ground);
+                    });
+                    row(ui, "Sun size", |ui| {
+                        drag(ui, sun_size, 0.0..=20.0, 0.05, "°")
+                    });
+                });
+                ui.weak("The sun disc follows the first Directional light.");
+            }
+            Sky::Texture {
+                path,
+                rotation_deg,
+                intensity,
+            } => {
+                grid(ui, "sky-tex", |ui| {
+                    row(ui, "Panorama", |ui| {
+                        egui::ComboBox::from_id_salt("sky-texture")
+                            .width(200.0)
+                            .selected_text(if path.is_empty() {
+                                "(pick an image)"
+                            } else {
+                                path.as_str()
+                            })
+                            .show_ui(ui, |ui| {
+                                for t in textures {
+                                    ui.selectable_value(path, t.clone(), t.as_str());
+                                }
+                            });
+                    });
+                    row(ui, "Rotation", |ui| {
+                        drag(ui, rotation_deg, -360.0..=360.0, 0.5, "°")
+                    });
+                    row(ui, "Intensity", |ui| {
+                        drag(ui, intensity, 0.0..=16.0, 0.01, "")
+                    });
+                });
+                ui.weak("Equirectangular .hdr / .exr / .png / .jpg from assets/ (Poly Haven HDRIs work great).");
+            }
+        }
+    });
 }
 
 #[cfg(test)]

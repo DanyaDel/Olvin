@@ -5,14 +5,20 @@
 pub mod core;
 mod frustum;
 mod light;
+mod material;
 mod mesh;
 mod renderer;
+mod shader;
+mod texture;
 
 pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
 pub use light::{Light, LightKind, MAX_LIGHTS};
+pub use material::{Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
 pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
+pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
+pub use texture::{TextureData, TextureFormat, TextureHandle, Textures};
 /// The wgpu version the engine renders with (the editor shares it).
 pub use wgpu;
 
@@ -37,7 +43,48 @@ impl Color {
 #[derive(Clone, Copy, Debug)]
 pub struct MeshRenderer {
     pub mesh: MeshHandle,
+    /// Instance colour; multiplies the material's base colour.
     pub color: Color,
+    /// `None`: the instance colour with default PBR factors ([`Material::fallback`]).
+    pub material: Option<MaterialHandle>,
+}
+
+impl MeshRenderer {
+    pub fn new(mesh: MeshHandle, color: Color) -> Self {
+        Self {
+            mesh,
+            color,
+            material: None,
+        }
+    }
+
+    pub fn with_material(mut self, material: MaterialHandle) -> Self {
+        self.material = Some(material);
+        self
+    }
+}
+
+/// What's drawn behind everything (and reflected by shiny surfaces).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum SkyMode {
+    /// `RenderSettings::clear_color`; reflections see the hemisphere ambient.
+    #[default]
+    Color,
+    /// Gradient with a sun disc towards the first directional light. Linear colours.
+    Procedural {
+        zenith: [f32; 3],
+        horizon: [f32; 3],
+        ground: [f32; 3],
+        /// Angular radius of the sun disc in degrees (0 = no disc).
+        sun_size: f32,
+    },
+    /// Equirectangular panorama (HDR or sRGB); u = 0.5 looks down -Z.
+    Texture {
+        texture: TextureHandle,
+        /// Around +Y, radians.
+        rotation: f32,
+        intensity: f32,
+    },
 }
 
 /// Linear distance fog, applied before tonemapping.
@@ -66,6 +113,8 @@ pub struct RenderSettings {
     /// Prefer the integrated GPU.
     pub low_power: bool,
     pub clear_color: Color,
+    /// Background; anything but `Color` also tints reflections and fog.
+    pub sky: SkyMode,
     /// Direction the light travels. Fallback sun: the first directional
     /// [`Light`] in the world replaces it.
     pub light_dir: Vec3,
@@ -95,6 +144,7 @@ impl Default for RenderSettings {
             vsync: true,
             low_power: false,
             clear_color: Color::rgb(0.02, 0.02, 0.03),
+            sky: SkyMode::Color,
             light_dir: Vec3::new(-0.4, -1.0, -0.3),
             light_color: Color::WHITE,
             light_shadows: false,
@@ -121,6 +171,9 @@ impl Plugin for RenderPlugin {
             .add_plugin(olvin_transform::TransformPlugin)
             .insert_resource(self.settings.clone())
             .init_resource::<Meshes>()
+            .init_resource::<Textures>()
+            .init_resource::<Materials>()
+            .init_resource::<Shaders>()
             .init_resource::<RenderStats>()
             .add_system(Stage::Startup, renderer::init)
             .add_system(Stage::Render, renderer::render);

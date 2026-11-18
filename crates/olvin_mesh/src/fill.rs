@@ -163,6 +163,10 @@ impl PolyMesh {
                 face.reverse();
             }
         }
+        if self.has_uvs() {
+            let uv = self.auto_face_uvs(&face);
+            self.uvs.push(uv);
+        }
         self.faces.push(face);
         self.normalize_wire();
         Ok(self.faces.len() - 1)

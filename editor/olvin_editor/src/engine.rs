@@ -13,6 +13,8 @@ use olvin::render::{
     Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, RenderCore, RenderSettings,
     ViewData,
 };
+use olvin::render::{Materials, Shaders, Textures};
+use olvin::render_assets::{Registries, RenderAssets};
 use olvin::scene::file::{SceneFile, Shape};
 use olvin::scene::{Camera, Transform};
 use olvin::transform::{GlobalTransform, TransformPlugin};
@@ -58,12 +60,14 @@ impl EngineGpu {
     }
 
     /// Uploads new meshes and prepares view `id`; draw it later with [`Self::draw`].
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         id: u64,
         source: Source,
         world: &World,
         meshes: &mut Meshes,
+        assets: Registries,
         view_proj: Mat4,
         settings: &RenderSettings,
     ) -> olvin::render::RenderStats {
@@ -72,6 +76,8 @@ impl EngineGpu {
             Source::Play => &mut self.play,
         };
         self.core.upload(gpu, meshes);
+        self.core
+            .upload_assets(gpu, assets.textures, assets.materials, assets.shaders);
         let view = self
             .views
             .entry(id)
@@ -106,6 +112,11 @@ impl EngineGpu {
     }
 }
 
+/// A brush and its material path: what the textured CSG was built from.
+type CsgKey = (olvin::csg::BrushInput, Option<String>);
+/// A textured CSG mesh: (mesh, colour, material path).
+type CsgMesh = (MeshHandle, [f32; 4], Option<String>);
+
 /// The edited scene as an engine world, rebuilt once per frame.
 #[derive(Default)]
 pub struct ScenePreview {
@@ -114,16 +125,25 @@ pub struct ScenePreview {
     shapes: HashMap<Shape, MeshHandle>,
     /// Edited meshes: entity -> (handle, geometry it was uploaded from).
     polys: HashMap<u64, (MeshHandle, olvin::scene::file::PolyMesh)>,
+    pub textures: Textures,
+    pub materials: Materials,
+    pub shaders: Shaders,
+    pub assets: RenderAssets,
+    /// CSG of brushes with materials (the CSG element draws the rest itself):
+    /// rebuilt when the brush inputs or their materials change.
+    csg: (Vec<CsgKey>, Vec<CsgMesh>),
     frame: Option<u64>,
 }
 
 impl ScenePreview {
-    pub fn sync(&mut self, scene: &SceneFile, frame: u64) {
+    pub fn sync(&mut self, scene: &SceneFile, frame: u64, assets_dir: Option<std::path::PathBuf>) {
         if self.frame == Some(frame) {
             return;
         }
         self.frame = Some(frame);
+        self.assets.set_root(assets_dir);
         self.world.clear();
+        self.sync_csg(scene);
         let worlds = scene.world_matrices();
         for e in scene
             .entities
@@ -137,8 +157,7 @@ impl ScenePreview {
                 let handle = match self.polys.get(&e.id) {
                     Some((h, uploaded)) if uploaded == poly => *h,
                     cached => {
-                        let (p, n, i) = poly.triangulate();
-                        let data = MeshData::from_triangles(&p, &n, i);
+                        let (_, data) = olvin::render_assets::poly_mesh_data(poly);
                         let h = match cached {
                             Some((h, _)) => {
                                 let h = *h;
@@ -151,12 +170,14 @@ impl ScenePreview {
                         h
                     }
                 };
+                let material = self.material(e.material.as_deref());
                 self.world.spawn((
                     Transform::IDENTITY,
                     GlobalTransform(*m),
                     MeshRenderer {
                         mesh: handle,
                         color: Color(color),
+                        material,
                     },
                 ));
             } else if let Some(mesh) = &e.mesh {
@@ -165,12 +186,14 @@ impl ScenePreview {
                     .shapes
                     .entry(mesh.shape)
                     .or_insert_with(|| meshes.add(MeshData::primitive(mesh.shape)));
+                let material = self.material(e.material.as_deref());
                 self.world.spawn((
                     Transform::IDENTITY,
                     GlobalTransform(*m),
                     MeshRenderer {
                         mesh: handle,
                         color: Color(mesh.color),
+                        material,
                     },
                 ));
             }
@@ -190,6 +213,152 @@ impl ScenePreview {
             }
         }
     }
+}
+
+impl ScenePreview {
+    fn material(&mut self, rel: Option<&str>) -> Option<olvin::render::MaterialHandle> {
+        self.assets.material(
+            rel?,
+            &mut Registries {
+                textures: &mut self.textures,
+                materials: &mut self.materials,
+                shaders: &mut self.shaders,
+            },
+        )
+    }
+
+    /// The renderer's sky for the scene's skybox (loads the panorama).
+    pub fn sky(&mut self, sky: &olvin::scene::file::Sky) -> olvin::render::SkyMode {
+        self.assets.sky(sky, &mut self.textures)
+    }
+
+    /// Textured CSG: brushes that have a material are built here, grouped by
+    /// (colour, material), so the engine draws them with textures.
+    fn sync_csg(&mut self, scene: &SceneFile) {
+        let key: Vec<_> = scene
+            .csg_brushes()
+            .into_iter()
+            .filter(|b| {
+                scene.active_in_hierarchy(b.id)
+                    && scene.get(b.id).is_some_and(|e| e.rigidbody.is_none())
+            })
+            .map(|b| {
+                let m = scene.get(b.id).and_then(|e| e.material.clone());
+                (b, m)
+            })
+            .collect();
+        if key != self.csg.0 {
+            let inputs: Vec<_> = key.iter().map(|(b, _)| b.clone()).collect();
+            let polys = olvin::csg::build(&inputs);
+            let mut groups: HashMap<([u32; 4], String), Vec<&olvin::csg::Polygon>> = HashMap::new();
+            for p in &polys {
+                if let Some(m) = key
+                    .iter()
+                    .find(|(b, _)| b.id == p.brush)
+                    .and_then(|(_, m)| m.clone())
+                {
+                    groups
+                        .entry((p.color.map(f32::to_bits), m))
+                        .or_default()
+                        .push(p);
+                }
+            }
+            let mut out = Vec::new();
+            for ((color, material), polys) in groups {
+                let tri = olvin::csg::TriMesh::from_polygons(polys);
+                let mesh = self.meshes.add(MeshData::from_triangles(
+                    &tri.positions,
+                    &tri.normals,
+                    tri.indices,
+                ));
+                out.push((mesh, color.map(f32::from_bits), Some(material)));
+            }
+            self.csg = (key, out);
+        }
+        for (mesh, color, material) in self.csg.1.clone() {
+            let material = self.material(material.as_deref());
+            self.world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer {
+                    mesh,
+                    color: Color(color),
+                    material,
+                },
+            ));
+        }
+    }
+}
+
+/// The game's key for an editor key (letters, digits, arrows, common keys).
+fn key_code(key: egui::Key) -> Option<olvin::window::KeyCode> {
+    use egui::Key as E;
+    use olvin::window::KeyCode as K;
+    let letters = [
+        K::KeyA,
+        K::KeyB,
+        K::KeyC,
+        K::KeyD,
+        K::KeyE,
+        K::KeyF,
+        K::KeyG,
+        K::KeyH,
+        K::KeyI,
+        K::KeyJ,
+        K::KeyK,
+        K::KeyL,
+        K::KeyM,
+        K::KeyN,
+        K::KeyO,
+        K::KeyP,
+        K::KeyQ,
+        K::KeyR,
+        K::KeyS,
+        K::KeyT,
+        K::KeyU,
+        K::KeyV,
+        K::KeyW,
+        K::KeyX,
+        K::KeyY,
+        K::KeyZ,
+    ];
+    let digits = [
+        K::Digit0,
+        K::Digit1,
+        K::Digit2,
+        K::Digit3,
+        K::Digit4,
+        K::Digit5,
+        K::Digit6,
+        K::Digit7,
+        K::Digit8,
+        K::Digit9,
+    ];
+    let name = key.name();
+    if name.len() == 1 {
+        let c = name.as_bytes()[0];
+        if c.is_ascii_uppercase() {
+            return Some(letters[(c - b'A') as usize]);
+        }
+        if c.is_ascii_digit() {
+            return Some(digits[(c - b'0') as usize]);
+        }
+    }
+    Some(match key {
+        E::Space => K::Space,
+        E::Enter => K::Enter,
+        E::Escape => K::Escape,
+        E::Tab => K::Tab,
+        E::Backspace => K::Backspace,
+        E::ArrowUp => K::ArrowUp,
+        E::ArrowDown => K::ArrowDown,
+        E::ArrowLeft => K::ArrowLeft,
+        E::ArrowRight => K::ArrowRight,
+        E::F1 => K::F1,
+        E::F2 => K::F2,
+        E::F3 => K::F3,
+        E::F4 => K::F4,
+        _ => return None,
+    })
 }
 
 /// Lighting for a scene: its sun and environment (shared with the game loader).
@@ -272,24 +441,46 @@ pub(crate) fn prepare_view(
             .unwrap_or_default();
         let vp = view_proj(&world)?;
         let settings = editor_quality(&state.prefs, settings);
+        let r = &play.app.resources;
+        let (mut t, mut m, mut s) = (
+            r.fetch_mut::<Textures>(),
+            r.fetch_mut::<Materials>(),
+            r.fetch_mut::<Shaders>(),
+        );
+        let regs = Registries {
+            textures: &mut t,
+            materials: &mut m,
+            shaders: &mut s,
+        };
         let stats = res
             .engine
-            .prepare(id, Source::Play, &world, &mut meshes, vp, &settings);
+            .prepare(id, Source::Play, &world, &mut meshes, regs, vp, &settings);
         state.render_stats.insert(id, stats);
         Some(Source::Play)
     } else {
-        state.engine_scene.sync(&state.scene, frame);
+        let assets_dir = state.assets_dir();
+        state.engine_scene.sync(&state.scene, frame, assets_dir);
         let vp = view_proj(&state.engine_scene.world)?;
-        let settings = match shading {
+        let mut settings = match shading {
             Shading::Rendered => settings_for(&state.scene),
             Shading::Solid => solid_settings(&state.scene, vp),
         };
+        if shading == Shading::Rendered {
+            settings.sky = state.engine_scene.sky(&state.scene.environment.skybox);
+        }
         let settings = editor_quality(&state.prefs, settings);
+        let p = &mut state.engine_scene;
+        let regs = Registries {
+            textures: &mut p.textures,
+            materials: &mut p.materials,
+            shaders: &mut p.shaders,
+        };
         let stats = res.engine.prepare(
             id,
             Source::Edit,
-            &state.engine_scene.world,
-            &mut state.engine_scene.meshes,
+            &p.world,
+            &mut p.meshes,
+            regs,
             vp,
             &settings,
         );
@@ -321,13 +512,26 @@ pub struct PlaySession {
 }
 
 impl PlaySession {
-    pub fn start(scene: &SceneFile, undo_len: usize) -> Self {
+    pub fn start(
+        scene: &SceneFile,
+        undo_len: usize,
+        assets_dir: Option<std::path::PathBuf>,
+    ) -> Self {
         let mut app = App::new();
         app.add_plugin(EcsPlugin)
             .add_plugin(TransformPlugin)
             .add_plugin(PhysicsPlugin::default());
         app.insert_resource(Meshes::default())
+            .insert_resource(Textures::default())
+            .insert_resource(Materials::default())
+            .insert_resource(Shaders::default())
+            .insert_resource(RenderAssets::new(assets_dir.clone()))
             .insert_resource(settings_for(scene));
+        // Scripts (the built-in behaviours; game code isn't linked into the
+        // editor) and the project's input map, fed from the Game view.
+        let map = assets_dir.map(|d| olvin::input::InputMap::load_or_default(d.join("input.ron")));
+        app.add_plugin(olvin::input::InputPlugin { map })
+            .add_plugin(olvin::script::ScriptPlugin::default());
         olvin::scene_file::spawn(&app.resources, scene);
         app.startup();
         Self {
@@ -341,6 +545,47 @@ impl PlaySession {
 
     pub fn step_once(&mut self) {
         self.step = true;
+    }
+
+    /// Feeds the Game view's keyboard and mouse into the game (`focused`:
+    /// the pointer is over the view); otherwise everything is released.
+    pub fn feed_input(&mut self, input: &egui::InputState, focused: bool) {
+        use olvin::window::{Input, MouseButton};
+        let Some(mut game) = self.app.resources.get_mut::<Input>() else {
+            return;
+        };
+        if !focused {
+            game.release_all();
+            return;
+        }
+        for event in &input.events {
+            if let egui::Event::Key {
+                key,
+                pressed,
+                repeat: false,
+                ..
+            } = event
+                && let Some(code) = key_code(*key)
+            {
+                game.set_key(code, *pressed);
+            }
+        }
+        use olvin::window::KeyCode as K;
+        let m = input.modifiers;
+        game.set_key(K::ShiftLeft, m.shift);
+        game.set_key(K::ControlLeft, m.ctrl);
+        game.set_key(K::AltLeft, m.alt);
+        for (b, down) in [
+            (MouseButton::Left, input.pointer.primary_down()),
+            (MouseButton::Right, input.pointer.secondary_down()),
+            (MouseButton::Middle, input.pointer.middle_down()),
+        ] {
+            game.set_button(b, down);
+        }
+        let d = input.pointer.delta();
+        game.mouse_delta += glam::Vec2::new(d.x, d.y);
+        game.scroll +=
+            glam::Vec2::new(input.smooth_scroll_delta.x, input.smooth_scroll_delta.y) / 50.0;
     }
 
     /// One editor frame of game time.
@@ -379,7 +624,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut play = PlaySession::start(&scene, 0);
+        let mut play = PlaySession::start(&scene, 0, None);
         // Physics runs on game time; push fixed steps directly to keep the test fast.
         for _ in 0..200 {
             olvin::physics::step(&play.app.resources, olvin::physics::FIXED_DT);
@@ -419,10 +664,10 @@ mod tests {
             ..Default::default()
         };
         let mut preview = ScenePreview::default();
-        preview.sync(&scene, 1);
+        preview.sync(&scene, 1, None);
         assert_eq!(preview.world.query::<&MeshRenderer>().iter().count(), 1);
         assert_eq!(preview.world.query::<&Camera>().iter().count(), 1);
-        preview.sync(&scene, 1);
+        preview.sync(&scene, 1, None);
         assert_eq!(preview.world.len(), 2, "same frame: not rebuilt twice");
     }
 }

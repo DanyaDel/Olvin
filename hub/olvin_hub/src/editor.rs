@@ -271,7 +271,7 @@ mod tests {
 
         assert_eq!(
             install.initial_selection(&catalog),
-            ["console", "csg", "modeling"]
+            ["console", "csg", "modeling", "uv"]
         );
         install
             .write(&engine, &catalog, &["animator".into(), "console".into()])

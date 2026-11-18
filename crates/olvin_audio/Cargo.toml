@@ -1,0 +1,17 @@
+[package]
+name = "olvin_audio"
+description = "Olvin audio (kira): audio sources, listener, one-shots, streamed music"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_core = { path = "../olvin_core" }
+olvin_ecs = { path = "../olvin_ecs" }
+olvin_scene = { path = "../olvin_scene", features = ["serde"] }
+olvin_transform = { path = "../olvin_transform" }
+glam.workspace = true
+log.workspace = true
+# No realtime-thread (dbus) features: fewer system deps for CI.
+kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "flac", "wav", "pcm"] }

@@ -1,14 +1,33 @@
 //! Physics on Rapier. Entities with a `ColliderDesc` (and optionally a
 //! `RigidbodyDesc`) get bodies automatically; dynamic bodies write their pose
 //! back into `Transform`, kinematic ones follow it. Fixed 60 Hz steps.
+//!
+//! Also: character controllers ([`CharacterMotor`], from
+//! `CharacterControllerDesc`), collision/trigger events ([`CollisionEvents`]),
+//! scene queries ([`Physics::raycast`], [`Physics::spherecast`]) and a hook for
+//! code that must run before every fixed step ([`FixedSystems`]).
+
+mod character;
+mod events;
+mod query;
+
+pub use character::{CharacterMotor, CharacterMove, move_character};
+pub use events::{CollisionEvent, CollisionEvents};
+pub use query::Hit;
+
+use std::sync::mpsc;
 
 use glam::{Quat, Vec3};
 use olvin_core::{App, Plugin, Resources, Stage, Time};
 use olvin_ecs::{EcsPlugin, Entity, World};
-use olvin_scene::file::{BodyKind, ColliderDesc, ColliderShape, RigidbodyDesc};
+use olvin_scene::file::{
+    BodyKind, CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc,
+};
 use olvin_scene::{MeshGeometry, Transform};
 use olvin_transform::{Parent, world_matrix};
 use rapier3d::prelude as rp;
+
+pub use rapier3d;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 5;
@@ -25,11 +44,18 @@ enum Kind {
     Dynamic,
     Kinematic,
     Fixed,
+    /// Kinematic body moved by the character controller, not by `Transform`.
+    Character,
 }
 
 pub struct Physics {
     pub world: rp::PhysicsWorld,
     accumulator: f32,
+    collector: rp::ChannelEventCollector,
+    collisions: mpsc::Receiver<rp::CollisionEvent>,
+    // The collector needs these channels; their events are not used.
+    _forces: mpsc::Receiver<rp::ContactForceEvent>,
+    _tears: mpsc::Receiver<rp::SoftBodyTearEvent>,
 }
 
 impl Physics {
@@ -37,22 +63,77 @@ impl Physics {
         let mut world = rp::PhysicsWorld::new();
         world.gravity = v(gravity);
         world.integration_parameters.dt = FIXED_DT;
+        let (cs, collisions) = mpsc::channel();
+        let (fs, _forces) = mpsc::channel();
+        let (ts, _tears) = mpsc::channel();
         Self {
             world,
             accumulator: 0.0,
+            collector: rp::ChannelEventCollector::new(cs, fs, ts),
+            collisions,
+            _forces,
+            _tears,
         }
     }
 
+    pub fn gravity(&self) -> Vec3 {
+        g(self.world.gravity)
+    }
+
     /// Advances by `dt` seconds in fixed steps; returns how many were taken.
+    /// Low level: no characters, events or [`FixedSystems`] (see [`step`]).
     pub fn advance(&mut self, dt: f32) -> u32 {
+        let steps = self.consume(dt);
+        for _ in 0..steps {
+            self.world.step();
+        }
+        steps
+    }
+
+    /// Adds `dt` to the accumulator and returns how many fixed steps are due.
+    fn consume(&mut self, dt: f32) -> u32 {
         self.accumulator = (self.accumulator + dt).min(FIXED_DT * MAX_STEPS_PER_FRAME as f32);
         let mut steps = 0;
         while self.accumulator >= FIXED_DT {
-            self.world.step();
             self.accumulator -= FIXED_DT;
             steps += 1;
         }
         steps
+    }
+
+    fn step_with_events(&mut self) {
+        self.world.step_with_events(&(), &self.collector);
+    }
+
+    /// The entity owning a collider (every collider made by this crate knows it).
+    pub fn collider_entity(&self, handle: rp::ColliderHandle) -> Option<Entity> {
+        self.world
+            .colliders
+            .get(handle)
+            .and_then(|c| entity_from(c.user_data))
+    }
+}
+
+/// Code that must run right before every fixed physics step (Unity's
+/// `FixedUpdate`), e.g. scripts. Systems get the resources with nothing borrowed.
+#[derive(Default)]
+pub struct FixedSystems {
+    systems: Vec<FixedSystem>,
+}
+
+pub type FixedSystem = Box<dyn FnMut(&Resources)>;
+
+impl FixedSystems {
+    pub fn add(&mut self, system: impl FnMut(&Resources) + 'static) {
+        self.systems.push(Box::new(system));
+    }
+
+    pub fn len(&self) -> usize {
+        self.systems.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.systems.is_empty()
     }
 }
 
@@ -72,6 +153,8 @@ impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
             .insert_resource(Physics::new(self.gravity))
+            .init_resource::<CollisionEvents>()
+            .init_resource::<FixedSystems>()
             .add_system(Stage::PreUpdate, |res| {
                 let dt = res.fetch::<Time>().delta();
                 step(res, dt);
@@ -79,56 +162,118 @@ impl Plugin for PhysicsPlugin {
     }
 }
 
-/// One frame of physics: create new bodies, push kinematic poses, simulate, pull dynamic poses.
+/// One frame of physics: create new bodies (and drop those of despawned
+/// entities), then for every due fixed step: run [`FixedSystems`], push
+/// kinematic poses, move characters, simulate, pull dynamic poses.
+/// [`CollisionEvents`] (if present) holds this frame's events afterwards.
 pub fn step(res: &Resources, dt: f32) {
-    let mut physics = res.fetch_mut::<Physics>();
-    let mut world = res.fetch_mut::<World>();
-    create_bodies(&mut world, &mut physics);
-    let kinematic: Vec<(Entity, Body)> = world
-        .query::<(Entity, &Body)>()
-        .iter()
-        .filter(|(_, b)| b.kind == Kind::Kinematic)
-        .map(|(e, b)| (e, *b))
-        .collect();
-    for (e, body) in kinematic {
-        if let Some(m) = world_matrix(&world, e)
+    let steps = {
+        let mut physics = res.fetch_mut::<Physics>();
+        let mut world = res.fetch_mut::<World>();
+        if let Some(mut events) = res.get_mut::<CollisionEvents>() {
+            events.clear();
+        }
+        remove_orphans(&world, &mut physics);
+        // New colliders reach scene queries with the next step. (Rapier's
+        // `detect_collisions` would do it now, but it consumes the bodies'
+        // change flags and the next step then ignores them.)
+        create_bodies(&mut world, &mut physics);
+        physics.consume(dt)
+    };
+    for _ in 0..steps {
+        run_fixed_systems(res);
+        let mut physics = res.fetch_mut::<Physics>();
+        let mut world = res.fetch_mut::<World>();
+        create_bodies(&mut world, &mut physics);
+        push_kinematic(&world, &mut physics);
+        character::move_characters(&mut world, &mut physics, FIXED_DT);
+        physics.step_with_events();
+        pull_poses(&mut world, &physics);
+        let mut events = res.get_mut::<CollisionEvents>();
+        events::drain(&physics, events.as_deref_mut());
+    }
+}
+
+fn run_fixed_systems(res: &Resources) {
+    let Some(mut systems) = res
+        .get_mut::<FixedSystems>()
+        .map(|mut f| std::mem::take(&mut *f))
+    else {
+        return;
+    };
+    for system in &mut systems.systems {
+        system(res);
+    }
+    // Keep systems a fixed system may have added meanwhile.
+    let mut slot = res.fetch_mut::<FixedSystems>();
+    systems.systems.append(&mut slot.systems);
+    *slot = systems;
+}
+
+fn push_kinematic(world: &World, physics: &mut Physics) {
+    for (e, body) in world.query::<(Entity, &Body)>().iter() {
+        if body.kind != Kind::Kinematic {
+            continue;
+        }
+        if let Some(m) = world_matrix(world, e)
             && let Some(rb) = physics.world.bodies.get_mut(body.handle)
         {
             rb.set_next_kinematic_position(pose(&decompose(m)));
         }
     }
-    if physics.advance(dt) == 0 {
-        return;
-    }
-    // Dynamic bodies own their world pose; store it relative to the parent.
-    let moved: Vec<(Entity, Option<Entity>, Vec3, Quat)> = world
+}
+
+/// Dynamic bodies and characters own their world pose; store it relative to the parent.
+fn pull_poses(world: &mut World, physics: &Physics) {
+    let moved: Vec<(Entity, Option<Entity>, Vec3, Option<Quat>)> = world
         .query::<(Entity, &Body, Option<&Parent>)>()
         .iter()
-        .filter(|(_, b, _)| b.kind == Kind::Dynamic)
+        .filter(|(_, b, _)| matches!(b.kind, Kind::Dynamic | Kind::Character))
         .filter_map(|(e, b, parent)| {
             let p = physics.world.bodies.get(b.handle)?.position();
-            Some((
-                e,
-                parent.map(|p| p.0),
-                Vec3::from_array(p.translation.to_array()),
-                Quat::from_array(p.rotation.to_array()),
-            ))
+            // A character's rotation belongs to gameplay (only its position is simulated).
+            let rotation =
+                (b.kind == Kind::Dynamic).then(|| Quat::from_array(p.rotation.to_array()));
+            Some((e, parent.map(|p| p.0), g(p.translation), rotation))
         })
         .collect();
     for (e, parent, translation, rotation) in moved {
-        let (translation, rotation) = match parent.and_then(|p| world_matrix(&world, p)) {
-            Some(pm) => {
-                let local =
-                    pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
-                let (_, r, t) = local.to_scale_rotation_translation();
-                (t, r)
-            }
-            None => (translation, rotation),
-        };
+        let parent_matrix = parent.and_then(|p| world_matrix(world, p));
         if let Ok(mut t) = world.get::<&mut Transform>(e) {
-            t.translation = translation;
-            t.rotation = rotation;
+            match (parent_matrix, rotation) {
+                (Some(pm), Some(rotation)) => {
+                    let local =
+                        pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
+                    let (_, r, tr) = local.to_scale_rotation_translation();
+                    t.translation = tr;
+                    t.rotation = r;
+                }
+                (Some(pm), None) => t.translation = pm.inverse().transform_point3(translation),
+                (None, rotation) => {
+                    t.translation = translation;
+                    if let Some(r) = rotation {
+                        t.rotation = r;
+                    }
+                }
+            }
         }
+        if let Ok(mut c) = world.get::<&mut character::Character>(e) {
+            c.last = translation;
+        }
+    }
+}
+
+/// Removes the bodies of entities that were despawned.
+fn remove_orphans(world: &World, physics: &mut Physics) {
+    let orphans: Vec<rp::RigidBodyHandle> = physics
+        .world
+        .bodies
+        .iter()
+        .filter(|(_, rb)| entity_from(rb.user_data).is_some_and(|e| !world.contains(e)))
+        .map(|(h, _)| h)
+        .collect();
+    for h in orphans {
+        physics.world.remove_body(h);
     }
 }
 
@@ -142,13 +287,14 @@ fn decompose(m: glam::Mat4) -> Transform {
 }
 
 /// An entity waiting for its body: everything copied out of the ECS first.
-type Pending = (
-    Entity,
-    Transform,
-    Option<ColliderDesc>,
-    Option<RigidbodyDesc>,
-    Option<MeshGeometry>,
-);
+struct Pending {
+    entity: Entity,
+    transform: Transform,
+    collider: Option<ColliderDesc>,
+    rigidbody: Option<RigidbodyDesc>,
+    mesh: Option<MeshGeometry>,
+    character: Option<CharacterControllerDesc>,
+}
 
 fn create_bodies(world: &mut World, physics: &mut Physics) {
     let pending: Vec<Pending> = world
@@ -158,31 +304,60 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
             Option<&ColliderDesc>,
             Option<&RigidbodyDesc>,
             Option<&MeshGeometry>,
+            Option<&CharacterControllerDesc>,
         )>()
         .without::<&Body>()
         .iter()
-        .filter(|(_, _, c, r, _)| c.is_some() || r.is_some())
-        .map(|(e, t, c, r, m)| (e, *t, c.cloned(), r.cloned(), m.cloned()))
+        .filter(|(_, _, c, r, _, cc)| c.is_some() || r.is_some() || cc.is_some())
+        .map(|(entity, t, c, r, m, cc)| Pending {
+            entity,
+            transform: *t,
+            collider: c.cloned(),
+            rigidbody: r.cloned(),
+            mesh: m.cloned(),
+            character: cc.cloned(),
+        })
         .collect();
-    // Bodies live in world space: use the world pose of parented objects.
-    let pending: Vec<Pending> = pending
-        .into_iter()
-        .map(|(e, t, c, r, m)| (e, world_matrix(world, e).map_or(t, decompose), c, r, m))
-        .collect();
+    for mut p in pending {
+        // Bodies live in world space: use the world pose of parented objects.
+        if let Some(m) = world_matrix(world, p.entity) {
+            p.transform = decompose(m);
+        }
+        let data = entity_bits(p.entity);
+        if let Some(desc) = &p.character {
+            if p.rigidbody.is_some() {
+                log::warn!("character controller ignores the entity's Rigidbody");
+            }
+            let (body, character) = character::create(physics, desc, &p.transform, data);
+            let _ = world.insert(
+                p.entity,
+                (
+                    Body {
+                        handle: body,
+                        kind: Kind::Character,
+                    },
+                    character,
+                ),
+            );
+            if world.get::<&CharacterMotor>(p.entity).is_err() {
+                let _ = world.insert_one(p.entity, CharacterMotor::default());
+            }
+            continue;
+        }
 
-    for (entity, transform, collider, rigidbody, mesh) in pending {
-        let kind = match &rigidbody {
+        let kind = match &p.rigidbody {
             Some(r) if r.kind == BodyKind::Dynamic => Kind::Dynamic,
             Some(_) => Kind::Kinematic,
             None => Kind::Fixed,
         };
         let mut builder = match kind {
             Kind::Dynamic => rp::RigidBodyBuilder::dynamic(),
-            Kind::Kinematic => rp::RigidBodyBuilder::kinematic_position_based(),
+            Kind::Kinematic | Kind::Character => rp::RigidBodyBuilder::kinematic_position_based(),
             Kind::Fixed => rp::RigidBodyBuilder::fixed(),
         }
-        .pose(pose(&transform));
-        if let Some(r) = &rigidbody {
+        .pose(pose(&p.transform))
+        .user_data(data);
+        if let Some(r) = &p.rigidbody {
             let free = r.freeze_rotation.map(|f| !f);
             builder = builder
                 .linear_damping(r.drag)
@@ -193,24 +368,27 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
         }
         let handle = physics.world.insert_body(builder);
 
-        let shape = collider
+        let shape = p
+            .collider
             .clone()
             .unwrap_or_else(|| ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }));
         match collider_builder(
             &shape,
-            transform.scale,
-            mesh.as_ref(),
+            p.transform.scale,
+            p.mesh.as_ref(),
             kind == Kind::Dynamic,
         ) {
             Some(mut c) => {
-                if let Some(r) = &rigidbody {
+                if let Some(r) = &p.rigidbody {
                     c = c.mass(r.mass);
                 }
-                physics.world.insert_collider(c, Some(handle));
+                physics
+                    .world
+                    .insert_collider(c.user_data(data), Some(handle));
             }
             None => log::warn!("mesh collider without geometry: body has no collider"),
         }
-        let _ = world.insert_one(entity, Body { handle, kind });
+        let _ = world.insert_one(p.entity, Body { handle, kind });
     }
 }
 
@@ -247,17 +425,38 @@ fn collider_builder(
             }
         }
     };
-    Some(
-        builder
-            .translation(v(desc.center * scale))
-            .sensor(desc.is_trigger)
-            .friction(desc.friction)
-            .restitution(desc.restitution),
-    )
+    let mut builder = builder
+        .translation(v(desc.center * scale))
+        .sensor(desc.is_trigger)
+        .friction(desc.friction)
+        .restitution(desc.restitution)
+        .active_events(rp::ActiveEvents::COLLISION_EVENTS);
+    if desc.is_trigger {
+        // Triggers also fire for kinematic bodies and characters, like in
+        // Unity, but not static-vs-static (a trigger touching the floor).
+        builder = builder.active_collision_types(
+            rp::ActiveCollisionTypes::default()
+                | rp::ActiveCollisionTypes::KINEMATIC_FIXED
+                | rp::ActiveCollisionTypes::KINEMATIC_KINEMATIC,
+        );
+    }
+    Some(builder)
+}
+
+fn entity_bits(e: Entity) -> u128 {
+    e.to_bits().get() as u128
+}
+
+fn entity_from(data: u128) -> Option<Entity> {
+    Entity::from_bits(u64::try_from(data).ok()?)
 }
 
 fn v(p: Vec3) -> rp::Vector {
     rp::Vector::from_array(p.to_array())
+}
+
+fn g(p: rp::Vector) -> Vec3 {
+    Vec3::from_array(p.to_array())
 }
 
 fn pose(t: &Transform) -> rp::Pose {
@@ -420,5 +619,241 @@ mod tests {
             (y - 1.0).abs() < 0.05,
             "dynamic mesh body should fall and rest at y = 1, got {y}"
         );
+    }
+
+    fn ground(world: &mut World) -> Entity {
+        world.spawn((
+            Transform::from_xyz(0.0, -0.5, 0.0).with_scale(Vec3::new(40.0, 1.0, 40.0)),
+            ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+        ))
+    }
+
+    fn with_events(res: &mut Resources) {
+        res.insert(CollisionEvents::default());
+    }
+
+    #[test]
+    fn collision_and_trigger_events_name_entities() {
+        let mut res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        with_events(&mut res);
+        let (floor, falling, trigger) = {
+            let mut world = res.fetch_mut::<World>();
+            let floor = ground(&mut world);
+            let falling = world.spawn((
+                Transform::from_xyz(0.0, 4.0, 0.0),
+                ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+                RigidbodyDesc::default(),
+            ));
+            let mut t = ColliderDesc::new(ColliderShape::Box {
+                size: Vec3::new(4.0, 1.0, 4.0),
+            });
+            t.is_trigger = true;
+            let trigger = world.spawn((Transform::from_xyz(0.0, 2.5, 0.0), t));
+            (floor, falling, trigger)
+        };
+        let mut seen = Vec::new();
+        for _ in 0..180 {
+            step(&res, FIXED_DT);
+            seen.extend(res.fetch::<CollisionEvents>().events.iter().copied());
+        }
+        let has = |a: Entity, b: Entity, started: bool, sensor: bool| {
+            seen.iter().any(|e| {
+                ((e.a == a && e.b == b) || (e.a == b && e.b == a))
+                    && e.started == started
+                    && e.sensor == sensor
+            })
+        };
+        assert!(
+            has(falling, trigger, true, true),
+            "entered trigger: {seen:?}"
+        );
+        assert!(has(falling, trigger, false, true), "left trigger: {seen:?}");
+        assert!(has(falling, floor, true, false), "hit the floor: {seen:?}");
+        assert!(!has(falling, floor, false, false), "still resting on it");
+    }
+
+    #[test]
+    fn raycast_and_spherecast_hit_the_ground() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let floor = ground(&mut res.fetch_mut::<World>());
+        step(&res, FIXED_DT);
+        let physics = res.fetch::<Physics>();
+        let hit = physics
+            .raycast(Vec3::new(1.0, 5.0, 2.0), Vec3::NEG_Y, 100.0)
+            .expect("ray hits the floor");
+        assert_eq!(hit.entity, floor);
+        assert!((hit.distance - 5.0).abs() < 1e-3, "{hit:?}");
+        assert!(hit.point.abs_diff_eq(Vec3::new(1.0, 0.0, 2.0), 1e-3));
+        assert!(hit.normal.abs_diff_eq(Vec3::Y, 1e-3));
+        assert!(
+            physics
+                .raycast(Vec3::new(0.0, 5.0, 0.0), Vec3::Y, 100.0)
+                .is_none()
+        );
+        assert!(
+            physics
+                .raycast(Vec3::new(0.0, 5.0, 0.0), Vec3::NEG_Y, 2.0)
+                .is_none()
+        );
+
+        let hit = physics
+            .spherecast(Vec3::new(0.0, 5.0, 0.0), 0.5, Vec3::NEG_Y, 100.0)
+            .unwrap();
+        assert!((hit.distance - 4.5).abs() < 1e-3, "{hit:?}");
+        assert_eq!(
+            physics.overlap_sphere(Vec3::new(0.0, 0.2, 0.0), 0.5),
+            vec![floor]
+        );
+    }
+
+    #[test]
+    fn despawned_entities_lose_their_bodies() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let floor = ground(&mut res.fetch_mut::<World>());
+        step(&res, FIXED_DT);
+        assert_eq!(res.fetch::<Physics>().world.bodies.len(), 1);
+        res.fetch_mut::<World>().despawn(floor).unwrap();
+        step(&res, FIXED_DT);
+        assert_eq!(res.fetch::<Physics>().world.bodies.len(), 0);
+    }
+
+    fn character(world: &mut World, at: Vec3) -> Entity {
+        world.spawn((
+            Transform::from_translation(at),
+            CharacterControllerDesc::default(),
+        ))
+    }
+
+    fn run(res: &Resources, e: Entity, velocity: Vec3, steps: usize) -> (Vec3, CharacterMotor) {
+        for _ in 0..steps {
+            if let Ok(mut m) = res.fetch_mut::<World>().get::<&mut CharacterMotor>(e) {
+                m.velocity.x = velocity.x;
+                m.velocity.z = velocity.z;
+            }
+            step(res, FIXED_DT);
+        }
+        let world = res.fetch::<World>();
+        let t = world.get::<&Transform>(e).unwrap().translation;
+        (t, *world.get::<&CharacterMotor>(e).unwrap())
+    }
+
+    #[test]
+    fn character_falls_and_stands_grounded_on_the_floor() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let c = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            character(&mut world, Vec3::new(0.0, 3.0, 0.0))
+        };
+        let (at, motor) = run(&res, c, Vec3::ZERO, 120);
+        assert!(motor.grounded, "{motor:?}");
+        assert!(
+            (at.y - 1.0).abs() < 0.05,
+            "capsule centre 1 m above the floor: {at}"
+        );
+        assert!(
+            motor.velocity.y.abs() < 1e-3,
+            "landing zeroes the fall: {motor:?}"
+        );
+    }
+
+    #[test]
+    fn character_stops_at_a_wall() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let c = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            world.spawn((
+                Transform::from_xyz(3.0, 2.0, 0.0).with_scale(Vec3::new(1.0, 4.0, 10.0)),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            character(&mut world, Vec3::new(0.0, 1.0, 0.0))
+        };
+        let (at, motor) = run(&res, c, Vec3::new(4.0, 0.0, 0.0), 120);
+        assert!(
+            at.x < 2.0 && at.x > 1.8,
+            "stops at the wall face (x = 2): {at}"
+        );
+        assert!(motor.grounded);
+    }
+
+    #[test]
+    fn character_climbs_a_step_but_not_a_ledge() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let (c, ledge_runner) = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            // A 0.25 m step from x = 2 to 6, and a 0.8 m ledge far away on z = 10.
+            world.spawn((
+                Transform::from_xyz(4.0, 0.125, 0.0).with_scale(Vec3::new(4.0, 0.25, 4.0)),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            world.spawn((
+                Transform::from_xyz(4.0, 0.4, 10.0).with_scale(Vec3::new(4.0, 0.8, 4.0)),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            (
+                character(&mut world, Vec3::new(0.0, 1.0, 0.0)),
+                character(&mut world, Vec3::new(0.0, 1.0, 10.0)),
+            )
+        };
+        for _ in 0..90 {
+            for e in [c, ledge_runner] {
+                res.fetch_mut::<World>()
+                    .get::<&mut CharacterMotor>(e)
+                    .map(|mut m| m.velocity.x = 3.0)
+                    .ok();
+            }
+            step(&res, FIXED_DT);
+        }
+        let world = res.fetch::<World>();
+        let at = world.get::<&Transform>(c).unwrap().translation;
+        assert!(at.x > 3.0, "walked onto the step: {at}");
+        assert!((at.y - 1.25).abs() < 0.06, "standing on top of it: {at}");
+        let blocked = world.get::<&Transform>(ledge_runner).unwrap().translation;
+        assert!(
+            blocked.x < 1.6,
+            "a ledge above the step offset blocks: {blocked}"
+        );
+    }
+
+    #[test]
+    fn move_character_and_teleport() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let c = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            character(&mut world, Vec3::new(0.0, 1.05, 0.0))
+        };
+        run(&res, c, Vec3::ZERO, 30);
+        {
+            let mut physics = res.fetch_mut::<Physics>();
+            let mut world = res.fetch_mut::<World>();
+            let mv =
+                move_character(&mut physics, &mut world, c, Vec3::new(0.5, -1.0, 0.0)).unwrap();
+            assert!(mv.grounded);
+            assert!((mv.translation.x - 0.5).abs() < 1e-3, "{mv:?}");
+            assert!(mv.translation.y > -0.1, "the floor stops the downward part");
+            // Teleport by writing the Transform.
+            world.get::<&mut Transform>(c).unwrap().translation = Vec3::new(10.0, 1.0, 10.0);
+        }
+        let (at, _) = run(&res, c, Vec3::ZERO, 10);
+        assert!(at.abs_diff_eq(Vec3::new(10.0, 1.0, 10.0), 0.05), "{at}");
+    }
+
+    #[test]
+    fn character_walks_far_without_stalling() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let c = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            character(&mut world, Vec3::new(0.0, 1.0, 0.0))
+        };
+        let mut last = 0.0;
+        for i in 0..10 {
+            let (at, _) = run(&res, c, Vec3::new(0.0, 0.0, -3.0), 60);
+            assert!(last - at.z > 2.5, "second {i}: {at} (was z = {last})");
+            last = at.z;
+        }
     }
 }

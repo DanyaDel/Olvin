@@ -20,17 +20,22 @@ mod normals;
 mod query;
 mod smooth;
 mod triangulate;
+mod unwrap;
+mod uv;
 mod walk;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod uv_tests;
 
 use std::collections::HashSet;
 use std::fmt;
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 pub use triangulate::ear_clip;
+pub use uv::{UvCorner, box_uv, plane_basis};
 pub use walk::Adjacency;
 
 /// An editable polygon mesh.
@@ -42,6 +47,20 @@ pub struct PolyMesh {
     pub faces: Vec<Vec<u32>>,
     /// Loose edges not belonging to any face ("wire" edges, Blender-style).
     pub wire: Vec<[u32; 2]>,
+    /// Texture coordinates per face corner, parallel to `faces` (`uvs[f][i]`
+    /// belongs to `faces[f][i]`). Empty means "no UVs yet"; see
+    /// [`PolyMesh::ensure_uvs`]. Origin bottom-left, V up (Blender's convention).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub uvs: Vec<Vec<Vec2>>,
+    /// UV seams: edges (smaller index first) where [`PolyMesh::unwrap_faces`] cuts.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub seams: Vec<[u32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,7 +150,8 @@ impl PolyMesh {
 
     /// Checks the invariants every operation preserves: indices in range,
     /// faces with at least 3 distinct vertices and no consecutive repeats,
-    /// wire edges normalized, unique and not duplicating a face edge.
+    /// wire edges normalized, unique and not duplicating a face edge; UVs
+    /// absent or one finite UV per face corner; seams normalized and unique.
     pub fn validate(&self) -> Result<()> {
         let n = self.positions.len() as u32;
         for face in &self.faces {
@@ -161,6 +181,31 @@ impl PolyMesh {
                 return Err(MeshError::Corrupt("wire edge duplicates a face edge"));
             }
         }
+        if !self.uvs.is_empty() {
+            if self.uvs.len() != self.faces.len() {
+                return Err(MeshError::Corrupt("uvs not parallel to faces"));
+            }
+            for (face, uv) in self.faces.iter().zip(&self.uvs) {
+                if face.len() != uv.len() {
+                    return Err(MeshError::Corrupt("face and its uvs differ in length"));
+                }
+                if uv.iter().any(|t| !t.is_finite()) {
+                    return Err(MeshError::Corrupt("uv not finite"));
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        for &[a, b] in &self.seams {
+            if a >= n || b >= n {
+                return Err(MeshError::Corrupt("seam index out of range"));
+            }
+            if a >= b {
+                return Err(MeshError::Corrupt("seam not normalized"));
+            }
+            if !seen.insert([a, b]) {
+                return Err(MeshError::Corrupt("duplicate seam"));
+            }
+        }
         Ok(())
     }
 
@@ -185,7 +230,8 @@ impl PolyMesh {
     }
 
     /// Normalizes, deduplicates and drops wire edges that are degenerate or
-    /// already covered by a face.
+    /// already covered by a face. Seams get the same treatment and are
+    /// dropped once their edge is gone.
     pub(crate) fn normalize_wire(&mut self) {
         let face_edges = self.face_edge_set();
         let n = self.positions.len() as u32;
@@ -197,6 +243,16 @@ impl PolyMesh {
             .map(|[a, b]| edge_key(a, b))
             .filter(|e| !face_edges.contains(e) && seen.insert(*e))
             .collect();
+        if !self.seams.is_empty() {
+            let mut seen = HashSet::new();
+            let seams = std::mem::take(&mut self.seams);
+            self.seams = seams
+                .into_iter()
+                .filter(|&[a, b]| a != b && a < n && b < n)
+                .map(|[a, b]| edge_key(a, b))
+                .filter(|e| (face_edges.contains(e) || self.wire.contains(e)) && seen.insert(*e))
+                .collect();
+        }
     }
 
     /// Removes the flagged vertices; faces and wire edges using them are
@@ -221,11 +277,14 @@ impl PolyMesh {
         let mut faces = Vec::with_capacity(self.faces.len());
         let mut kept = 0;
         let old_faces = std::mem::take(&mut self.faces);
+        let mut old_uvs = std::mem::take(&mut self.uvs).into_iter();
         for face in old_faces {
+            let uv = old_uvs.next();
             let mapped: Option<Vec<u32>> = face.iter().map(|&v| map(v)).collect();
             match mapped {
                 Some(f) => {
                     self.faces.push(f);
+                    self.uvs.extend(uv);
                     faces.push(Some(kept));
                     kept += 1;
                 }
@@ -236,6 +295,12 @@ impl PolyMesh {
             .wire
             .iter()
             .filter_map(|&[a, b]| Some(edge_key(map(a)?, map(b)?)))
+            .collect();
+        self.seams = self
+            .seams
+            .iter()
+            .filter_map(|&[a, b]| Some(edge_key(map(a)?, map(b)?)))
+            .filter(|[a, b]| a != b)
             .collect();
         Remap { vertices, faces }
     }
@@ -257,6 +322,13 @@ impl PolyMesh {
             i += 1;
             !remove[i - 1]
         });
+        if !self.uvs.is_empty() {
+            let mut i = 0;
+            self.uvs.retain(|_| {
+                i += 1;
+                !remove[i - 1]
+            });
+        }
         map
     }
 

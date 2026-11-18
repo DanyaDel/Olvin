@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 use crate::extrude::unique_faces;
 use crate::query::find_directed;
@@ -11,22 +11,46 @@ impl PolyMesh {
     /// Inserts `chain` (ordered from `a` to `b`) into every face and wire
     /// edge using the edge `a`-`b`.
     pub(crate) fn insert_on_edge(&mut self, a: u32, b: u32, chain: &[u32]) {
-        for face in &mut self.faces {
+        let has_uvs = self.has_uvs();
+        for fi in 0..self.faces.len() {
+            let face = &self.faces[fi];
             if !loop_edges(face).any(|(u, v)| (u, v) == (a, b) || (u, v) == (b, a)) {
                 continue;
             }
             let n = face.len();
             let mut out = Vec::with_capacity(n + chain.len());
+            let mut out_uv = Vec::new();
             for i in 0..n {
                 let (u, v) = (face[i], face[(i + 1) % n]);
                 out.push(u);
-                if (u, v) == (a, b) {
-                    out.extend_from_slice(chain);
+                let inserted: Vec<u32> = if (u, v) == (a, b) {
+                    chain.to_vec()
                 } else if (u, v) == (b, a) {
-                    out.extend(chain.iter().rev());
+                    chain.iter().rev().copied().collect()
+                } else {
+                    Vec::new()
+                };
+                if has_uvs {
+                    let (tu, tv) = (self.uvs[fi][i], self.uvs[fi][(i + 1) % n]);
+                    out_uv.push(tu);
+                    let (pu, pv) = (self.positions[u as usize], self.positions[v as usize]);
+                    let e = pv - pu;
+                    for &m in &inserted {
+                        let t = if e.length_squared() > 0.0 {
+                            ((self.positions[m as usize] - pu).dot(e) / e.length_squared())
+                                .clamp(0.0, 1.0)
+                        } else {
+                            0.5
+                        };
+                        out_uv.push(tu.lerp(tv, t));
+                    }
                 }
+                out.extend(inserted);
             }
-            *face = out;
+            self.faces[fi] = out;
+            if has_uvs {
+                self.uvs[fi] = out_uv;
+            }
         }
         let key = edge_key(a, b);
         if let Some(i) = self.wire.iter().position(|&e| e == key) {
@@ -34,6 +58,14 @@ impl PolyMesh {
             let mut prev = a;
             for &v in chain.iter().chain([&b]) {
                 self.wire.push(edge_key(prev, v));
+                prev = v;
+            }
+        }
+        if let Some(i) = self.seams.iter().position(|&e| e == key) {
+            self.seams.swap_remove(i);
+            let mut prev = a;
+            for &v in chain.iter().chain([&b]) {
+                self.seams.push(edge_key(prev, v));
                 prev = v;
             }
         }
@@ -82,6 +114,21 @@ impl PolyMesh {
             out
         };
         let (first, second) = (walk(ia, ib), walk(ib, ia));
+        if self.has_uvs() {
+            let uv = &self.uvs[f];
+            let walk_uv = |from: usize, to: usize| {
+                let mut out = vec![uv[from]];
+                let mut i = from;
+                while i != to {
+                    i = (i + 1) % n;
+                    out.push(uv[i]);
+                }
+                out
+            };
+            let (u1, u2) = (walk_uv(ia, ib), walk_uv(ib, ia));
+            self.uvs[f] = u1;
+            self.uvs.push(u2);
+        }
         self.faces[f] = first;
         self.faces.push(second);
         self.faces.len() - 1
@@ -256,11 +303,7 @@ impl PolyMesh {
                     }
                 })
                 .collect();
-            let mut strips = strips.into_iter();
-            if let Some(first) = strips.next() {
-                self.faces[f] = first;
-            }
-            self.faces.extend(strips);
+            self.replace_face(f, strips);
         }
         self.normalize_wire();
         Ok(new_verts)
@@ -300,6 +343,8 @@ impl PolyMesh {
         let mut result = Vec::new();
         for (&f, face) in selected.iter().zip(&originals) {
             let mut new_faces: Vec<Vec<u32>> = Vec::new();
+            let mut extra_uv: HashMap<u32, Vec2> = HashMap::new();
+            let has_uvs = self.has_uvs();
             if face.len() == 4 {
                 let (q0, q1, q2, q3) = (face[0], face[1], face[2], face[3]);
                 let (bottom, right, top, left) =
@@ -311,9 +356,18 @@ impl PolyMesh {
                         self.positions[bottom[i] as usize],
                         self.positions[top[i] as usize],
                     );
+                    let (ub, ut) = if has_uvs {
+                        (self.corner_uv(f, bottom[i]), self.corner_uv(f, top[i]))
+                    } else {
+                        Default::default()
+                    };
                     let mut column = vec![bottom[i]];
-                    column
-                        .extend((1..n).map(|j| self.add_vertex(pb.lerp(pt, j as f32 / n as f32))));
+                    for j in 1..n {
+                        let t = j as f32 / n as f32;
+                        let v = self.add_vertex(pb.lerp(pt, t));
+                        extra_uv.insert(v, ub.lerp(ut, t));
+                        column.push(v);
+                    }
                     column.push(top[i]);
                     grid.push(column);
                 }
@@ -335,6 +389,10 @@ impl PolyMesh {
                     .sum::<Vec3>()
                     / face.len() as f32;
                 let c = self.add_vertex(center);
+                if has_uvs {
+                    let sum: Vec2 = face.iter().map(|&v| self.corner_uv(f, v)).sum();
+                    extra_uv.insert(c, sum / face.len() as f32);
+                }
                 for (u, v) in loop_edges(face) {
                     let seg = chain(u, v);
                     for w in seg.windows(2) {
@@ -342,17 +400,52 @@ impl PolyMesh {
                     }
                 }
             }
-            let mut it = new_faces.into_iter();
-            if let Some(first) = it.next() {
-                self.faces[f] = first;
+            let first_new = self.faces.len();
+            if !new_faces.is_empty() {
                 result.push(f);
             }
-            for nf in it {
-                self.faces.push(nf);
-                result.push(self.faces.len() - 1);
-            }
+            let added = new_faces.len().saturating_sub(1);
+            self.replace_face_with(f, new_faces, &extra_uv);
+            result.extend(first_new..first_new + added);
         }
         self.normalize_wire();
         result
+    }
+
+    /// Replaces face `f` by `parts` (the first keeps index `f`, the rest are
+    /// appended). Every vertex of the parts must lie on `f`'s loop: UVs are
+    /// looked up from its corners.
+    pub(crate) fn replace_face(&mut self, f: usize, parts: Vec<Vec<u32>>) {
+        self.replace_face_with(f, parts, &HashMap::new());
+    }
+
+    /// Like [`Self::replace_face`]; vertices not on `f` take their UV from `extra`.
+    fn replace_face_with(&mut self, f: usize, parts: Vec<Vec<u32>>, extra: &HashMap<u32, Vec2>) {
+        let uv_parts: Option<Vec<Vec<Vec2>>> = self.has_uvs().then(|| {
+            parts
+                .iter()
+                .map(|p| {
+                    p.iter()
+                        .map(|v| {
+                            extra
+                                .get(v)
+                                .copied()
+                                .unwrap_or_else(|| self.corner_uv(f, *v))
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        let mut parts = parts.into_iter();
+        let Some(first) = parts.next() else {
+            return;
+        };
+        self.faces[f] = first;
+        self.faces.extend(parts);
+        if let Some(uvs) = uv_parts {
+            let mut uvs = uvs.into_iter();
+            self.uvs[f] = uvs.next().unwrap_or_default();
+            self.uvs.extend(uvs);
+        }
     }
 }

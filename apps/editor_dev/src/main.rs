@@ -7,5 +7,7 @@ fn main() {
         Box::new(olvin_editor_animator::AnimatorPlugin),
         Box::new(olvin_editor_csg::CsgPlugin),
         Box::new(olvin_editor_modeling::ModelingPlugin),
+        Box::new(olvin_editor_uv::UvPlugin),
+        Box::new(olvin_editor_ide::IdePlugin),
     ]);
 }

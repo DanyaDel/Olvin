@@ -1,0 +1,18 @@
+[package]
+name = "olvin_assets"
+description = "Olvin asset pipeline: assets/ folder, .meta GUIDs, images, glTF import, hot reload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_core.workspace = true
+olvin_scene = { workspace = true, features = ["serde"] }
+glam.workspace = true
+serde.workspace = true
+ron.workspace = true
+log.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp", "webp", "exr"] }
+gltf = { version = "1.4.1", default-features = false, features = ["import", "utils", "names", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform"] }
+notify = { version = "8.2", default-features = false }

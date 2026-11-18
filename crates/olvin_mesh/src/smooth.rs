@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 use crate::{PolyMesh, edge_key, loop_edges};
 
@@ -27,11 +27,7 @@ impl PolyMesh {
         }
         let p = |v: u32| self.positions[v as usize];
 
-        let mut out = PolyMesh {
-            positions: Vec::new(),
-            faces: Vec::new(),
-            wire: Vec::new(),
-        };
+        let mut out = PolyMesh::default();
         let mut edge_index: HashMap<[u32; 2], u32> = HashMap::new();
         let mut edges: Vec<_> = edge_faces.iter().collect();
         edges.sort_unstable_by_key(|(k, _)| **k);
@@ -98,6 +94,18 @@ impl PolyMesh {
                     fp,
                     edge_index[&edge_key(prev, cur)],
                 ]);
+                // UVs are interpolated linearly (corners stay put).
+                if let Some(uv) = self.uvs.get(fi) {
+                    let center = uv.iter().sum::<Vec2>() / n as f32;
+                    let (up, uc, un) = (uv[(i + n - 1) % n], uv[i], uv[(i + 1) % n]);
+                    out.uvs
+                        .push(vec![uc, (uc + un) * 0.5, center, (up + uc) * 0.5]);
+                }
+            }
+        }
+        for &[a, b] in &self.seams {
+            if let Some(&m) = edge_index.get(&edge_key(a, b)) {
+                out.seams.extend([edge_key(a, m), edge_key(m, b)]);
             }
         }
         out.compact();

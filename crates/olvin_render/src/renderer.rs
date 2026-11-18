@@ -5,7 +5,7 @@ use olvin_core::{AppExit, Resources, SurfaceTarget, WindowHandleSource};
 use olvin_ecs::World;
 
 use crate::core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
-use crate::{Meshes, RenderSettings};
+use crate::{Materials, Meshes, RenderSettings, Shaders, Textures};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
@@ -71,7 +71,7 @@ pub(crate) fn init(res: &mut Resources) {
     }
 }
 
-/// `Stage::Render`: uploads new meshes, culls, draws.
+/// `Stage::Render`: uploads new meshes / textures / materials / shaders, culls, draws.
 pub(crate) fn render(res: &mut Resources) {
     let Some(mut renderer) = res.get_mut::<Renderer>() else {
         return;
@@ -80,6 +80,21 @@ pub(crate) fn render(res: &mut Resources) {
     renderer
         .core
         .upload(&mut renderer.gpu, &mut res.fetch_mut::<Meshes>());
+    if let (Some(mut textures), Some(mut materials), Some(mut shaders)) = (
+        res.get_mut::<Textures>(),
+        res.get_mut::<Materials>(),
+        res.get_mut::<Shaders>(),
+    ) {
+        renderer.core.upload_assets(
+            &mut renderer.gpu,
+            &mut textures,
+            &mut materials,
+            &mut shaders,
+        );
+    }
+    if let Some(time) = res.get::<olvin_core::Time>() {
+        renderer.core.set_time(time.elapsed() as f32);
+    }
     let size = res.fetch::<SurfaceTarget>().size;
     let stats = renderer.frame(&res.fetch::<World>(), size, &res.fetch::<RenderSettings>());
     *res.fetch_mut::<crate::RenderStats>() = stats;
@@ -190,7 +205,8 @@ impl Renderer {
         if size != (self.config.width, self.config.height) {
             self.resize(size);
         }
-        let stats = match camera_view_proj(world, size.0 as f32 / size.1 as f32) {
+        let view_proj = camera_view_proj(world, size.0 as f32 / size.1 as f32);
+        let stats = match view_proj {
             Some(view_proj) => {
                 self.core
                     .prepare(&mut self.view, &self.gpu, world, view_proj, settings)
@@ -218,7 +234,8 @@ impl Renderer {
         }
         {
             let mut pass = begin_pass(&mut encoder, &target, &self.depth, settings);
-            if stats.draw_calls > 0 {
+            // Even without meshes: the sky.
+            if view_proj.is_some() {
                 self.core.draw(&self.view, &self.gpu, &mut pass);
             }
         }

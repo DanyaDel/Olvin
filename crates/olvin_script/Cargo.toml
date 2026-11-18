@@ -1,0 +1,28 @@
+[package]
+name = "olvin_script"
+description = "Olvin scripting: Unity-style behaviours written in Rust, attached by name from scenes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["input", "physics"]
+# ScriptCtx::input() (ActionState) and the input-driven built-ins.
+input = ["dep:olvin_input"]
+# fixed_update with physics steps, collision/trigger callbacks, raycasts, character motor.
+physics = ["dep:olvin_physics"]
+
+[dependencies]
+olvin_core = { path = "../olvin_core" }
+olvin_ecs = { path = "../olvin_ecs" }
+olvin_scene = { path = "../olvin_scene", features = ["serde"] }
+olvin_transform = { path = "../olvin_transform" }
+olvin_input = { path = "../olvin_input", optional = true, default-features = false }
+olvin_physics = { path = "../olvin_physics", optional = true }
+# Ref/RefMut/DynamicBundle are not re-exported by olvin_ecs yet.
+hecs.workspace = true
+glam.workspace = true
+log.workspace = true
+serde.workspace = true
+ron.workspace = true

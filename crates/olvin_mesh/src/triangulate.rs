@@ -87,7 +87,7 @@ impl PolyMesh {
     }
 
     /// Triangles as positions within the face loop.
-    fn face_triangles_local(&self, f: usize) -> Vec<[u32; 3]> {
+    pub(crate) fn face_triangles_local(&self, f: usize) -> Vec<[u32; 3]> {
         if self.faces[f].len() == 3 {
             return vec![[0, 1, 2]];
         }

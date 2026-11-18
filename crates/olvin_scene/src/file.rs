@@ -65,12 +65,21 @@ pub enum Sky {
     },
     /// Equirectangular panorama (`.hdr`, `.exr`, `.png`, `.jpg`), path relative
     /// to the project's `assets/`.
-    Texture { path: String, rotation_deg: f32, intensity: f32 },
+    Texture {
+        path: String,
+        rotation_deg: f32,
+        intensity: f32,
+    },
 }
 
 impl Sky {
     pub fn procedural() -> Self {
-        Sky::Procedural { zenith: [0.18, 0.32, 0.62], horizon: [0.62, 0.7, 0.8], ground: [0.12, 0.11, 0.1], sun_size: 1.5 }
+        Sky::Procedural {
+            zenith: [0.18, 0.32, 0.62],
+            horizon: [0.62, 0.7, 0.8],
+            ground: [0.12, 0.11, 0.1],
+            sun_size: 1.5,
+        }
     }
 }
 
@@ -109,12 +118,19 @@ impl Environment {
             sky: [0.32, 0.4, 0.55],
             ground: [0.12, 0.1, 0.08],
             background: [0.36, 0.5, 0.72],
+            skybox: Sky::procedural(),
             ..Default::default()
         }),
         ("Sunset", || Environment {
             sky: [0.35, 0.22, 0.25],
             ground: [0.1, 0.06, 0.05],
             background: [0.55, 0.3, 0.22],
+            skybox: Sky::Procedural {
+                zenith: [0.16, 0.18, 0.36],
+                horizon: [0.9, 0.45, 0.24],
+                ground: [0.1, 0.06, 0.05],
+                sun_size: 2.5,
+            },
             exposure: 1.1,
             fog: Some(FogDesc {
                 color: [0.5, 0.3, 0.22],
@@ -127,6 +143,12 @@ impl Environment {
             sky: [0.03, 0.04, 0.08],
             ground: [0.01, 0.01, 0.015],
             background: [0.005, 0.008, 0.02],
+            skybox: Sky::Procedural {
+                zenith: [0.002, 0.004, 0.012],
+                horizon: [0.02, 0.03, 0.06],
+                ground: [0.005, 0.005, 0.008],
+                sun_size: 0.0,
+            },
             exposure: 1.4,
             fog: Some(FogDesc {
                 color: [0.01, 0.015, 0.03],

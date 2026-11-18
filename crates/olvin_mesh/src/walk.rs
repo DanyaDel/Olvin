@@ -193,10 +193,26 @@ impl PolyMesh {
                 out.push(copy);
             }
         }
+        let mut uvs = Vec::new();
         let faces: Vec<Vec<u32>> = self
             .faces
             .iter()
-            .filter_map(|f| f.iter().map(|v| map.get(v).copied()).collect())
+            .enumerate()
+            .filter_map(|(i, f)| {
+                let copy: Vec<u32> = f
+                    .iter()
+                    .map(|v| map.get(v).copied())
+                    .collect::<Option<_>>()?;
+                if let Some(uv) = self.uvs.get(i) {
+                    uvs.push(uv.clone());
+                }
+                Some(copy)
+            })
+            .collect();
+        let seams: Vec<[u32; 2]> = self
+            .seams
+            .iter()
+            .filter_map(|&[a, b]| Some(edge_key(*map.get(&a)?, *map.get(&b)?)))
             .collect();
         let wire: Vec<[u32; 2]> = self
             .edges()
@@ -204,6 +220,8 @@ impl PolyMesh {
             .filter_map(|[a, b]| Some(edge_key(*map.get(&a)?, *map.get(&b)?)))
             .collect();
         self.faces.extend(faces);
+        self.uvs.extend(uvs);
+        self.seams.extend(seams);
         self.wire.extend(wire);
         self.normalize_wire();
         out

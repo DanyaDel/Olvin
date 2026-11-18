@@ -96,6 +96,7 @@ impl ViewportExtension for EditMode {
         self.keyboard_zoom(ctx, editing);
         self.was_editing = editing;
         if !editing {
+            ctx.state.mesh_selection = None;
             self.modal = None;
             self.sub = Sub::None;
             self.boxing = None;
@@ -226,6 +227,7 @@ impl ViewportExtension for EditMode {
             self.click(ctx, id, hover, alt, shift, ctrl);
         }
         shared(|s| s.status.clear());
+        ctx.state.mesh_selection = Some((id, shared(|s| s.verts.clone())));
         self.overlay(ctx, mode);
         true
     }

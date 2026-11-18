@@ -18,6 +18,9 @@ opt-level = 3
 
 [profile.release]
 lto = "thin"
+
+# Standalone: never part of an enclosing workspace.
+[workspace]
 "#
     )
 }
@@ -73,7 +76,7 @@ fn setup(res: &mut Resources) {
             let mut world = res.fetch_mut::<World>();
             world.spawn((
                 Transform::IDENTITY,
-                MeshRenderer { mesh: cube, color: Color::rgb(0.9, 0.5, 0.2) },
+                MeshRenderer { mesh: cube, color: Color::rgb(0.9, 0.5, 0.2), material: None },
                 Spin(1.0),
             ));
             world.spawn((

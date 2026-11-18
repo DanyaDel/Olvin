@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::merge::clean_loop;
+use glam::Vec2;
+
+use crate::merge::clean_loop_with;
 use crate::query::find_directed;
 use crate::{PolyMesh, Remap, edge_key, loop_edges};
 
@@ -126,21 +128,40 @@ impl PolyMesh {
             } else {
                 (b, a)
             };
+            let has_uvs = self.has_uvs();
             let mut other = self.faces[f2].clone();
+            let mut other_uv = if has_uvs {
+                self.uvs[f2].clone()
+            } else {
+                Vec::new()
+            };
             if find_directed(&other, b, a).is_none() {
                 other.reverse();
+                other_uv.reverse();
             }
             // f1 from b round to a, then f2's vertices strictly between a and b.
-            let rotate = |f: &[u32], start: u32| {
-                let i = f.iter().position(|&v| v == start).unwrap_or(0);
-                f[i..].iter().chain(&f[..i]).copied().collect::<Vec<u32>>()
-            };
-            let mut merged = rotate(&self.faces[f1], b);
-            let tail = rotate(&other, a);
-            merged.extend_from_slice(&tail[1..tail.len() - 1]);
-            clean_loop(&mut merged);
+            let start = |f: &[u32], v: u32| f.iter().position(|&w| w == v).unwrap_or(0);
+            let rotate = |n: usize, i: usize| (i..n).chain(0..i).collect::<Vec<usize>>();
+            let order1 = rotate(self.faces[f1].len(), start(&self.faces[f1], b));
+            let order2 = rotate(other.len(), start(&other, a));
+            let inner2 = &order2[1..order2.len() - 1];
+            let mut merged: Vec<u32> = order1.iter().map(|&i| self.faces[f1][i]).collect();
+            merged.extend(inner2.iter().map(|&i| other[i]));
+            let mut merged_uv: Vec<Vec2> = Vec::new();
+            if has_uvs {
+                merged_uv.extend(order1.iter().map(|&i| self.uvs[f1][i]));
+                merged_uv.extend(inner2.iter().map(|&i| other_uv[i]));
+            }
+            clean_loop_with(&mut merged, |i| {
+                if has_uvs {
+                    merged_uv.remove(i);
+                }
+            });
             if merged.len() >= 3 {
                 self.faces[f1] = merged;
+                if has_uvs {
+                    self.uvs[f1] = merged_uv;
+                }
             } else {
                 dead[f1] = true;
             }

@@ -11,9 +11,15 @@ default = ["window", "render"]
 window = ["dep:olvin_window"]
 render = ["dep:olvin_render"]
 # Load .scene.ron files saved by olvin-editor.
-scene = ["render", "olvin_scene/serde", "dep:olvin_csg"]
+scene = ["render", "olvin_scene/serde", "dep:olvin_csg", "dep:olvin_assets"]
 # Colliders and rigidbodies simulated with Rapier.
-physics = ["dep:olvin_physics"]
+physics = ["dep:olvin_physics", "olvin_script?/physics"]
+# Unity-style behaviours in Rust (Scripts from scenes → instances).
+script = ["dep:olvin_script"]
+# Action maps over keyboard, mouse and gamepads (gilrs).
+input = ["dep:olvin_input", "olvin_script?/input"]
+# Sound on kira: AudioSource / AudioListener, one-shots, streamed music.
+audio = ["dep:olvin_audio"]
 
 [dependencies]
 olvin_core.workspace = true
@@ -23,6 +29,10 @@ olvin_transform.workspace = true
 olvin_window = { workspace = true, optional = true }
 olvin_render = { workspace = true, optional = true }
 olvin_csg = { workspace = true, optional = true }
+olvin_assets = { path = "../olvin_assets", optional = true }
 olvin_physics = { workspace = true, optional = true }
+olvin_script = { path = "../olvin_script", optional = true, default-features = false }
+olvin_input = { path = "../olvin_input", optional = true }
+olvin_audio = { path = "../olvin_audio", optional = true }
 glam.workspace = true
 log.workspace = true

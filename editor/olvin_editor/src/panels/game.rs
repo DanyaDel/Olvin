@@ -24,9 +24,14 @@ impl Default for GameView {
 
 impl Panel for GameView {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
-        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
         if rect.width() < 8.0 || rect.height() < 8.0 {
             return;
+        }
+        // The game gets the keyboard and mouse while the pointer is over this view.
+        if let Some(play) = &mut state.play {
+            let focused = response.hovered() && !ui.ctx().egui_wants_keyboard_input();
+            ui.input(|i| play.feed_input(i, focused));
         }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::BLACK);
@@ -63,6 +68,13 @@ impl Panel for GameView {
         }
         if state.is_playing() {
             ui.ctx().request_repaint();
+            painter.text(
+                rect.left_bottom() + egui::vec2(8.0, -8.0),
+                Align2::LEFT_BOTTOM,
+                "Game input: hover this view (WASD, mouse, Space)",
+                FontId::proportional(11.0),
+                Color32::from_white_alpha(120),
+            );
         }
     }
 }

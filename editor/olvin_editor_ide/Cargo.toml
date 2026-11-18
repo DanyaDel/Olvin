@@ -1,0 +1,13 @@
+[package]
+name = "olvin_editor_ide"
+description = "Olvin editor plugin: code editor, project explorer, cargo problems/output, surface shader validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true
+serde_json = "1"
+# Same naga as wgpu 30 (see Cargo.lock), only the WGSL front end.
+naga = { version = "30", features = ["wgsl-in"] }

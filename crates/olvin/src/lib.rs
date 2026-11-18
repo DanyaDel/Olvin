@@ -4,17 +4,27 @@
 //! `scene` adds loading of scenes saved by olvin-editor.
 
 pub use glam as math;
+#[cfg(feature = "audio")]
+pub use olvin_audio as audio;
 pub use olvin_core as core;
 pub use olvin_ecs as ecs;
+#[cfg(feature = "input")]
+pub use olvin_input as input;
 #[cfg(feature = "physics")]
 pub use olvin_physics as physics;
 #[cfg(feature = "render")]
 pub use olvin_render as render;
 pub use olvin_scene as scene;
+#[cfg(feature = "script")]
+pub use olvin_script as script;
 pub use olvin_transform as transform;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
 
+#[cfg(feature = "scene")]
+pub use olvin_csg as csg;
+#[cfg(feature = "scene")]
+pub mod render_assets;
 #[cfg(feature = "scene")]
 pub mod scene_file;
 
@@ -30,6 +40,12 @@ pub struct DefaultPlugins {
     pub render: olvin_render::RenderPlugin,
     #[cfg(feature = "physics")]
     pub physics: olvin_physics::PhysicsPlugin,
+    #[cfg(feature = "input")]
+    pub input: olvin_input::InputPlugin,
+    #[cfg(feature = "script")]
+    pub script: olvin_script::ScriptPlugin,
+    #[cfg(feature = "audio")]
+    pub audio: olvin_audio::AudioPlugin,
 }
 
 impl Plugin for DefaultPlugins {
@@ -42,9 +58,24 @@ impl Plugin for DefaultPlugins {
         app.add_plugin(olvin_render::RenderPlugin {
             settings: self.render.settings.clone(),
         });
+        #[cfg(feature = "scene")]
+        app.add_plugin(render_assets::RenderAssetsPlugin);
         #[cfg(feature = "physics")]
         app.add_plugin(olvin_physics::PhysicsPlugin {
             gravity: self.physics.gravity,
+        });
+        #[cfg(feature = "input")]
+        app.add_plugin(olvin_input::InputPlugin {
+            map: self.input.map.clone(),
+        });
+        #[cfg(feature = "script")]
+        app.add_plugin(olvin_script::ScriptPlugin {
+            builtins: self.script.builtins,
+        });
+        #[cfg(feature = "audio")]
+        app.add_plugin(olvin_audio::AudioPlugin {
+            assets_dir: self.audio.assets_dir.clone(),
+            enabled: self.audio.enabled,
         });
     }
 }
@@ -52,14 +83,25 @@ impl Plugin for DefaultPlugins {
 pub mod prelude {
     pub use crate::DefaultPlugins;
     pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+    #[cfg(feature = "audio")]
+    pub use olvin_audio::{Audio, AudioListener, AudioPlugin, PlayParams};
     pub use olvin_core::{App, AppExit, Plugin, Resources, Stage, Time};
     pub use olvin_ecs::{Entity, World};
+    #[cfg(feature = "input")]
+    pub use olvin_input::{ActionState, Binding, InputMap, InputPlugin};
+    #[cfg(feature = "physics")]
+    pub use olvin_physics::{CharacterMotor, CollisionEvents, Hit, Physics, PhysicsPlugin};
     #[cfg(feature = "render")]
     pub use olvin_render::{
         Color, Fog, Light, LightKind, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo,
         RenderPlugin, RenderSettings, RenderStats, Tonemapping,
     };
     pub use olvin_scene::{Camera, Name, Tag, Transform};
+    #[cfg(feature = "script")]
+    pub use olvin_script::{
+        Behaviour, FromParams, ParamSpec, Params, ScriptAppExt, ScriptCtx, ScriptPlugin,
+        ScriptRegistry, Scripts,
+    };
     pub use olvin_transform::{GlobalTransform, Parent};
     #[cfg(feature = "window")]
     pub use olvin_window::{Input, KeyCode, MouseButton, WindowPlugin};

@@ -1,0 +1,24 @@
+[package]
+name = "olvin_input"
+description = "Olvin input actions: rebindable action maps over keyboard, mouse and gamepads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["gamepad"]
+# Gamepads through gilrs. Without it `GamepadState` exists but stays empty
+# (another backend or a test can still fill it).
+gamepad = ["dep:gilrs"]
+
+[dependencies]
+olvin_core = { path = "../olvin_core" }
+olvin_window = { path = "../olvin_window" }
+# Only to turn on serde for KeyCode / MouseButton.
+winit = { workspace = true, features = ["serde"] }
+glam.workspace = true
+log.workspace = true
+serde.workspace = true
+ron.workspace = true
+gilrs = { version = "0.11", optional = true }

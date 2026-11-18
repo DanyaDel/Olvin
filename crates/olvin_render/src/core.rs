@@ -1,12 +1,16 @@
-//! The renderer without a window: pipelines, GPU meshes and per-camera data.
+//! The renderer without a window: pipelines, GPU assets and per-camera data.
 //! The window renderer, the editor's scene/game views and headless tests all
 //! draw through this.
 //!
-//! Frame order for a view: `prepare` (CPU: culling, lights, shadow fit,
+//! Frame order for a view: `upload` + `upload_assets` (new meshes, textures,
+//! materials, shaders) → `prepare` (CPU: culling, lights, shadow fit,
 //! uniforms) → `render_shadows` (own depth pass into the view's shadow map)
-//! → `draw` (into the caller's main pass, which samples the shadow map).
+//! → `draw` (into the caller's main pass: meshes, then the sky).
 
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
+use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -15,21 +19,26 @@ use olvin_scene::{Camera, Transform};
 use olvin_transform::GlobalTransform;
 
 use crate::light::{CameraInfo, LightList, MAX_LIGHTS, PackedLight, fit_shadow};
+use crate::material::MaterialUniform;
+use crate::shader::{DEFAULT_SURFACE_SHADER, mesh_source, sky_source};
 use crate::{
-    Frustum, Light, LightKind, MeshData, MeshRenderer, Meshes, RenderSettings, RenderStats,
-    Tonemapping, Vertex,
+    Frustum, Light, LightKind, Material, Materials, MeshData, MeshRenderer, Meshes, RenderSettings,
+    RenderStats, Shaders, SkyMode, TextureData, TextureHandle, Textures, Tonemapping, Vertex,
 };
 
 const MIN_INSTANCE_CAPACITY: usize = 1024;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Bucket key's material half for "no material" (the fallback material).
+const NO_MATERIAL: u32 = u32::MAX;
 
-/// Uniforms of the main pass; mirrors `Globals` in mesh.wgsl (all vec4 /
+/// Uniforms of the main pass; mirrors `Globals` in globals.wgsl (all vec4 /
 /// mat4, so std140 and WGSL layouts agree).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
     shadow_view_proj: [[f32; 4]; 4],
+    inv_view_proj: [[f32; 4]; 4],
     camera: [f32; 4],
     view_plane: [f32; 4],
     sun_dir: [f32; 4],
@@ -39,6 +48,10 @@ struct Globals {
     fog_color: [f32; 4],
     params: [f32; 4],
     shadow_params: [f32; 4],
+    sky_zenith: [f32; 4],
+    sky_horizon: [f32; 4],
+    sky_ground: [f32; 4],
+    sky_params: [f32; 4],
     lights: [PackedLight; MAX_LIGHTS],
 }
 
@@ -57,18 +70,89 @@ struct GpuMesh {
     radius: f32,
 }
 
-/// GPU copies of one [`Meshes`] registry (handles index into it).
+struct GpuTexture {
+    view: wgpu::TextureView,
+    mips: u32,
+    /// Unique per upload, so bind groups know when to rebuild.
+    generation: u64,
+}
+
+struct GpuMaterial {
+    material: Material,
+    uniform: wgpu::Buffer,
+    bind: wgpu::BindGroup,
+}
+
+/// GPU copies of one set of registries ([`Meshes`], [`Textures`],
+/// [`Materials`], [`Shaders`]; handles index into them), plus the pipelines
+/// of its surface shaders. Belongs to the [`RenderCore`] that uploaded it.
 #[derive(Default)]
 pub struct GpuMeshes {
     meshes: Vec<Option<GpuMesh>>,
+    textures: Vec<Option<GpuTexture>>,
+    materials: Vec<Option<GpuMaterial>>,
+    /// Indexed by `ShaderHandle`; the last pipeline that compiled.
+    pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    generation: u64,
 }
 
-/// Instances bucketed by mesh, packed into one vertex buffer.
+impl GpuMeshes {
+    /// Pipeline id of a material slot: 0 = built-in, `h + 1` = shader `h`.
+    fn pipeline_of(&self, material: u32) -> u32 {
+        self.materials
+            .get(material as usize)
+            .and_then(Option::as_ref)
+            .and_then(|m| m.material.shader)
+            .filter(|h| matches!(self.pipelines.get(h.0 as usize), Some(Some(_))))
+            .map_or(0, |h| h.0 + 1)
+    }
+}
+
+/// Cheap hasher for the (material, mesh) bucket keys.
+#[derive(Default)]
+struct KeyHasher(u64);
+
+impl Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(5) ^ b as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (v ^ (v >> 29)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+
+fn bucket_key(material: u32, mesh: u32) -> u64 {
+    ((material as u64) << 32) | mesh as u64
+}
+
+/// One instanced draw: sorted by pipeline, then material, then mesh.
+struct DrawRange {
+    pipeline: u32,
+    material: u32,
+    mesh: u32,
+    instances: Range<u32>,
+}
+
+/// Instances bucketed by (material, mesh), packed into one vertex buffer.
+/// Buckets, the key map and the draw list are reused, so a steady frame
+/// doesn't allocate.
 struct InstanceSet {
     buffer: wgpu::Buffer,
     capacity: usize,
-    buckets: Vec<Vec<InstanceRaw>>,
-    ranges: Vec<(usize, Range<u32>)>,
+    buckets: Vec<(u64, Vec<InstanceRaw>)>,
+    lookup: HashMap<u64, u32, BuildHasherDefault<KeyHasher>>,
+    /// Last key pushed and its bucket (consecutive entities often share it).
+    last: Option<(u64, u32)>,
+    /// (pipeline, key, bucket) of non-empty buckets, sorted.
+    order: Vec<(u32, u64, u32)>,
+    ranges: Vec<DrawRange>,
     count: u32,
 }
 
@@ -78,33 +162,69 @@ impl InstanceSet {
             buffer: instance_buffer(device, MIN_INSTANCE_CAPACITY),
             capacity: MIN_INSTANCE_CAPACITY,
             buckets: Vec::new(),
+            lookup: HashMap::default(),
+            last: None,
+            order: Vec::new(),
             ranges: Vec::new(),
             count: 0,
         }
     }
 
-    fn begin(&mut self, meshes: usize) {
-        if self.buckets.len() < meshes {
-            self.buckets.resize_with(meshes, Vec::new);
+    fn begin(&mut self) {
+        // Forget pairs no longer drawn once they pile up (rare reallocation).
+        if self.buckets.len() > 2 * self.ranges.len() + 256 {
+            self.buckets.clear();
+            self.lookup.clear();
         }
-        self.buckets.iter_mut().for_each(Vec::clear);
+        self.buckets.iter_mut().for_each(|(_, b)| b.clear());
+        self.last = None;
     }
 
-    /// Packs the buckets through `staging` (reused scratch) and uploads them.
+    #[inline]
+    fn push(&mut self, key: u64, instance: InstanceRaw) {
+        let index = match self.last {
+            Some((k, i)) if k == key => i,
+            _ => {
+                let next = self.buckets.len() as u32;
+                let i = *self.lookup.entry(key).or_insert(next);
+                if i == next {
+                    self.buckets.push((key, Vec::new()));
+                }
+                self.last = Some((key, i));
+                i
+            }
+        };
+        self.buckets[index as usize].1.push(instance);
+    }
+
+    /// Sorts the buckets into draws, packs them through `staging` (reused
+    /// scratch) and uploads them.
     fn finish(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         staging: &mut Vec<InstanceRaw>,
+        pipeline_of: impl Fn(u32) -> u32,
     ) {
+        self.order.clear();
+        for (i, (key, bucket)) in self.buckets.iter().enumerate() {
+            if !bucket.is_empty() {
+                self.order
+                    .push((pipeline_of((key >> 32) as u32), *key, i as u32));
+            }
+        }
+        self.order.sort_unstable();
         staging.clear();
         self.ranges.clear();
-        for (i, bucket) in self.buckets.iter().enumerate() {
-            if !bucket.is_empty() {
-                let start = staging.len() as u32;
-                staging.extend_from_slice(bucket);
-                self.ranges.push((i, start..staging.len() as u32));
-            }
+        for &(pipeline, key, i) in &self.order {
+            let start = staging.len() as u32;
+            staging.extend_from_slice(&self.buckets[i as usize].1);
+            self.ranges.push(DrawRange {
+                pipeline,
+                material: (key >> 32) as u32,
+                mesh: key as u32,
+                instances: start..staging.len() as u32,
+            });
         }
         if staging.len() > self.capacity {
             self.capacity = staging.len().next_power_of_two();
@@ -115,25 +235,13 @@ impl InstanceSet {
         }
         self.count = staging.len() as u32;
     }
-
-    fn draw(&self, gpu: &GpuMeshes, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_vertex_buffer(1, self.buffer.slice(..));
-        for (i, range) in &self.ranges {
-            let Some(Some(mesh)) = gpu.meshes.get(*i) else {
-                continue;
-            };
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, range.clone());
-        }
-    }
 }
 
 /// Per-camera state: uniforms, instance buffers, the sun's shadow map and
 /// frame scratch.
 pub struct ViewData {
     globals: wgpu::Buffer,
-    /// Globals + shadow map (the dummy until shadows are first used).
+    /// Globals + shadow map + sky texture.
     bind: wgpu::BindGroup,
     main: InstanceSet,
     staging: Vec<InstanceRaw>,
@@ -143,6 +251,9 @@ pub struct ViewData {
     /// Attachment view and size; created on first use, kept afterwards.
     shadow_map: Option<(wgpu::TextureView, u32)>,
     shadow_active: bool,
+    /// Generation of the sky texture in `bind` (None = the default).
+    sky_bound: Option<u64>,
+    sky_active: bool,
 }
 
 impl ViewData {
@@ -151,19 +262,46 @@ impl ViewData {
     pub fn shadows_active(&self) -> bool {
         self.shadow_active
     }
+
+    /// Whether `draw` paints a sky (procedural or texture) behind the meshes.
+    pub fn sky_active(&self) -> bool {
+        self.sky_active
+    }
+}
+
+/// 1×1 stand-ins for missing material textures: white base, flat normal,
+/// white ORM (occlusion 1, factors as is), white emissive.
+struct DefaultTextures {
+    base: wgpu::TextureView,
+    normal: wgpu::TextureView,
+    orm: wgpu::TextureView,
+    emissive: wgpu::TextureView,
 }
 
 pub struct RenderCore {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// The built-in mesh pipeline (default surface).
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    material_layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    sky_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     shadow_layout: wgpu::BindGroupLayout,
     shadow_sampler: wgpu::Sampler,
+    linear_sampler: wgpu::Sampler,
+    point_sampler: wgpu::Sampler,
+    sky_sampler: wgpu::Sampler,
     /// Bound while a view has no shadow map yet.
     dummy_shadow: wgpu::TextureView,
+    defaults: DefaultTextures,
+    /// For renderers without a material.
+    fallback_material: wgpu::BindGroup,
+    target: (wgpu::TextureFormat, u32, wgpu::TextureFormat),
     encode_srgb: bool,
+    time: Option<f32>,
+    start: Instant,
 }
 
 impl RenderCore {
@@ -176,7 +314,19 @@ impl RenderCore {
         samples: u32,
         depth: wgpu::TextureFormat,
     ) -> Self {
-        let (pipeline, layout) = create_pipeline(&device, color, samples, depth);
+        let (layout, material_layout) = create_layouts(&device);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mesh"),
+            bind_group_layouts: &[Some(&layout), Some(&material_layout)],
+            immediate_size: 0,
+        });
+        let target = (color, samples, depth);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mesh"),
+            source: wgpu::ShaderSource::Wgsl(mesh_source(DEFAULT_SURFACE_SHADER).into()),
+        });
+        let pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target);
+        let sky_pipeline = create_sky_pipeline(&device, &layout, target);
         let (shadow_pipeline, shadow_layout) = create_shadow_pipeline(&device);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
@@ -185,18 +335,84 @@ impl RenderCore {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
+        // Anisotropy is clamped to 1 where unsupported (WebGL2 without the extension).
+        let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material linear"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 8,
+            ..Default::default()
+        });
+        let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material point"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            lod_max_clamp: 0.0,
+            ..Default::default()
+        });
+        let sky_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sky"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         let dummy_shadow = shadow_texture(&device, 1);
+        let solid = |rgba, srgb| {
+            upload_texture(&device, &queue, &TextureData::solid(rgba, srgb), u32::MAX).view
+        };
+        let defaults = DefaultTextures {
+            base: solid([255; 4], true),
+            normal: solid([128, 128, 255, 255], false),
+            orm: solid([255; 4], false),
+            emissive: solid([255; 4], true),
+        };
+        let fallback = Material::fallback();
+        let fallback_material = material_bind_group(
+            &device,
+            &material_layout,
+            &defaults,
+            (&linear_sampler, &point_sampler),
+            &[],
+            &material_uniform(&device, &fallback),
+            &fallback,
+        );
         Self {
+            fallback_material,
             device,
             queue,
             pipeline,
             layout,
+            material_layout,
+            pipeline_layout,
+            sky_pipeline,
             shadow_pipeline,
             shadow_layout,
             shadow_sampler,
+            linear_sampler,
+            point_sampler,
+            sky_sampler,
             dummy_shadow,
+            defaults,
+            target,
             encode_srgb: !color.is_srgb(),
+            time: None,
+            start: Instant::now(),
         }
+    }
+
+    /// Seconds for surface shaders' `in.time`. Until it's called, the time
+    /// since this core was created.
+    pub fn set_time(&mut self, seconds: f32) {
+        self.time = Some(seconds);
     }
 
     pub fn create_view(&self) -> ViewData {
@@ -210,7 +426,7 @@ impl RenderCore {
         };
         let globals = uniform("olvin globals", size_of::<Globals>() as u64);
         let shadow_globals = uniform("olvin shadow globals", size_of::<Mat4>() as u64);
-        let bind = self.main_bind_group(&globals, &self.dummy_shadow);
+        let bind = self.main_bind_group(&globals, &self.dummy_shadow, &self.defaults.base);
         let shadow_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("olvin shadow globals"),
             layout: &self.shadow_layout,
@@ -229,6 +445,8 @@ impl RenderCore {
             shadow: InstanceSet::new(&self.device),
             shadow_map: None,
             shadow_active: false,
+            sky_bound: None,
+            sky_active: false,
         }
     }
 
@@ -236,6 +454,7 @@ impl RenderCore {
         &self,
         globals: &wgpu::Buffer,
         shadow: &wgpu::TextureView,
+        sky: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("olvin globals"),
@@ -253,8 +472,38 @@ impl RenderCore {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(sky),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.sky_sampler),
+                },
             ],
         })
+    }
+
+    fn material_uniform(&self, material: &Material) -> wgpu::Buffer {
+        material_uniform(&self.device, material)
+    }
+
+    fn material_bind_group(
+        &self,
+        textures: &[Option<GpuTexture>],
+        uniform: &wgpu::Buffer,
+        material: &Material,
+    ) -> wgpu::BindGroup {
+        let samplers = (&self.linear_sampler, &self.point_sampler);
+        material_bind_group(
+            &self.device,
+            &self.material_layout,
+            &self.defaults,
+            samplers,
+            textures,
+            uniform,
+            material,
+        )
     }
 
     /// Uploads meshes added to `meshes` since the last call.
@@ -282,19 +531,116 @@ impl RenderCore {
                 center,
                 radius,
             };
-            let i = handle.0 as usize;
-            if gpu.meshes.len() <= i {
-                gpu.meshes.resize_with(i + 1, || None);
+            put(&mut gpu.meshes, handle.0, mesh);
+        }
+    }
+
+    /// Uploads what changed in the asset registries since the last call:
+    /// compiles surface shaders (a failure keeps the last good pipeline and
+    /// is reported by `Shaders::error`; nothing panics), uploads textures
+    /// with mipmaps, and (re)builds material bind groups, including those of
+    /// materials whose textures were replaced. Call it next to [`Self::upload`],
+    /// before `prepare`.
+    pub fn upload_assets(
+        &self,
+        gpu: &mut GpuMeshes,
+        textures: &mut Textures,
+        materials: &mut Materials,
+        shaders: &mut Shaders,
+    ) {
+        for (handle, source) in std::mem::take(&mut shaders.pending) {
+            match self.compile_surface(&source) {
+                Ok(pipeline) => put(&mut gpu.pipelines, handle.0, pipeline),
+                Err(e) => {
+                    log::warn!("surface shader {}: {e}", handle.0);
+                    shaders.set_error(handle, Some(e));
+                }
             }
-            gpu.meshes[i] = Some(mesh);
+        }
+
+        let max = self.device.limits().max_texture_dimension_2d;
+        let mut replaced = Vec::new();
+        for (handle, data) in textures.pending.drain(..) {
+            gpu.generation += 1;
+            let mut texture = upload_texture(&self.device, &self.queue, &data, max);
+            texture.generation = gpu.generation;
+            if matches!(gpu.textures.get(handle.0 as usize), Some(Some(_))) {
+                replaced.push(handle);
+            }
+            put(&mut gpu.textures, handle.0, texture);
+        }
+        if !replaced.is_empty() {
+            // New texture objects under existing materials: rebind those (an asset reload).
+            for slot in 0..gpu.materials.len() {
+                let Some(m) = &gpu.materials[slot] else {
+                    continue;
+                };
+                if m.material
+                    .textures()
+                    .iter()
+                    .flatten()
+                    .any(|t| replaced.contains(t))
+                {
+                    let bind = self.material_bind_group(&gpu.textures, &m.uniform, &m.material);
+                    if let Some(m) = &mut gpu.materials[slot] {
+                        m.bind = bind;
+                    }
+                }
+            }
+        }
+
+        for (handle, material) in materials.pending.drain(..) {
+            let uniform = match gpu.materials.get(handle.0 as usize) {
+                Some(Some(existing)) => {
+                    self.queue.write_buffer(
+                        &existing.uniform,
+                        0,
+                        bytemuck::bytes_of(&material.uniform()),
+                    );
+                    existing.uniform.clone()
+                }
+                _ => self.material_uniform(&material),
+            };
+            let bind = self.material_bind_group(&gpu.textures, &uniform, &material);
+            put(
+                &mut gpu.materials,
+                handle.0,
+                GpuMaterial {
+                    material,
+                    uniform,
+                    bind,
+                },
+            );
+        }
+    }
+
+    /// Builds a mesh pipeline from a full template source, catching wgpu's
+    /// errors instead of letting them reach the device's panic handler.
+    fn compile_surface(&self, source: &str) -> Result<wgpu::RenderPipeline, String> {
+        let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("surface shader"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        let pipeline =
+            create_mesh_pipeline(&self.device, &self.pipeline_layout, &module, self.target);
+        let validation = pollster::block_on(validation.pop());
+        let internal = pollster::block_on(internal.pop());
+        match validation.or(internal) {
+            None => Ok(pipeline),
+            Some(e) => Err(e.to_string()),
         }
     }
 
     /// The hot path: gathers lights (the first directional [`Light`] is the
     /// sun, up to [`MAX_LIGHTS`] others ranked by distance), fits the sun's
     /// shadow map, then one linear pass over (GlobalTransform, MeshRenderer),
-    /// culled against the camera (and the shadow box) and bucketed by mesh
-    /// into flat arrays. Writes uniforms and instances for `view`.
+    /// culled against the camera (and the shadow box) and bucketed by
+    /// (material, mesh) into flat arrays, drawn sorted by (pipeline,
+    /// material, mesh). Writes uniforms and instances for `view`.
     /// Call before `render_shadows` and `draw`.
     pub fn prepare(
         &self,
@@ -349,24 +695,47 @@ impl RenderCore {
             None
         };
         view.shadow_active = fit.is_some();
+        let mut rebind = false;
         if fit.is_some() && view.shadow_map.as_ref().is_none_or(|(_, s)| *s != size) {
-            let texture = shadow_texture(&self.device, size);
-            view.bind = self.main_bind_group(&view.globals, &texture);
-            view.shadow_map = Some((texture, size));
+            view.shadow_map = Some((shadow_texture(&self.device, size), size));
+            rebind = true;
         }
         let shadow_frustum = fit.map(|f| Frustum::from_view_proj(f.view_proj));
 
+        // Sky (its texture lives in the view's bind group).
+        let sky_texture = match settings.sky {
+            SkyMode::Texture { texture, .. } => gpu
+                .textures
+                .get(texture.0 as usize)
+                .and_then(Option::as_ref),
+            _ => None,
+        };
+        let sky_generation = sky_texture.map(|t| t.generation);
+        if rebind || sky_generation != view.sky_bound {
+            let shadow = view
+                .shadow_map
+                .as_ref()
+                .map_or(&self.dummy_shadow, |(v, _)| v);
+            let sky = sky_texture.map_or(&self.defaults.base, |t| &t.view);
+            view.bind = self.main_bind_group(&view.globals, shadow, sky);
+            view.sky_bound = sky_generation;
+        }
+
         // Meshes.
-        view.main.begin(gpu.meshes.len());
-        view.shadow.begin(gpu.meshes.len());
+        view.main.begin();
+        view.shadow.begin();
         let mut culled = 0;
         for (global, transform, renderer) in world
             .query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>()
             .iter()
         {
-            let i = renderer.mesh.0 as usize;
-            let Some(Some(mesh)) = gpu.meshes.get(i) else {
+            let i = renderer.mesh.0;
+            let Some(Some(mesh)) = gpu.meshes.get(i as usize) else {
                 continue;
+            };
+            let material = match renderer.material {
+                Some(m) if matches!(gpu.materials.get(m.0 as usize), Some(Some(_))) => m.0,
+                _ => NO_MATERIAL,
             };
             let model = global.map_or_else(|| transform.matrix(), |g| g.0);
             let scale = model
@@ -383,19 +752,21 @@ impl RenderCore {
             if let Some(f) = &shadow_frustum
                 && f.intersects_sphere(center, radius)
             {
-                view.shadow.buckets[i].push(instance);
+                view.shadow.push(bucket_key(NO_MATERIAL, i), instance);
             }
             if frustum.intersects_sphere(center, radius) {
-                view.main.buckets[i].push(instance);
+                view.main.push(bucket_key(material, i), instance);
             } else {
                 culled += 1;
             }
         }
         view.main
-            .finish(&self.device, &self.queue, &mut view.staging);
+            .finish(&self.device, &self.queue, &mut view.staging, |m| {
+                gpu.pipeline_of(m)
+            });
         if view.shadow_active {
             view.shadow
-                .finish(&self.device, &self.queue, &mut view.staging);
+                .finish(&self.device, &self.queue, &mut view.staging, |_| 0);
         }
 
         // Uniforms.
@@ -403,9 +774,43 @@ impl RenderCore {
         let fog = settings.fog;
         let shadow_view_proj = fit.map_or(Mat4::IDENTITY, |f| f.view_proj);
         let texel_world = fit.map_or(0.0, |f| f.texel_world);
+        let time = self
+            .time
+            .unwrap_or_else(|| self.start.elapsed().as_secs_f32());
+        let mut sky = SkyUniform::default();
+        match settings.sky {
+            SkyMode::Color => {}
+            SkyMode::Procedural {
+                zenith,
+                horizon,
+                ground,
+                sun_size,
+            } => {
+                let r = sun_size.max(0.0).to_radians();
+                let disc = r > 0.0 && sun_color != Vec3::ZERO;
+                sky = SkyUniform {
+                    zenith: Vec3::from(zenith).extend((r * 0.85).cos()).into(),
+                    horizon: Vec3::from(horizon).extend((r * 1.15).cos()).into(),
+                    ground: Vec3::from(ground).extend(0.0).into(),
+                    params: [1.0, 1.0, 1.0, flag(disc)],
+                };
+            }
+            SkyMode::Texture {
+                rotation,
+                intensity,
+                ..
+            } => {
+                if let Some(t) = sky_texture {
+                    sky.ground[3] = rotation;
+                    sky.params = [2.0, intensity, t.mips as f32, 0.0];
+                }
+            }
+        }
+        view.sky_active = sky.params[0] > 0.5;
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
             shadow_view_proj: shadow_view_proj.to_cols_array_2d(),
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera: cam.camera.into(),
             view_plane: cam.view_plane.into(),
             sun_dir: sun_dir.extend(flag(view.shadow_active)).into(),
@@ -427,8 +832,12 @@ impl RenderCore {
                 texel_world * 1.5,
                 settings.shadow_distance * 0.85,
                 flag(settings.tonemapping == Tonemapping::Aces),
-                0.0,
+                time,
             ],
+            sky_zenith: sky.zenith,
+            sky_horizon: sky.horizon,
+            sky_ground: sky.ground,
+            sky_params: sky.params,
             lights: lights.lights,
         };
         self.queue
@@ -481,17 +890,194 @@ impl RenderCore {
         }
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, &view.shadow_bind, &[]);
-        view.shadow.draw(gpu, &mut pass);
+        pass.set_vertex_buffer(1, view.shadow.buffer.slice(..));
+        for range in &view.shadow.ranges {
+            if let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) {
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
+            }
+        }
     }
 
-    /// Records the prepared draws into a pass compatible with this core.
+    /// Records the prepared draws into a pass compatible with this core:
+    /// meshes sorted by pipeline / material / mesh, then the sky (if any) on
+    /// the far plane. Call it even when `prepare` reported no draw calls, so
+    /// the sky still shows.
     pub fn draw(&self, view: &ViewData, gpu: &GpuMeshes, pass: &mut wgpu::RenderPass<'_>) {
-        if view.main.ranges.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &view.bind, &[]);
-        view.main.draw(gpu, pass);
+        if !view.main.ranges.is_empty() {
+            pass.set_vertex_buffer(1, view.main.buffer.slice(..));
+            let mut bound_pipeline = None;
+            let mut bound_material = None;
+            for range in &view.main.ranges {
+                let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) else {
+                    continue;
+                };
+                if bound_pipeline != Some(range.pipeline) {
+                    let pipeline = match range.pipeline {
+                        0 => &self.pipeline,
+                        id => match gpu.pipelines.get(id as usize - 1) {
+                            Some(Some(p)) => p,
+                            _ => &self.pipeline,
+                        },
+                    };
+                    pass.set_pipeline(pipeline);
+                    bound_pipeline = Some(range.pipeline);
+                }
+                if bound_material != Some(range.material) {
+                    let bind = gpu
+                        .materials
+                        .get(range.material as usize)
+                        .and_then(Option::as_ref)
+                        .map_or(&self.fallback_material, |m| &m.bind);
+                    pass.set_bind_group(1, bind, &[]);
+                    bound_material = Some(range.material);
+                }
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
+            }
+        }
+        if view.sky_active {
+            pass.set_pipeline(&self.sky_pipeline);
+            pass.draw(0..3, 0..1);
+        }
+    }
+}
+
+#[derive(Default)]
+struct SkyUniform {
+    zenith: [f32; 4],
+    horizon: [f32; 4],
+    ground: [f32; 4],
+    params: [f32; 4],
+}
+
+fn material_uniform(device: &wgpu::Device, material: &Material) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("material"),
+        contents: bytemuck::bytes_of(&material.uniform()),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+/// Material uniform + its textures (defaults for missing ones) + sampler.
+fn material_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    defaults: &DefaultTextures,
+    (linear, point): (&wgpu::Sampler, &wgpu::Sampler),
+    textures: &[Option<GpuTexture>],
+    uniform: &wgpu::Buffer,
+    material: &Material,
+) -> wgpu::BindGroup {
+    let view = |handle: Option<TextureHandle>, default| {
+        handle
+            .and_then(|h| textures.get(h.0 as usize))
+            .and_then(Option::as_ref)
+            .map_or(default, |t: &GpuTexture| &t.view)
+    };
+    let entry = |binding, view| wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::TextureView(view),
+    };
+    let sampler = if material.point_filter { point } else { linear };
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("material"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            entry(1, view(material.base_texture, &defaults.base)),
+            entry(2, view(material.normal_texture, &defaults.normal)),
+            entry(3, view(material.orm_texture, &defaults.orm)),
+            entry(4, view(material.emissive_texture, &defaults.emissive)),
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+fn put<T>(slots: &mut Vec<Option<T>>, index: u32, value: T) {
+    let i = index as usize;
+    if slots.len() <= i {
+        slots.resize_with(i + 1, || None);
+    }
+    slots[i] = Some(value);
+}
+
+/// Uploads a texture with its CPU mip chain. Levels larger than
+/// `max_dimension` are skipped (the texture starts at the first that fits);
+/// invalid data becomes 1×1 magenta.
+fn upload_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    data: &TextureData,
+    max_dimension: u32,
+) -> GpuTexture {
+    let data = if data.is_valid() {
+        data.to_gpu_layout()
+    } else {
+        log::warn!(
+            "texture {}x{} {:?}: {} bytes don't match; using magenta",
+            data.width,
+            data.height,
+            data.format,
+            data.pixels.len()
+        );
+        TextureData::solid([255, 0, 255, 255], true)
+    };
+    let chain = data.mip_chain();
+    let levels: Vec<&TextureData> = std::iter::once(&data)
+        .chain(&chain)
+        .skip_while(|l| l.width > max_dimension || l.height > max_dimension)
+        .collect();
+    let base = levels[0];
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("olvin texture"),
+        size: wgpu::Extent3d {
+            width: base.width,
+            height: base.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: data.format.gpu_format(),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip, level) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(level.width * level.format.bytes_per_pixel() as u32),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    GpuTexture {
+        view: texture.create_view(&Default::default()),
+        mips: levels.len() as u32,
+        generation: 0,
     }
 }
 
@@ -547,27 +1133,43 @@ fn instance_layout(attributes: &[wgpu::VertexAttribute]) -> wgpu::VertexBufferLa
     }
 }
 
-fn create_pipeline(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    samples: u32,
-    depth: wgpu::TextureFormat,
-) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
-    let shader = device.create_shader_module(wgpu::include_wgsl!("mesh.wgsl"));
+/// Group 0 (view: globals, shadow map, sky) and group 1 (material).
+fn create_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
     let fragment = wgpu::ShaderStages::FRAGMENT;
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let texture = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: fragment,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let sampler = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: fragment,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+    let uniform = |binding, visibility, size: usize| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: wgpu::BufferSize::new(size as u64),
+        },
+        count: None,
+    };
+    let globals = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("globals"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | fragment,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(size_of::<Globals>() as u64),
-                },
-                count: None,
-            },
+            uniform(
+                0,
+                wgpu::ShaderStages::VERTEX | fragment,
+                size_of::<Globals>(),
+            ),
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: fragment,
@@ -584,22 +1186,41 @@ fn create_pipeline(
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
+            texture(3),
+            sampler(4),
         ],
     });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("mesh"),
-        bind_group_layouts: &[Some(&layout)],
-        immediate_size: 0,
+    let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("material"),
+        entries: &[
+            uniform(0, fragment, size_of::<MaterialUniform>()),
+            texture(1),
+            texture(2),
+            texture(3),
+            texture(4),
+            sampler(5),
+        ],
     });
-    let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-    let instance_attrs = wgpu::vertex_attr_array![
-        2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
+    (globals, material)
+}
+
+fn create_mesh_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    (format, samples, depth): (wgpu::TextureFormat, u32, wgpu::TextureFormat),
+) -> wgpu::RenderPipeline {
+    let vertex_attrs = wgpu::vertex_attr_array![
+        0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4
     ];
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let instance_attrs = wgpu::vertex_attr_array![
+        4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("mesh"),
-        layout: Some(&pipeline_layout),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
@@ -627,7 +1248,7 @@ fn create_pipeline(
             ..Default::default()
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -638,8 +1259,58 @@ fn create_pipeline(
         }),
         multiview_mask: None,
         cache: None,
+    })
+}
+
+/// Fullscreen triangle at the far plane: depth test LessEqual, no writes.
+fn create_sky_pipeline(
+    device: &wgpu::Device,
+    globals: &wgpu::BindGroupLayout,
+    (format, samples, depth): (wgpu::TextureFormat, u32, wgpu::TextureFormat),
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sky"),
+        source: wgpu::ShaderSource::Wgsl(sky_source().into()),
     });
-    (pipeline, layout)
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sky"),
+        bind_group_layouts: &[Some(globals)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sky"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_sky"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: depth,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_sky"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn create_shadow_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
@@ -664,7 +1335,7 @@ fn create_shadow_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu:
     });
     let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3];
     let instance_attrs =
-        wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+        wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("shadow"),
         layout: Some(&pipeline_layout),
@@ -708,7 +1379,7 @@ fn create_shadow_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Color, renderer::begin_pass};
+    use crate::{Color, Material, ShaderHandle, TextureFormat, renderer::begin_pass};
 
     const SIZE: u32 = 64;
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -733,6 +1404,9 @@ mod tests {
         gpu: GpuMeshes,
         view: ViewData,
         meshes: Meshes,
+        textures: Textures,
+        materials: Materials,
+        shaders: Shaders,
         format: wgpu::TextureFormat,
         samples: u32,
         depth: wgpu::TextureFormat,
@@ -760,6 +1434,9 @@ mod tests {
                 gpu: GpuMeshes::default(),
                 view,
                 meshes: Meshes::default(),
+                textures: Textures::default(),
+                materials: Materials::default(),
+                shaders: Shaders::default(),
                 format,
                 samples,
                 depth,
@@ -799,6 +1476,12 @@ mod tests {
         ) -> (RenderStats, impl Fn(u32, u32) -> [u8; 3] + use<>) {
             let core = &self.core;
             core.upload(&mut self.gpu, &mut self.meshes);
+            core.upload_assets(
+                &mut self.gpu,
+                &mut self.textures,
+                &mut self.materials,
+                &mut self.shaders,
+            );
             let stats = core.prepare(
                 &mut self.view,
                 &self.gpu,
@@ -920,10 +1603,7 @@ mod tests {
         let mut world = World::new();
         world.spawn((
             Transform::IDENTITY,
-            MeshRenderer {
-                mesh: cube,
-                color: Color::rgb(1.0, 0.0, 0.0),
-            },
+            MeshRenderer::new(cube, Color::rgb(1.0, 0.0, 0.0)),
         ));
         world.spawn((Transform::from_xyz(0.0, 0.0, 3.0), Camera::default()));
         let mut settings = RenderSettings {
@@ -963,13 +1643,7 @@ mod tests {
             };
             let plane = h.meshes.add(MeshData::plane(20.0));
             let mut world = World::new();
-            world.spawn((
-                Transform::IDENTITY,
-                MeshRenderer {
-                    mesh: plane,
-                    color: Color::WHITE,
-                },
-            ));
+            world.spawn((Transform::IDENTITY, MeshRenderer::new(plane, Color::WHITE)));
             world.spawn(top_down_camera(8.0));
             world.spawn((
                 Transform::from_xyz(-2.0, 0.7, 0.0),
@@ -1003,19 +1677,10 @@ mod tests {
             let plane = h.meshes.add(MeshData::plane(20.0));
             let cube = h.meshes.add(MeshData::cube(1.0));
             let mut world = World::new();
-            world.spawn((
-                Transform::IDENTITY,
-                MeshRenderer {
-                    mesh: plane,
-                    color: Color::WHITE,
-                },
-            ));
+            world.spawn((Transform::IDENTITY, MeshRenderer::new(plane, Color::WHITE)));
             world.spawn((
                 Transform::from_xyz(0.0, 1.5, 0.0),
-                MeshRenderer {
-                    mesh: cube,
-                    color: Color::WHITE,
-                },
+                MeshRenderer::new(cube, Color::WHITE),
             ));
             world.spawn(top_down_camera(8.0));
             // Travels +X and down at 45°: the cube's shadow lands on x ∈ [0.5, 2.5].
@@ -1054,13 +1719,7 @@ mod tests {
         };
         let plane = h.meshes.add(MeshData::plane(20.0));
         let mut world = World::new();
-        world.spawn((
-            Transform::IDENTITY,
-            MeshRenderer {
-                mesh: plane,
-                color: Color::WHITE,
-            },
-        ));
+        world.spawn((Transform::IDENTITY, MeshRenderer::new(plane, Color::WHITE)));
         world.spawn(top_down_camera(8.0));
         let settings = RenderSettings {
             light_dir: Vec3::NEG_Y,
@@ -1087,5 +1746,506 @@ mod tests {
         };
         let (_, at) = h.render(&world, &solid);
         assert_eq!(at(SIZE / 2, SIZE / 2), bright);
+    }
+
+    // ---- Materials, textures, skies, surface shaders.
+
+    /// No lights, no ambient, no tonemapping: pixels show material colours as is.
+    fn flat_settings() -> RenderSettings {
+        RenderSettings {
+            light_color: Color::BLACK,
+            ambient: Color::BLACK,
+            ground_ambient: Color::BLACK,
+            tonemapping: Tonemapping::None,
+            clear_color: Color::rgb(0.0, 0.0, 1.0),
+            ..Default::default()
+        }
+    }
+
+    fn unlit(texture: Option<TextureHandle>) -> Material {
+        Material {
+            base_color: Color::WHITE,
+            base_texture: texture,
+            point_filter: true,
+            unlit: true,
+            ..Default::default()
+        }
+    }
+
+    fn close(c: [u8; 3], want: [u8; 3]) -> bool {
+        c.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 6)
+    }
+
+    #[test]
+    fn textured_quad_shows_texels_at_known_uvs() {
+        for editor_like in [false, true] {
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
+            // 2×2: red green / blue white, rows top to bottom.
+            let texture = h.textures.add(TextureData::rgba8(
+                2,
+                2,
+                [
+                    [255, 0, 0, 255],
+                    [0, 255, 0, 255],
+                    [0, 0, 255, 255],
+                    [255; 4],
+                ]
+                .concat(),
+                true,
+            ));
+            let material = h.materials.add(unlit(Some(texture)));
+            let plane = h.meshes.add(MeshData::plane(4.0));
+            let mut world = World::new();
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer::new(plane, Color::WHITE).with_material(material),
+            ));
+            world.spawn(top_down_camera(8.0));
+            let (_, at) = h.render(&world, &flat_settings());
+            // Image top is -Z (the top of the screen), image left is -X.
+            let px = |x: f32, z: f32| at(column(x, 8.0), column(z, 8.0));
+            let cases = [
+                ((-1.0, -1.0), [255, 0, 0]),
+                ((1.0, -1.0), [0, 255, 0]),
+                ((-1.0, 1.0), [0, 0, 255]),
+                ((1.0, 1.0), [255, 255, 255]),
+            ];
+            for ((x, z), want) in cases {
+                let got = px(x, z);
+                assert!(
+                    close(got, want),
+                    "editor_like={editor_like} ({x}, {z}): {got:?}"
+                );
+            }
+            // Outside the plane: clear colour.
+            assert!(close(px(3.0, 0.0), [0, 0, 255]));
+        }
+    }
+
+    #[test]
+    fn roughness_and_metallic_shape_the_highlight() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let plane = h.meshes.add(MeshData::plane(20.0));
+        let red = Color::rgb(1.0, 0.0, 0.0);
+        let mut make = |roughness: f32, metallic: f32, base_color: Color| {
+            h.materials.add(Material {
+                base_color,
+                roughness,
+                metallic,
+                ..Default::default()
+            })
+        };
+        let smooth = make(0.15, 0.0, Color::WHITE);
+        let rough = make(0.9, 0.0, Color::WHITE);
+        let red_plastic = make(0.3, 0.0, red);
+        let red_metal = make(0.3, 1.0, red);
+        let settings = RenderSettings {
+            light_color: Color::BLACK,
+            ..Default::default()
+        };
+        let mut centre = |material| {
+            let mut world = World::new();
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer::new(plane, Color::WHITE).with_material(material),
+            ));
+            world.spawn(top_down_camera(8.0));
+            // Straight under the camera: the mirror direction at the centre.
+            world.spawn((
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                Light::point([1.0; 3], 1.0, 10.0),
+            ));
+            let (_, at) = h.render(&world, &settings);
+            at(SIZE / 2, SIZE / 2)
+        };
+        let (s, r) = (centre(smooth), centre(rough));
+        assert!(luma(s) > luma(r) + 100, "smooth {s:?} vs rough {r:?}");
+        // A dielectric's highlight is white; a metal's takes the base colour.
+        let (plastic, metal) = (centre(red_plastic), centre(red_metal));
+        assert!(
+            plastic[1] > metal[1] + 80 && metal[0] > 200,
+            "plastic {plastic:?} vs metal {metal:?}"
+        );
+    }
+
+    #[test]
+    fn emissive_shows_without_lights() {
+        let Some(mut h) = Harness::new(true) else {
+            return;
+        };
+        let material = h.materials.add(Material {
+            base_color: Color::BLACK,
+            emissive: [0.0, 1.0, 0.0],
+            ..Default::default()
+        });
+        let cube = h.meshes.add(MeshData::cube(1.0));
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(cube, Color::WHITE).with_material(material),
+        ));
+        world.spawn((Transform::from_xyz(0.0, 0.0, 3.0), Camera::default()));
+        let (_, at) = h.render(&world, &flat_settings());
+        let c = at(SIZE / 2, SIZE / 2);
+        assert!(close(c, [0, 255, 0]), "{c:?}");
+    }
+
+    #[test]
+    fn alpha_cutoff_discards() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        // Left texel transparent, right opaque.
+        let texture = h.textures.add(TextureData::rgba8(
+            2,
+            1,
+            vec![255, 255, 255, 0, 255, 255, 255, 255],
+            true,
+        ));
+        let material = h.materials.add(Material {
+            alpha_cutoff: 0.5,
+            ..unlit(Some(texture))
+        });
+        let plane = h.meshes.add(MeshData::plane(4.0));
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(plane, Color::WHITE).with_material(material),
+        ));
+        world.spawn(top_down_camera(8.0));
+        let (_, at) = h.render(&world, &flat_settings());
+        let (cut, kept) = (
+            at(column(-1.0, 8.0), SIZE / 2),
+            at(column(1.0, 8.0), SIZE / 2),
+        );
+        assert!(close(cut, [0, 0, 255]), "discarded: clear colour {cut:?}");
+        assert!(close(kept, [255, 255, 255]), "kept {kept:?}");
+    }
+
+    /// A camera at the origin looking down -Z (horizon across the middle row).
+    fn horizon_world() -> World {
+        let mut world = World::new();
+        world.spawn((Transform::IDENTITY, Camera::default()));
+        world
+    }
+
+    #[test]
+    fn procedural_sky_fills_the_background() {
+        for editor_like in [false, true] {
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
+            let world = horizon_world();
+            let mut settings = RenderSettings {
+                sky: SkyMode::Procedural {
+                    zenith: [0.0, 0.0, 1.0],
+                    horizon: [1.0, 0.0, 0.0],
+                    ground: [0.0, 1.0, 0.0],
+                    sun_size: 0.0,
+                },
+                ..flat_settings()
+            };
+            settings.clear_color = Color::BLACK;
+            let (stats, at) = h.render(&world, &settings);
+            assert_eq!(stats.draw_calls, 0);
+            assert!(h.view.sky_active());
+            let (top, middle, bottom) = (
+                at(SIZE / 2, 0),
+                at(SIZE / 2, SIZE / 2),
+                at(SIZE / 2, SIZE - 1),
+            );
+            assert!(
+                top[2] > top[0] + 100,
+                "editor_like={editor_like} zenith-ish top {top:?}"
+            );
+            assert!(
+                middle[0] > middle[2] + 100,
+                "horizon in the middle {middle:?}"
+            );
+            assert!(bottom[1] > bottom[0] + 100, "ground below {bottom:?}");
+
+            // A sun straight ahead: a white disc in the middle.
+            settings.light_dir = Vec3::Z;
+            settings.light_color = Color::WHITE;
+            settings.sky = SkyMode::Procedural {
+                zenith: [0.0, 0.0, 1.0],
+                horizon: [1.0, 0.0, 0.0],
+                ground: [0.0, 1.0, 0.0],
+                sun_size: 5.0,
+            };
+            let (_, at) = h.render(&world, &settings);
+            assert_eq!(at(SIZE / 2, SIZE / 2), [255, 255, 255]);
+        }
+    }
+
+    #[test]
+    fn equirect_texture_sky() {
+        for editor_like in [false, true] {
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
+            // 4×8 HDR panorama: upper half blue 2.0, lower half red 2.0.
+            let mut pixels = Vec::new();
+            for row in 0..8 {
+                let c = if row < 4 {
+                    [0.0, 0.0, 2.0, 1.0]
+                } else {
+                    [2.0, 0.0, 0.0, 1.0]
+                };
+                for _ in 0..4 {
+                    pixels.extend(c);
+                }
+            }
+            let texture = h.textures.add(TextureData::rgba32f(4, 8, &pixels));
+            let world = horizon_world();
+            let mut settings = RenderSettings {
+                sky: SkyMode::Texture {
+                    texture,
+                    rotation: 0.0,
+                    intensity: 1.0,
+                },
+                ..flat_settings()
+            };
+            let (_, at) = h.render(&world, &settings);
+            let (top, bottom) = (at(SIZE / 2, 2), at(SIZE / 2, SIZE - 3));
+            assert!(close(top, [0, 0, 255]), "editor_like={editor_like} {top:?}");
+            assert!(close(bottom, [255, 0, 0]), "{bottom:?}");
+            // HDR × intensity: 2.0 × 0.25 = 0.5 linear ≈ 188 sRGB.
+            settings.sky = SkyMode::Texture {
+                texture,
+                rotation: 0.0,
+                intensity: 0.25,
+            };
+            let (_, at) = h.render(&world, &settings);
+            let top = at(SIZE / 2, 2);
+            assert!(top[2].abs_diff(188) <= 4 && top[0] < 5, "{top:?}");
+        }
+    }
+
+    #[test]
+    fn triplanar_projects_in_world_space() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        // Red | green.
+        let texture = h.textures.add(TextureData::rgba8(
+            2,
+            1,
+            vec![255, 0, 0, 255, 0, 255, 0, 255],
+            true,
+        ));
+        let cube = h.meshes.add(MeshData::cube(4.0));
+        let triplanar = h.materials.add(Material {
+            triplanar: true,
+            // One repeat per 2 m: red on x ∈ (0, 1), green on (1, 2) and (-1, 0).
+            uv_scale: [0.5, 0.5],
+            ..unlit(Some(texture))
+        });
+        let mesh_uv = h.materials.add(unlit(Some(texture)));
+        let mut world = World::new();
+        let e = world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(cube, Color::WHITE).with_material(triplanar),
+        ));
+        world.spawn(top_down_camera(8.0));
+        let settings = flat_settings();
+        // The top face is 6 m from the camera.
+        let (_, at) = h.render(&world, &settings);
+        let px = |x: f32| at(column(x, 6.0), SIZE / 2);
+        assert!(close(px(0.5), [255, 0, 0]), "{:?}", px(0.5));
+        assert!(close(px(1.5), [0, 255, 0]), "{:?}", px(1.5));
+        assert!(close(px(-0.5), [0, 255, 0]), "{:?}", px(-0.5));
+        // Mesh UVs instead: the face maps the texture once (left red, right green).
+        world.get::<&mut MeshRenderer>(e).unwrap().material = Some(mesh_uv);
+        let (_, at) = h.render(&world, &settings);
+        let px = |x: f32| at(column(x, 6.0), SIZE / 2);
+        assert!(close(px(0.5), [0, 255, 0]) && close(px(-0.5), [255, 0, 0]));
+    }
+
+    #[test]
+    fn normal_map_tilts_towards_tangent_and_image_up() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let plane = h.meshes.add(MeshData::plane(20.0));
+        let encode = |n: Vec3| {
+            let n = n.normalize();
+            [n.x, n.y, n.z].map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8)
+        };
+        let mut map = |n: Vec3| {
+            let [r, g, b] = encode(n);
+            let t = h
+                .textures
+                .add(TextureData::rgba8(1, 1, vec![r, g, b, 255], false));
+            h.materials.add(Material {
+                base_color: Color::WHITE,
+                normal_texture: Some(t),
+                ..Default::default()
+            })
+        };
+        // Tangent space: +x = +u = world +X; +y = image up = world -Z on the plane.
+        let towards_u = map(Vec3::new(1.0, 0.0, 1.0));
+        let towards_up = map(Vec3::new(0.0, 1.0, 1.0));
+        let flat = h.materials.add(Material {
+            base_color: Color::WHITE,
+            ..Default::default()
+        });
+        let mut lit = |material, light_dir: Vec3| {
+            let mut world = World::new();
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer::new(plane, Color::WHITE).with_material(material),
+            ));
+            world.spawn(top_down_camera(8.0));
+            let settings = RenderSettings {
+                light_dir,
+                ambient: Color::BLACK,
+                ground_ambient: Color::BLACK,
+                ..Default::default()
+            };
+            let (_, at) = h.render(&world, &settings);
+            luma(at(column(-2.0, 8.0), column(-2.0, 8.0)))
+        };
+        // Grazing light from +X (travelling -X) and from -Z (travelling +Z).
+        let from_x = Vec3::new(-1.0, -0.15, 0.0);
+        let from_neg_z = Vec3::new(0.0, -0.15, 1.0);
+        let (flat_x, tilted_x) = (lit(flat, from_x), lit(towards_u, from_x));
+        assert!(
+            tilted_x > flat_x + 150,
+            "towards +u: {tilted_x} vs {flat_x}"
+        );
+        let (flat_z, tilted_z) = (lit(flat, from_neg_z), lit(towards_up, from_neg_z));
+        assert!(
+            tilted_z > flat_z + 150,
+            "towards image up: {tilted_z} vs {flat_z}"
+        );
+    }
+
+    const MAGENTA_SURFACE: &str = "fn surface(in: SurfaceInput) -> SurfaceOutput {
+    var out = default_surface(in);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.emissive = vec3<f32>(1.0, 0.0, 1.0);
+    return out;
+}
+";
+
+    /// A cube drawn with `shader`; returns the centre pixel.
+    fn shaded_cube(h: &mut Harness, shader: ShaderHandle) -> [u8; 3] {
+        let material = h.materials.add(Material {
+            shader: Some(shader),
+            ..Default::default()
+        });
+        let cube = h.meshes.add(MeshData::cube(1.0));
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(cube, Color::WHITE).with_material(material),
+        ));
+        // A plain cube too, so both pipelines draw in one pass.
+        world.spawn((
+            Transform::from_xyz(5.0, 0.0, 0.0),
+            MeshRenderer::new(cube, Color::WHITE),
+        ));
+        world.spawn((Transform::from_xyz(0.0, 0.0, 3.0), Camera::default()));
+        let settings = RenderSettings {
+            light_dir: Vec3::NEG_Z,
+            ..flat_settings()
+        };
+        let (_, at) = h.render(&world, &settings);
+        at(SIZE / 2, SIZE / 2)
+    }
+
+    #[test]
+    fn custom_surface_shader_outputs_its_colour() {
+        for editor_like in [false, true] {
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
+            let shader = h.shaders.add(MAGENTA_SURFACE.into());
+            assert_eq!(h.shaders.error(shader), None);
+            let c = shaded_cube(&mut h, shader);
+            assert!(close(c, [255, 0, 255]), "editor_like={editor_like}: {c:?}");
+        }
+    }
+
+    #[test]
+    fn broken_surface_shader_reports_and_keeps_the_last_good_pipeline() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let broken = "fn surface(in: SurfaceInput) -> SurfaceOutput {\n    return 1.0;\n}\n";
+        // Never compiled: the built-in pipeline draws instead, no panic.
+        let shader = h.shaders.add(broken.into());
+        let err = h.shaders.error(shader).expect("an error");
+        assert!(
+            err.contains("return 1.0") && !err.contains("template"),
+            "{err}"
+        );
+        let c = shaded_cube(&mut h, shader);
+        // No lights in these settings: the built-in grey material is black.
+        assert!(close(c, [0, 0, 0]), "built-in look: {c:?}");
+        // Good, then broken again: the good pipeline stays.
+        h.shaders.set(shader, MAGENTA_SURFACE.into());
+        assert!(close(shaded_cube(&mut h, shader), [255, 0, 255]));
+        h.shaders.set(shader, broken.into());
+        assert!(h.shaders.error(shader).is_some());
+        assert!(close(shaded_cube(&mut h, shader), [255, 0, 255]));
+    }
+
+    #[test]
+    fn mip_chain_reaches_the_gpu_and_big_textures_shrink_to_fit() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let data = TextureData::rgba8(8, 4, vec![200; 8 * 4 * 4], true);
+        let t = upload_texture(&device, &queue, &data, u32::MAX);
+        assert_eq!(t.mips, TextureData::mip_count(8, 4));
+        assert_eq!(t.view.texture().mip_level_count(), 4);
+        // Over the limit: starts at the first level that fits.
+        let t = upload_texture(&device, &queue, &data, 2);
+        assert_eq!(t.mips, 2);
+        assert_eq!(t.view.texture().width(), 2);
+        // Bad data: a 1×1 stand-in instead of a panic.
+        let bad = TextureData {
+            format: TextureFormat::Rgba16Float,
+            ..data
+        };
+        assert_eq!(upload_texture(&device, &queue, &bad, u32::MAX).mips, 1);
+    }
+
+    #[test]
+    fn fog_fades_into_the_sky_at_the_horizon() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let plane = h.meshes.add(MeshData::plane(400.0));
+        let mut world = World::new();
+        world.spawn((
+            Transform::from_xyz(0.0, -1.0, 0.0),
+            MeshRenderer::new(plane, Color::WHITE),
+        ));
+        world.spawn((Transform::IDENTITY, Camera::default()));
+        let settings = RenderSettings {
+            sky: SkyMode::Procedural {
+                zenith: [0.0, 0.0, 1.0],
+                horizon: [1.0, 0.0, 0.0],
+                ground: [0.0, 1.0, 0.0],
+                sun_size: 0.0,
+            },
+            fog: Some(crate::Fog {
+                color: Color::rgb(0.0, 1.0, 0.0),
+                start: 0.0,
+                end: 1.0,
+            }),
+            ..flat_settings()
+        };
+        let (_, at) = h.render(&world, &settings);
+        // The floor just below the horizon is fully fogged: horizon red, not fog green.
+        let c = at(SIZE / 2, SIZE / 2 + 4);
+        assert!(close(c, [255, 0, 0]), "{c:?}");
     }
 }

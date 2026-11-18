@@ -139,7 +139,7 @@ fn new_brushes(ui: &mut egui::Ui) {
                     shape_editor(ui, &mut s.shape);
                     ui.end_row();
                     ui.label("Color");
-                    ui.color_edit_button_rgba_unmultiplied(&mut s.color);
+                    olvin_editor::widgets::color_rgba(ui, &mut s.color);
                     ui.end_row();
                 });
         });

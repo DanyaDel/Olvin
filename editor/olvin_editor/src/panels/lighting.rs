@@ -37,16 +37,16 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
     section(ui, "🌤 Environment", None, |ui| {
         grid(ui, "env", |ui| {
             row(ui, "Sky", |ui| {
-                ui.color_edit_button_rgb(&mut env.sky);
+                crate::widgets::color_rgb(ui, &mut env.sky);
             });
             row(ui, "Ground", |ui| {
-                ui.color_edit_button_rgb(&mut env.ground);
+                crate::widgets::color_rgb(ui, &mut env.ground);
             });
             row(ui, "Intensity", |ui| {
                 drag(ui, &mut env.ambient_intensity, 0.0..=8.0, 0.01, "")
             });
             row(ui, "Background", |ui| {
-                ui.color_edit_button_rgb(&mut env.background);
+                crate::widgets::color_rgb(ui, &mut env.background);
             });
         });
     });
@@ -73,7 +73,7 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
         if let Some(fog) = &mut env.fog {
             grid(ui, "fog", |ui| {
                 row(ui, "Color", |ui| {
-                    ui.color_edit_button_rgb(&mut fog.color);
+                    crate::widgets::color_rgb(ui, &mut fog.color);
                     if ui.small_button("= Background").clicked() {
                         fog.color = env.background;
                     }
@@ -167,7 +167,7 @@ fn lights(ui: &mut egui::Ui, state: &mut EditorState) {
                             .speed(0.02)
                             .max_decimals(2),
                     );
-                    ui.color_edit_button_rgb(&mut l.color);
+                    crate::widgets::color_rgb(ui, &mut l.color);
                 });
             });
         }
@@ -216,13 +216,13 @@ fn sky_ui(ui: &mut egui::Ui, env: &mut Environment, textures: &[String]) {
             } => {
                 grid(ui, "sky-proc", |ui| {
                     row(ui, "Zenith", |ui| {
-                        ui.color_edit_button_rgb(zenith);
+                        crate::widgets::color_rgb(ui, zenith);
                     });
                     row(ui, "Horizon", |ui| {
-                        ui.color_edit_button_rgb(horizon);
+                        crate::widgets::color_rgb(ui, horizon);
                     });
                     row(ui, "Ground", |ui| {
-                        ui.color_edit_button_rgb(ground);
+                        crate::widgets::color_rgb(ui, ground);
                     });
                     row(ui, "Sun size", |ui| {
                         drag(ui, sun_size, 0.0..=20.0, 0.05, "°")

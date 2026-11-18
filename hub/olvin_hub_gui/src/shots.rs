@@ -3,7 +3,7 @@
 //!
 //! ```sh
 //! __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json WGPU_BACKEND=gl \
-//! OLVIN_HUB_SHOTS=/some/dir cargo test -p olvin_hub_gui -- --ignored screenshots
+//! OLVIN_HUB_SHOTS=/some/dir [OLVIN_HUB_SHOTS_ROOT=/tmp/olvin-demo] cargo test -p olvin_hub_gui -- --ignored screenshots
 //! ```
 
 use std::fs;
@@ -75,7 +75,13 @@ fn screenshots() {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/hub-shots")
         });
     fs::create_dir_all(&out).unwrap();
-    let tmp = std::env::temp_dir().join(format!("olvin-hub-shots-{}", std::process::id()));
+    // OLVIN_HUB_SHOTS_ROOT: where the demo projects live, so README shots can
+    // show a tidy path instead of a pid-suffixed temp dir.
+    let tmp = std::env::var_os("OLVIN_HUB_SHOTS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("olvin-hub-shots-{}", std::process::id()))
+        });
     let projects = demo_projects(&tmp.join("projects"));
 
     #[derive(Clone, Copy)]

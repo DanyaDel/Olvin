@@ -13,9 +13,12 @@ mod render;
 pub mod settings;
 mod state;
 pub mod theme;
+pub mod widgets;
 mod workspace;
 
+pub use app::EditorApp;
 pub use registry::{EditorPlugin, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate};
+pub use render::{DEPTH_FORMAT, MSAA};
 pub use state::{EditorState, LogLevel, LogLine, NewEntity, SnapSettings, tools};
 pub use workspace::Tab;
 
@@ -34,6 +37,34 @@ fn window_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(PNG).expect("olvin-icon-256.png is not a valid PNG")
 }
 
+/// The base panels plus everything `plugins` add.
+pub fn registry(plugins: &[Box<dyn EditorPlugin>]) -> Registry {
+    let mut registry = Registry::default();
+    panels::register(&mut registry);
+    for plugin in plugins {
+        registry.plugins.push(plugin.name());
+        plugin.build(&mut registry);
+    }
+    registry
+}
+
+/// The editor app inside eframe's creation context: theme, GPU scene view
+/// resources, panels. The context needs the wgpu renderer with
+/// [`DEPTH_FORMAT`] depth and [`MSAA`] samples, like [`run`] sets up.
+pub fn build_app(
+    cc: &eframe::CreationContext<'_>,
+    registry: Registry,
+    project: Option<std::path::PathBuf>,
+) -> Result<EditorApp, &'static str> {
+    theme::apply(&cc.egui_ctx);
+    let gpu = cc
+        .wgpu_render_state
+        .as_ref()
+        .ok_or("olvin-editor needs the wgpu renderer")?;
+    render::init(gpu);
+    Ok(EditorApp::new(registry, project, Some(gpu.clone())))
+}
+
 /// Starts the editor. The first command-line argument is the project folder.
 pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
     let project = std::env::args_os()
@@ -48,12 +79,7 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
     }
     logging.init();
 
-    let mut registry = Registry::default();
-    panels::register(&mut registry);
-    for plugin in &plugins {
-        registry.plugins.push(plugin.name());
-        plugin.build(&mut registry);
-    }
+    let registry = registry(&plugins);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -71,19 +97,7 @@ pub fn run(plugins: Vec<Box<dyn EditorPlugin>>) {
     let result = eframe::run_native(
         "olvin-editor",
         options,
-        Box::new(move |cc| {
-            theme::apply(&cc.egui_ctx);
-            let gpu = cc
-                .wgpu_render_state
-                .as_ref()
-                .ok_or("olvin-editor needs the wgpu renderer")?;
-            render::init(gpu);
-            Ok(Box::new(app::EditorApp::new(
-                registry,
-                project,
-                Some(gpu.clone()),
-            )))
-        }),
+        Box::new(move |cc| Ok(Box::new(build_app(cc, registry, project)?))),
     );
     if let Err(err) = result {
         eprintln!("olvin-editor: {err}");

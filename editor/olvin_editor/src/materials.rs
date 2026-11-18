@@ -171,7 +171,7 @@ pub fn material_ui(
     let before = m.clone();
     grid(ui, "material", |ui| {
         row(ui, "Base Color", |ui| {
-            ui.color_edit_button_rgba_unmultiplied(&mut m.base_color);
+            crate::widgets::color_rgba(ui, &mut m.base_color);
             asset_combo(ui, "mat-base", &mut m.base_texture, textures);
         });
         row(ui, "Metallic", |ui| {
@@ -194,7 +194,7 @@ pub fn material_ui(
             asset_combo(ui, "mat-orm", &mut m.orm_texture, textures);
         });
         row(ui, "Emission", |ui| {
-            ui.color_edit_button_rgb(&mut m.emissive);
+            crate::widgets::color_rgb(ui, &mut m.emissive);
             asset_combo(ui, "mat-emissive", &mut m.emissive_texture, textures);
         });
         row(ui, "Tiling", |ui| {

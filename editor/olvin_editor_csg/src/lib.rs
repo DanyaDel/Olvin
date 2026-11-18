@@ -236,7 +236,7 @@ fn brush_inspector(ui: &mut egui::Ui, e: &mut EntityDesc) {
             shape_editor(ui, &mut brush.shape);
             ui.end_row();
             ui.label("Color");
-            ui.color_edit_button_rgba_unmultiplied(&mut brush.color);
+            olvin_editor::widgets::color_rgba(ui, &mut brush.color);
             ui.end_row();
         });
     ui.weak("Size = Scale. Operations apply in hierarchy order.");

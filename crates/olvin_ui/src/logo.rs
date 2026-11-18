@@ -344,6 +344,9 @@ mod tests {
     #[test]
     fn blink_follows_step_end() {
         let ctx = egui::Context::default();
+        // Explicit: a fresh context falls back to the process-wide last value,
+        // which tests running in parallel may have switched on.
+        crate::set_reduce_motion(&ctx, false);
         let mut seen = Vec::new();
         for t in [0.1, 0.6, 1.2, 1.7] {
             run(&ctx, t, |ui| seen.push(cursor_visible(ui.ctx())));

@@ -19,3 +19,8 @@ olvin_editor_csg = { path = "../../editor/olvin_editor_csg" }
 olvin_editor_modeling = { path = "../../editor/olvin_editor_modeling" }
 olvin_editor_uv = { path = "../../editor/olvin_editor_uv" }
 olvin_editor_ide = { path = "../../editor/olvin_editor_ide" }
+
+[dev-dependencies]
+eframe.workspace = true
+egui_kittest = { version = "0.36", features = ["wgpu", "eframe"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

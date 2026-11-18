@@ -179,7 +179,7 @@ impl Panel for Inspector {
                                     });
                             });
                             row(ui, "Color", |ui| {
-                                ui.color_edit_button_rgba_unmultiplied(&mut mesh.color);
+                                crate::widgets::color_rgba(ui, &mut mesh.color);
                             });
                         });
                     });
@@ -519,7 +519,7 @@ fn light_ui(ui: &mut egui::Ui, l: &mut LightDesc) {
                 });
         });
         row(ui, "Color", |ui| {
-            ui.color_edit_button_rgb(&mut l.color);
+            crate::widgets::color_rgb(ui, &mut l.color);
         });
         row(ui, "Intensity", |ui| {
             drag(ui, &mut l.intensity, 0.0..=100.0, 0.01, "")

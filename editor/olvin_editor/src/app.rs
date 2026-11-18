@@ -82,6 +82,29 @@ impl EditorApp {
         }
     }
 
+    /// The scene, selection and preferences, for tools that drive the editor
+    /// without a window (headless screenshots).
+    pub fn state_mut(&mut self) -> &mut EditorState {
+        &mut self.state
+    }
+
+    /// Default workspaces instead of the user's saved layout.
+    pub fn reset_layout(&mut self) {
+        self.layout = Layout::default_for(&self.registry);
+        self.panels.clear();
+    }
+
+    /// Switches to the workspace called `name`; false if there is none.
+    pub fn show_workspace(&mut self, name: &str) -> bool {
+        match self.layout.workspaces.iter().position(|w| w.name == name) {
+            Some(i) => {
+                self.layout.active = i;
+                true
+            }
+            None => false,
+        }
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
         let shortcut = |m, k| KeyboardShortcut::new(m, k);
@@ -750,6 +773,7 @@ impl EditorApp {
             .fill(palette.bg)
             .inner_margin(egui::Margin::symmetric(10, 6));
         egui::Panel::top("top").frame(bar).show(ui, |ui| {
+            let mut tabs_end = 0.0;
             egui::MenuBar::new().ui(ui, |ui| {
                 // The wordmark, painted from the logo geometry (STYLE.md §9).
                 ui.add_space(2.0);
@@ -758,6 +782,7 @@ impl EditorApp {
                 self.menus(ui);
                 ui.add_space(10.0);
                 self.workspace_tabs(ui);
+                tabs_end = ui.cursor().left();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let open = self.state.settings_page.is_some();
                     if ui
@@ -773,11 +798,16 @@ impl EditorApp {
                     }
                 });
             });
-            // Play controls centred over the window, like Unity.
-            let center = egui::Rect::from_center_size(
+            // Play controls centred over the window, like Unity; pushed right
+            // when the workspace tabs reach the centre so they never overlap.
+            let mut center = egui::Rect::from_center_size(
                 ui.max_rect().center(),
                 egui::vec2(124.0, ui.max_rect().height()),
             );
+            let min_left = tabs_end + 16.0;
+            if center.left() < min_left {
+                center = center.translate(egui::vec2(min_left - center.left(), 0.0));
+            }
             ui.scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(center)

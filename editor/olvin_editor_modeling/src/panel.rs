@@ -176,7 +176,7 @@ fn brush_section(ui: &mut egui::Ui, state: &mut EditorState) {
         });
         ui.horizontal(|ui| {
             ui.label("Color");
-            ui.color_edit_button_rgba_unmultiplied(&mut brush.color);
+            olvin_editor::widgets::color_rgba(ui, &mut brush.color);
         });
         ui.horizontal(|ui| {
             if modelled

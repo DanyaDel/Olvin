@@ -1086,6 +1086,9 @@ dependencies = [
 name = "editor_dev"
 version = "0.1.0"
 dependencies = [
+ "eframe",
+ "egui_kittest",
+ "image",
  "olvin_editor",
  "olvin_editor_animator",
  "olvin_editor_console",

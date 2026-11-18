@@ -15,7 +15,10 @@ use olvin_scene::{Camera, Transform};
 use olvin_transform::GlobalTransform;
 
 use crate::light::{CameraInfo, LightList, MAX_LIGHTS, PackedLight, fit_shadow};
-use crate::{Frustum, Light, LightKind, MeshData, MeshRenderer, Meshes, RenderSettings, RenderStats, Tonemapping, Vertex};
+use crate::{
+    Frustum, Light, LightKind, MeshData, MeshRenderer, Meshes, RenderSettings, RenderStats,
+    Tonemapping, Vertex,
+};
 
 const MIN_INSTANCE_CAPACITY: usize = 1024;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -88,7 +91,12 @@ impl InstanceSet {
     }
 
     /// Packs the buckets through `staging` (reused scratch) and uploads them.
-    fn finish(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, staging: &mut Vec<InstanceRaw>) {
+    fn finish(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        staging: &mut Vec<InstanceRaw>,
+    ) {
         staging.clear();
         self.ranges.clear();
         for (i, bucket) in self.buckets.iter().enumerate() {
@@ -111,7 +119,9 @@ impl InstanceSet {
     fn draw(&self, gpu: &GpuMeshes, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_vertex_buffer(1, self.buffer.slice(..));
         for (i, range) in &self.ranges {
-            let Some(Some(mesh)) = gpu.meshes.get(*i) else { continue };
+            let Some(Some(mesh)) = gpu.meshes.get(*i) else {
+                continue;
+            };
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, range.clone());
@@ -176,7 +186,17 @@ impl RenderCore {
             ..Default::default()
         });
         let dummy_shadow = shadow_texture(&device, 1);
-        Self { device, queue, pipeline, layout, shadow_pipeline, shadow_layout, shadow_sampler, dummy_shadow, encode_srgb: !color.is_srgb() }
+        Self {
+            device,
+            queue,
+            pipeline,
+            layout,
+            shadow_pipeline,
+            shadow_layout,
+            shadow_sampler,
+            dummy_shadow,
+            encode_srgb: !color.is_srgb(),
+        }
     }
 
     pub fn create_view(&self) -> ViewData {
@@ -194,7 +214,10 @@ impl RenderCore {
         let shadow_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("olvin shadow globals"),
             layout: &self.shadow_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: shadow_globals.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shadow_globals.as_entire_binding(),
+            }],
         });
         ViewData {
             globals,
@@ -209,14 +232,27 @@ impl RenderCore {
         }
     }
 
-    fn main_bind_group(&self, globals: &wgpu::Buffer, shadow: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn main_bind_group(
+        &self,
+        globals: &wgpu::Buffer,
+        shadow: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("olvin globals"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(shadow) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(shadow),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
             ],
         })
     }
@@ -228,16 +264,20 @@ impl RenderCore {
             let MeshData { vertices, indices } = &data;
             let (center, radius) = data.bounding_sphere();
             let mesh = GpuMesh {
-                vertices: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh vertices"),
-                    contents: bytemuck::cast_slice::<Vertex, u8>(vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                indices: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh indices"),
-                    contents: bytemuck::cast_slice::<u32, u8>(indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
+                vertices: self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh vertices"),
+                        contents: bytemuck::cast_slice::<Vertex, u8>(vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                indices: self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh indices"),
+                        contents: bytemuck::cast_slice::<u32, u8>(indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
                 index_count: indices.len() as u32,
                 center,
                 radius,
@@ -270,8 +310,12 @@ impl RenderCore {
         // Lights.
         let mut sun: Option<(Vec3, Vec3, bool)> = None;
         let mut lights = LightList::new();
-        for (light, global, transform) in world.query::<(&Light, Option<&GlobalTransform>, Option<&Transform>)>().iter() {
-            let m = global.map(|g| g.0).or_else(|| transform.map(Transform::matrix)).unwrap_or(Mat4::IDENTITY);
+        let mut query = world.query::<(&Light, Option<&GlobalTransform>, Option<&Transform>)>();
+        for (light, global, transform) in query.iter().filter(|_| settings.scene_lights) {
+            let m = global
+                .map(|g| g.0)
+                .or_else(|| transform.map(Transform::matrix))
+                .unwrap_or(Mat4::IDENTITY);
             let dir = m.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Y);
             let pos = m.w_axis.truncate();
             let score = match light.kind {
@@ -316,13 +360,26 @@ impl RenderCore {
         view.main.begin(gpu.meshes.len());
         view.shadow.begin(gpu.meshes.len());
         let mut culled = 0;
-        for (global, transform, renderer) in world.query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>().iter() {
+        for (global, transform, renderer) in world
+            .query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>()
+            .iter()
+        {
             let i = renderer.mesh.0 as usize;
-            let Some(Some(mesh)) = gpu.meshes.get(i) else { continue };
+            let Some(Some(mesh)) = gpu.meshes.get(i) else {
+                continue;
+            };
             let model = global.map_or_else(|| transform.matrix(), |g| g.0);
-            let scale = model.x_axis.truncate().length().max(model.y_axis.truncate().length()).max(model.z_axis.truncate().length());
+            let scale = model
+                .x_axis
+                .truncate()
+                .length()
+                .max(model.y_axis.truncate().length())
+                .max(model.z_axis.truncate().length());
             let (center, radius) = (model.transform_point3(mesh.center), mesh.radius * scale);
-            let instance = InstanceRaw { model: model.to_cols_array_2d(), color: renderer.color.0 };
+            let instance = InstanceRaw {
+                model: model.to_cols_array_2d(),
+                color: renderer.color.0,
+            };
             if let Some(f) = &shadow_frustum
                 && f.intersects_sphere(center, radius)
             {
@@ -334,9 +391,11 @@ impl RenderCore {
                 culled += 1;
             }
         }
-        view.main.finish(&self.device, &self.queue, &mut view.staging);
+        view.main
+            .finish(&self.device, &self.queue, &mut view.staging);
         if view.shadow_active {
-            view.shadow.finish(&self.device, &self.queue, &mut view.staging);
+            view.shadow
+                .finish(&self.device, &self.queue, &mut view.staging);
         }
 
         // Uniforms.
@@ -351,8 +410,12 @@ impl RenderCore {
             view_plane: cam.view_plane.into(),
             sun_dir: sun_dir.extend(flag(view.shadow_active)).into(),
             sun_color: sun_color.extend(flag(self.encode_srgb)).into(),
-            sky: rgb(settings.ambient.0).extend(settings.exposure.max(0.0)).into(),
-            ground: rgb(settings.ground_ambient.0).extend(lights.len as f32).into(),
+            sky: rgb(settings.ambient.0)
+                .extend(settings.exposure.max(0.0))
+                .into(),
+            ground: rgb(settings.ground_ambient.0)
+                .extend(lights.len as f32)
+                .into(),
             fog_color: fog.map_or([0.0; 4], |f| rgb(f.color.0).extend(1.0).into()),
             params: [
                 fog.map_or(0.0, |f| f.start),
@@ -368,28 +431,47 @@ impl RenderCore {
             ],
             lights: lights.lights,
         };
-        self.queue.write_buffer(&view.globals, 0, bytemuck::bytes_of(&globals));
+        self.queue
+            .write_buffer(&view.globals, 0, bytemuck::bytes_of(&globals));
         if view.shadow_active {
-            self.queue.write_buffer(&view.shadow_globals, 0, bytemuck::bytes_of(&shadow_view_proj.to_cols_array_2d()));
+            self.queue.write_buffer(
+                &view.shadow_globals,
+                0,
+                bytemuck::bytes_of(&shadow_view_proj.to_cols_array_2d()),
+            );
         }
 
-        RenderStats { draw_calls: view.main.ranges.len() as u32, instances: view.main.count, culled }
+        RenderStats {
+            draw_calls: view.main.ranges.len() as u32,
+            instances: view.main.count,
+            culled,
+        }
     }
 
     /// Records the sun's shadow-map pass (depth only) for `view`. Call after
     /// `prepare` and before the pass that `draw`s this view; does nothing
     /// when shadows are off.
-    pub fn render_shadows(&self, view: &ViewData, gpu: &GpuMeshes, encoder: &mut wgpu::CommandEncoder) {
+    pub fn render_shadows(
+        &self,
+        view: &ViewData,
+        gpu: &GpuMeshes,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if !view.shadow_active {
             return;
         }
-        let Some((map, _)) = &view.shadow_map else { return };
+        let Some((map, _)) = &view.shadow_map else {
+            return;
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("olvin shadows"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: map,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
                 stencil_ops: None,
             }),
             ..Default::default()
@@ -419,10 +501,14 @@ fn rgb(c: [f32; 4]) -> Vec3 {
 
 /// View-projection of the first camera in the world.
 pub fn camera_view_proj(world: &World, aspect: f32) -> Option<Mat4> {
-    world.query::<(Option<&GlobalTransform>, &Transform, &Camera)>().iter().next().map(|(g, t, c)| {
-        let pose = g.map_or(*t, GlobalTransform::to_transform);
-        c.projection(aspect) * Camera::view(&pose)
-    })
+    world
+        .query::<(Option<&GlobalTransform>, &Transform, &Camera)>()
+        .iter()
+        .next()
+        .map(|(g, t, c)| {
+            let pose = g.map_or(*t, GlobalTransform::to_transform);
+            c.projection(aspect) * Camera::view(&pose)
+        })
 }
 
 fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -438,7 +524,11 @@ fn shadow_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("olvin shadow map"),
-            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -450,7 +540,11 @@ fn shadow_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
 }
 
 fn instance_layout(attributes: &[wgpu::VertexAttribute]) -> wgpu::VertexBufferLayout<'_> {
-    wgpu::VertexBufferLayout { array_stride: size_of::<InstanceRaw>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes }
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<InstanceRaw>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes,
+    }
 }
 
 fn create_pipeline(
@@ -517,7 +611,10 @@ fn create_pipeline(
                 Some(instance_layout(&instance_attrs)),
             ],
         },
-        primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+        primitive: wgpu::PrimitiveState {
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: depth,
             depth_write_enabled: Some(true),
@@ -525,12 +622,19 @@ fn create_pipeline(
             stencil: Default::default(),
             bias: Default::default(),
         }),
-        multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         multiview_mask: None,
         cache: None,
@@ -559,7 +663,8 @@ fn create_shadow_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu:
         immediate_size: 0,
     });
     let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3];
-    let instance_attrs = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+    let instance_attrs =
+        wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("shadow"),
         layout: Some(&pipeline_layout),
@@ -576,14 +681,21 @@ fn create_shadow_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu:
                 Some(instance_layout(&instance_attrs)),
             ],
         },
-        primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+        primitive: wgpu::PrimitiveState {
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: SHADOW_FORMAT,
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
             // Slope-scaled bias; the shader adds a normal offset on top.
-            bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.0, clamp: 0.0 },
+            bias: wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            },
         }),
         multisample: Default::default(),
         fragment: None,
@@ -602,10 +714,12 @@ mod tests {
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+            required_limits:
+                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
         .ok()
@@ -631,21 +745,42 @@ mod tests {
                 return None;
             };
             let (format, samples, depth) = if editor_like {
-                (wgpu::TextureFormat::Rgba8Unorm, 4, wgpu::TextureFormat::Depth32Float)
+                (
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    4,
+                    wgpu::TextureFormat::Depth32Float,
+                )
             } else {
                 (FORMAT, 1, wgpu::TextureFormat::Depth24Plus)
             };
             let core = RenderCore::new(device, queue, format, samples, depth);
             let view = core.create_view();
-            Some(Self { core, gpu: GpuMeshes::default(), view, meshes: Meshes::default(), format, samples, depth })
+            Some(Self {
+                core,
+                gpu: GpuMeshes::default(),
+                view,
+                meshes: Meshes::default(),
+                format,
+                samples,
+                depth,
+            })
         }
 
-        fn texture(&self, format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages) -> wgpu::TextureView {
+        fn texture(
+            &self,
+            format: wgpu::TextureFormat,
+            samples: u32,
+            usage: wgpu::TextureUsages,
+        ) -> wgpu::TextureView {
             self.core
                 .device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: None,
-                    size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+                    size: wgpu::Extent3d {
+                        width: SIZE,
+                        height: SIZE,
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
@@ -657,15 +792,29 @@ mod tests {
         }
 
         /// Renders the world's camera view; returns RGB at (x, y).
-        fn render(&mut self, world: &World, settings: &RenderSettings) -> (RenderStats, impl Fn(u32, u32) -> [u8; 3] + use<>) {
+        fn render(
+            &mut self,
+            world: &World,
+            settings: &RenderSettings,
+        ) -> (RenderStats, impl Fn(u32, u32) -> [u8; 3] + use<>) {
             let core = &self.core;
             core.upload(&mut self.gpu, &mut self.meshes);
-            let stats = core.prepare(&mut self.view, &self.gpu, world, camera_view_proj(world, 1.0).unwrap(), settings);
+            let stats = core.prepare(
+                &mut self.view,
+                &self.gpu,
+                world,
+                camera_view_proj(world, 1.0).unwrap(),
+                settings,
+            );
 
             let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
             let resolved = core.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
-                size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -696,11 +845,17 @@ mod tests {
                         view: &msaa,
                         depth_slice: None,
                         resolve_target: Some(&resolved_view),
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }), store: wgpu::StoreOp::Discard },
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+                            store: wgpu::StoreOp::Discard,
+                        },
                     })],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &depth,
-                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
                         stencil_ops: None,
                     }),
                     ..Default::default()
@@ -711,13 +866,25 @@ mod tests {
                 resolved.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
                     buffer: &readback,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SIZE * 4), rows_per_image: None },
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(SIZE * 4),
+                        rows_per_image: None,
+                    },
                 },
-                wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
             );
             core.queue.submit([encoder.finish()]);
-            readback.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
-            core.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            core.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
             let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
             (stats, move |x: u32, y: u32| {
                 let i = ((y * SIZE + x) * 4) as usize;
@@ -734,7 +901,10 @@ mod tests {
     }
 
     fn top_down_camera(height: f32) -> (Transform, Camera) {
-        (Transform::from_xyz(0.0, height, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z), Camera::default())
+        (
+            Transform::from_xyz(0.0, height, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+            Camera::default(),
+        )
     }
 
     fn luma(c: [u8; 3]) -> u32 {
@@ -743,41 +913,83 @@ mod tests {
 
     #[test]
     fn renders_a_lit_cube_offscreen() {
-        let Some(mut h) = Harness::new(false) else { return };
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
         let cube = h.meshes.add(MeshData::cube(1.0));
         let mut world = World::new();
-        world.spawn((Transform::IDENTITY, MeshRenderer { mesh: cube, color: Color::rgb(1.0, 0.0, 0.0) }));
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer {
+                mesh: cube,
+                color: Color::rgb(1.0, 0.0, 0.0),
+            },
+        ));
         world.spawn((Transform::from_xyz(0.0, 0.0, 3.0), Camera::default()));
-        let mut settings = RenderSettings { light_dir: Vec3::new(0.0, 0.0, -1.0), clear_color: Color::rgb(0.0, 0.0, 1.0), ..Default::default() };
+        let mut settings = RenderSettings {
+            light_dir: Vec3::new(0.0, 0.0, -1.0),
+            clear_color: Color::rgb(0.0, 0.0, 1.0),
+            ..Default::default()
+        };
         let (stats, at) = h.render(&world, &settings);
         assert_eq!((stats.draw_calls, stats.instances), (1, 1));
         let lit = at(SIZE / 2, SIZE / 2);
         // Red dominates; the dielectric highlight may tint green/blue a little.
-        assert!(lit[0] > 200 && lit[1] < 120 && lit[2] < 120 && lit[0] > lit[1] + 100, "lit red cube in the middle: {lit:?}");
+        assert!(
+            lit[0] > 200 && lit[1] < 120 && lit[2] < 120 && lit[0] > lit[1] + 100,
+            "lit red cube in the middle: {lit:?}"
+        );
         let corner = at(1, 1);
-        assert!(corner[2] > 200 && corner[0] < 30, "clear colour in the corner: {corner:?}");
+        assert!(
+            corner[2] > 200 && corner[0] < 30,
+            "clear colour in the corner: {corner:?}"
+        );
 
         // Light from behind: only ambient on the visible face.
         settings.light_dir = Vec3::new(0.0, 0.0, 1.0);
         let (_, at) = h.render(&world, &settings);
         let unlit = at(SIZE / 2, SIZE / 2);
-        assert!(unlit[0] > 20 && unlit[0] + 80 < lit[0], "unlit side is dimmer but not black: {unlit:?} vs {lit:?}");
+        assert!(
+            unlit[0] > 20 && unlit[0] + 80 < lit[0],
+            "unlit side is dimmer but not black: {unlit:?} vs {lit:?}"
+        );
     }
 
     #[test]
     fn red_point_light_brightens_the_floor_near_it() {
         for editor_like in [false, true] {
-            let Some(mut h) = Harness::new(editor_like) else { return };
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
             let plane = h.meshes.add(MeshData::plane(20.0));
             let mut world = World::new();
-            world.spawn((Transform::IDENTITY, MeshRenderer { mesh: plane, color: Color::WHITE }));
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer {
+                    mesh: plane,
+                    color: Color::WHITE,
+                },
+            ));
             world.spawn(top_down_camera(8.0));
-            world.spawn((Transform::from_xyz(-2.0, 0.7, 0.0), Light::point([1.0, 0.0, 0.0], 4.0, 4.0)));
+            world.spawn((
+                Transform::from_xyz(-2.0, 0.7, 0.0),
+                Light::point([1.0, 0.0, 0.0], 4.0, 4.0),
+            ));
             // A dark sun so only the point light paints the floor red.
-            let settings = RenderSettings { light_color: Color::BLACK, ..Default::default() };
+            let settings = RenderSettings {
+                light_color: Color::BLACK,
+                ..Default::default()
+            };
             let (_, at) = h.render(&world, &settings);
-            let (y, near, far) = (SIZE / 2, at(column(-2.0, 8.0), SIZE / 2), at(column(3.0, 8.0), SIZE / 2));
-            assert!(near[0] > far[0] + 60 && near[0] > near[1] + 60, "editor_like={editor_like}: near {near:?} far {far:?} (row {y})");
+            let (y, near, far) = (
+                SIZE / 2,
+                at(column(-2.0, 8.0), SIZE / 2),
+                at(column(3.0, 8.0), SIZE / 2),
+            );
+            assert!(
+                near[0] > far[0] + 60 && near[0] > near[1] + 60,
+                "editor_like={editor_like}: near {near:?} far {far:?} (row {y})"
+            );
             assert!(luma(far) > 0, "ambient still lights the far floor");
         }
     }
@@ -785,47 +997,95 @@ mod tests {
     #[test]
     fn directional_light_casts_a_shadow() {
         for editor_like in [false, true] {
-            let Some(mut h) = Harness::new(editor_like) else { return };
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
             let plane = h.meshes.add(MeshData::plane(20.0));
             let cube = h.meshes.add(MeshData::cube(1.0));
             let mut world = World::new();
-            world.spawn((Transform::IDENTITY, MeshRenderer { mesh: plane, color: Color::WHITE }));
-            world.spawn((Transform::from_xyz(0.0, 1.5, 0.0), MeshRenderer { mesh: cube, color: Color::WHITE }));
+            world.spawn((
+                Transform::IDENTITY,
+                MeshRenderer {
+                    mesh: plane,
+                    color: Color::WHITE,
+                },
+            ));
+            world.spawn((
+                Transform::from_xyz(0.0, 1.5, 0.0),
+                MeshRenderer {
+                    mesh: cube,
+                    color: Color::WHITE,
+                },
+            ));
             world.spawn(top_down_camera(8.0));
             // Travels +X and down at 45°: the cube's shadow lands on x ∈ [0.5, 2.5].
             let sun_dir = Vec3::new(1.0, -1.0, 0.0).normalize();
-            let sun = world.spawn((Transform::IDENTITY.looking_at(sun_dir, Vec3::Y), Light::directional([1.0; 3], 1.0)));
+            let sun = world.spawn((
+                Transform::IDENTITY.looking_at(sun_dir, Vec3::Y),
+                Light::directional([1.0; 3], 1.0),
+            ));
             let settings = RenderSettings::default();
             let (shadowed, open) = ((column(1.5, 8.0), SIZE / 2), (column(-2.5, 8.0), SIZE / 2));
 
             let (_, at) = h.render(&world, &settings);
             assert!(h.view.shadows_active());
             let (s, o) = (at(shadowed.0, shadowed.1), at(open.0, open.1));
-            assert!(luma(s) + 150 < luma(o), "editor_like={editor_like}: shadowed {s:?} vs open {o:?}");
+            assert!(
+                luma(s) + 150 < luma(o),
+                "editor_like={editor_like}: shadowed {s:?} vs open {o:?}"
+            );
 
             // Shadows off: the same pixel is lit like the rest of the floor.
             world.get::<&mut Light>(sun).unwrap().shadows = false;
             let (_, at) = h.render(&world, &settings);
             assert!(!h.view.shadows_active());
             let (s, o) = (at(shadowed.0, shadowed.1), at(open.0, open.1));
-            assert!(luma(s).abs_diff(luma(o)) < 30, "editor_like={editor_like}: no shadow {s:?} vs {o:?}");
+            assert!(
+                luma(s).abs_diff(luma(o)) < 30,
+                "editor_like={editor_like}: no shadow {s:?} vs {o:?}"
+            );
         }
     }
 
     #[test]
     fn first_directional_light_replaces_the_settings_sun() {
-        let Some(mut h) = Harness::new(false) else { return };
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
         let plane = h.meshes.add(MeshData::plane(20.0));
         let mut world = World::new();
-        world.spawn((Transform::IDENTITY, MeshRenderer { mesh: plane, color: Color::WHITE }));
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer {
+                mesh: plane,
+                color: Color::WHITE,
+            },
+        ));
         world.spawn(top_down_camera(8.0));
-        let settings = RenderSettings { light_dir: Vec3::NEG_Y, light_color: Color::WHITE, ..Default::default() };
+        let settings = RenderSettings {
+            light_dir: Vec3::NEG_Y,
+            light_color: Color::WHITE,
+            ..Default::default()
+        };
         let (_, at) = h.render(&world, &settings);
         let bright = at(SIZE / 2, SIZE / 2);
         // A green sun overrides the white settings sun.
-        world.spawn((Transform::IDENTITY.looking_at(Vec3::NEG_Y, Vec3::Z), Light::directional([0.0, 1.0, 0.0], 1.0)));
+        world.spawn((
+            Transform::IDENTITY.looking_at(Vec3::NEG_Y, Vec3::Z),
+            Light::directional([0.0, 1.0, 0.0], 1.0),
+        ));
         let (_, at) = h.render(&world, &settings);
         let green = at(SIZE / 2, SIZE / 2);
-        assert!(green[1] > green[0] + 60 && green[0] + 60 < bright[0], "{green:?} vs {bright:?}");
+        assert!(
+            green[1] > green[0] + 60 && green[0] + 60 < bright[0],
+            "{green:?} vs {bright:?}"
+        );
+        // Solid view: scene lights off, the settings sun again.
+        let solid = RenderSettings {
+            scene_lights: false,
+            ..settings
+        };
+        let (_, at) = h.render(&world, &solid);
+        assert_eq!(at(SIZE / 2, SIZE / 2), bright);
     }
 }

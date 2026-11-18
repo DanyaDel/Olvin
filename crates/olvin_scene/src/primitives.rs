@@ -19,7 +19,14 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub const ALL: [Shape; 6] = [Shape::Cube, Shape::Sphere, Shape::Capsule, Shape::Cylinder, Shape::Plane, Shape::Quad];
+    pub const ALL: [Shape; 6] = [
+        Shape::Cube,
+        Shape::Sphere,
+        Shape::Capsule,
+        Shape::Cylinder,
+        Shape::Plane,
+        Shape::Quad,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -89,14 +96,22 @@ impl Primitive {
             (Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
         ];
         for (n, u, v) in faces {
-            let quad = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(a, b)| (n + u * a + v * b) * 0.5);
+            let quad = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                .map(|(a, b)| (n + u * a + v * b) * 0.5);
             let base = self.positions.len() as u32;
             for q in quad {
                 self.push(q, n);
             }
-            self.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            self.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
-        let c = |i: usize| vec3(if i & 1 != 0 { 0.5 } else { -0.5 }, if i & 2 != 0 { 0.5 } else { -0.5 }, if i & 4 != 0 { 0.5 } else { -0.5 });
+        let c = |i: usize| {
+            vec3(
+                if i & 1 != 0 { 0.5 } else { -0.5 },
+                if i & 2 != 0 { 0.5 } else { -0.5 },
+                if i & 4 != 0 { 0.5 } else { -0.5 },
+            )
+        };
         for i in 0..8 {
             for bit in [1, 2, 4] {
                 if i & bit == 0 {
@@ -110,9 +125,25 @@ impl Primitive {
     fn quad(&mut self, size: f32, xy: bool) {
         let h = size * 0.5;
         let (n, corners) = if xy {
-            (Vec3::NEG_Z, [vec3(h, -h, 0.0), vec3(-h, -h, 0.0), vec3(-h, h, 0.0), vec3(h, h, 0.0)])
+            (
+                Vec3::NEG_Z,
+                [
+                    vec3(h, -h, 0.0),
+                    vec3(-h, -h, 0.0),
+                    vec3(-h, h, 0.0),
+                    vec3(h, h, 0.0),
+                ],
+            )
         } else {
-            (Vec3::Y, [vec3(-h, 0.0, h), vec3(h, 0.0, h), vec3(h, 0.0, -h), vec3(-h, 0.0, -h)])
+            (
+                Vec3::Y,
+                [
+                    vec3(-h, 0.0, h),
+                    vec3(h, 0.0, h),
+                    vec3(h, 0.0, -h),
+                    vec3(-h, 0.0, -h),
+                ],
+            )
         };
         for c in corners {
             self.push(c, n);
@@ -130,7 +161,10 @@ impl Primitive {
             for s in 0..=SEGMENTS {
                 let a = s as f32 / SEGMENTS as f32 * TAU;
                 let (sin, cos) = a.sin_cos();
-                self.push(vec3(r * cos, y, r * sin), vec3(n.x * cos, n.y, n.x * sin).normalize_or_zero());
+                self.push(
+                    vec3(r * cos, y, r * sin),
+                    vec3(n.x * cos, n.y, n.x * sin).normalize_or_zero(),
+                );
             }
         }
         let row = SEGMENTS as u32 + 1;
@@ -174,7 +208,11 @@ impl Primitive {
                     .map(|i| {
                         let a = from + (to - from) * i as f32 / 12.0;
                         let (s, c) = a.sin_cos();
-                        if plane_xz { vec3(c * 0.5, cy + s * 0.5, 0.0) } else { vec3(0.0, cy + s * 0.5, c * 0.5) }
+                        if plane_xz {
+                            vec3(c * 0.5, cy + s * 0.5, 0.0)
+                        } else {
+                            vec3(0.0, cy + s * 0.5, c * 0.5)
+                        }
                     })
                     .collect();
                 self.outline.extend(pts.windows(2).map(|w| [w[0], w[1]]));
@@ -185,14 +223,19 @@ impl Primitive {
     /// Horizontal outline circles at these heights; `vertical` adds two upright ones.
     fn circles(&mut self, r: f32, heights: &[f32], vertical: bool) {
         let ring = |f: &dyn Fn(f32) -> Vec3| -> Vec<[Vec3; 2]> {
-            (0..48).map(|i| [f(i as f32 / 48.0 * TAU), f((i + 1) as f32 / 48.0 * TAU)]).collect()
+            (0..48)
+                .map(|i| [f(i as f32 / 48.0 * TAU), f((i + 1) as f32 / 48.0 * TAU)])
+                .collect()
         };
         for &y in heights {
-            self.outline.extend(ring(&|a| vec3(r * a.cos(), y, r * a.sin())));
+            self.outline
+                .extend(ring(&|a| vec3(r * a.cos(), y, r * a.sin())));
         }
         if vertical {
-            self.outline.extend(ring(&|a| vec3(r * a.cos(), r * a.sin(), 0.0)));
-            self.outline.extend(ring(&|a| vec3(0.0, r * a.sin(), r * a.cos())));
+            self.outline
+                .extend(ring(&|a| vec3(r * a.cos(), r * a.sin(), 0.0)));
+            self.outline
+                .extend(ring(&|a| vec3(0.0, r * a.sin(), r * a.cos())));
         }
     }
 }
@@ -218,13 +261,20 @@ mod tests {
     fn primitives_are_outward_and_sized_like_unity() {
         for shape in Shape::ALL {
             let p = Primitive::new(shape);
-            assert!(!p.indices.is_empty() && p.indices.len().is_multiple_of(3), "{shape:?}");
+            assert!(
+                !p.indices.is_empty() && p.indices.len().is_multiple_of(3),
+                "{shape:?}"
+            );
             for t in p.indices.chunks(3) {
                 let [a, b, c] = [0, 1, 2].map(|i| p.positions[t[i] as usize]);
-                let n = p.normals[t[0] as usize] + p.normals[t[1] as usize] + p.normals[t[2] as usize];
+                let n =
+                    p.normals[t[0] as usize] + p.normals[t[1] as usize] + p.normals[t[2] as usize];
                 let face = (b - a).cross(c - a);
                 if face.length() > 1e-7 {
-                    assert!(face.dot(n) > 0.0, "{shape:?}: winding disagrees with normals");
+                    assert!(
+                        face.dot(n) > 0.0,
+                        "{shape:?}: winding disagrees with normals"
+                    );
                 }
             }
             let max = p.positions.iter().fold(Vec3::ZERO, |m, v| m.max(v.abs()));

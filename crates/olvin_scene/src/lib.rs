@@ -43,7 +43,10 @@ impl Transform {
     };
 
     pub fn from_translation(translation: Vec3) -> Self {
-        Self { translation, ..Self::IDENTITY }
+        Self {
+            translation,
+            ..Self::IDENTITY
+        }
     }
 
     pub fn from_xyz(x: f32, y: f32, z: f32) -> Self {
@@ -99,7 +102,11 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { fov_y: 60f32.to_radians(), near: 0.1, far: 1000.0 }
+        Self {
+            fov_y: 60f32.to_radians(),
+            near: 0.1,
+            far: 1000.0,
+        }
     }
 }
 

@@ -32,9 +32,13 @@ impl Panel for GameView {
         painter.rect_filled(rect, 0.0, Color32::BLACK);
         let aspect = rect.width() / rect.height();
         let frame = ui.ctx().cumulative_frame_nr();
-        match crate::engine::prepare_view(state, self.id, frame, |world| {
-            camera_view_proj(world, aspect)
-        }) {
+        match crate::engine::prepare_view(
+            state,
+            self.id,
+            frame,
+            crate::engine::Shading::Rendered,
+            |world| camera_view_proj(world, aspect),
+        ) {
             Some(source) => {
                 let frame = Frame {
                     viewport: self.id,

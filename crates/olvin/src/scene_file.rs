@@ -156,16 +156,8 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         spawned += 1;
     }
 
-    if let Some((dir, color, intensity)) = scene.sun()
-        && let Some(mut settings) = res.get_mut::<RenderSettings>()
-    {
-        settings.light_dir = dir;
-        settings.light_color = Color([
-            color[0] * intensity,
-            color[1] * intensity,
-            color[2] * intensity,
-            1.0,
-        ]);
+    if let Some(mut settings) = res.get_mut::<RenderSettings>() {
+        apply_lighting(scene, &mut settings);
     }
 
     // CSG: one static mesh per face colour, and one mesh collider for the level.
@@ -222,6 +214,33 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         ));
     }
     spawned
+}
+
+/// Applies the scene's sun and [`Environment`](olvin_scene::file::Environment)
+/// to render settings (window options like vsync stay untouched).
+pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
+    let env = &scene.environment;
+    let scaled = |c: [f32; 3], k: f32| Color([c[0] * k, c[1] * k, c[2] * k, 1.0]);
+    if let Some((dir, color, intensity)) = scene.sun() {
+        settings.light_dir = dir;
+        settings.light_color = scaled(color, intensity);
+    }
+    settings.ambient = scaled(env.sky, env.ambient_intensity);
+    settings.ground_ambient = scaled(env.ground, env.ambient_intensity);
+    settings.clear_color = scaled(env.background, 1.0);
+    settings.exposure = env.exposure;
+    settings.tonemapping = if env.filmic {
+        olvin_render::Tonemapping::Aces
+    } else {
+        olvin_render::Tonemapping::None
+    };
+    settings.fog = env.fog.map(|f| olvin_render::Fog {
+        color: scaled(f.color, 1.0),
+        start: f.start,
+        end: f.end,
+    });
+    settings.shadow_distance = env.shadow_distance;
+    settings.shadow_map_size = env.shadow_resolution.clamp(256, 8192);
 }
 
 /// The renderer's light for a scene light.
@@ -289,6 +308,31 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn environment_reaches_render_settings_and_files() {
+        let mut scene = SceneFile {
+            environment: (olvin_scene::file::Environment::PRESETS[1].1)(),
+            ..Default::default()
+        };
+        scene.environment.exposure = 2.0;
+        let mut settings = RenderSettings::default();
+        apply_lighting(&scene, &mut settings);
+        assert_eq!(settings.exposure, 2.0);
+        assert!(settings.fog.is_some());
+        assert!(settings.vsync, "window options stay");
+        let path = std::env::temp_dir().join(format!("olvin-env-{}.scene.ron", std::process::id()));
+        scene.save(&path).unwrap();
+        assert_eq!(SceneFile::load(&path).unwrap(), scene);
+        // Default environments are not written at all.
+        SceneFile::default().save(&path).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("environment")
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

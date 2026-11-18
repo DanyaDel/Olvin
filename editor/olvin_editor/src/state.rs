@@ -655,6 +655,8 @@ fn starter_scene() -> SceneFile {
 
     SceneFile {
         entities: vec![camera, sun, ground, cube],
+        // A daylight sky reads better than a black void in a new scene.
+        environment: (olvin_scene::file::Environment::PRESETS[0].1)(),
         ..Default::default()
     }
 }

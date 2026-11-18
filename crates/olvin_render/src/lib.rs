@@ -8,10 +8,10 @@ mod light;
 mod mesh;
 mod renderer;
 
+pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
 pub use light::{Light, LightKind, MAX_LIGHTS};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
-pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
 /// The wgpu version the engine renders with (the editor shares it).
 pub use wgpu;
@@ -85,6 +85,8 @@ pub struct RenderSettings {
     pub shadow_distance: f32,
     /// Shadow map resolution (square); clamped to the device's limit.
     pub shadow_map_size: u32,
+    /// Use `Light` components; off = only the fallback sun (editor's Solid view).
+    pub scene_lights: bool,
 }
 
 impl Default for RenderSettings {
@@ -103,6 +105,7 @@ impl Default for RenderSettings {
             fog: None,
             shadow_distance: 60.0,
             shadow_map_size: 2048,
+            scene_lights: true,
         }
     }
 }

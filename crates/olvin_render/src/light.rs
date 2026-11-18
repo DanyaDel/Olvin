@@ -37,19 +37,41 @@ pub struct Light {
 impl Light {
     /// Unity-like defaults (warm white, intensity 1, range 10, 30° spot).
     pub fn new(kind: LightKind) -> Self {
-        Self { kind, color: [1.0, 0.96, 0.9], intensity: 1.0, range: 10.0, spot_angle_deg: 30.0, shadows: kind == LightKind::Directional }
+        Self {
+            kind,
+            color: [1.0, 0.96, 0.9],
+            intensity: 1.0,
+            range: 10.0,
+            spot_angle_deg: 30.0,
+            shadows: kind == LightKind::Directional,
+        }
     }
 
     pub fn directional(color: [f32; 3], intensity: f32) -> Self {
-        Self { color, intensity, ..Self::new(LightKind::Directional) }
+        Self {
+            color,
+            intensity,
+            ..Self::new(LightKind::Directional)
+        }
     }
 
     pub fn point(color: [f32; 3], intensity: f32, range: f32) -> Self {
-        Self { color, intensity, range, ..Self::new(LightKind::Point) }
+        Self {
+            color,
+            intensity,
+            range,
+            ..Self::new(LightKind::Point)
+        }
     }
 
     pub fn spot(color: [f32; 3], intensity: f32, range: f32, spot_angle_deg: f32) -> Self {
-        Self { color, intensity, range, spot_angle_deg, ..Self::new(LightKind::Spot) }
+        Self {
+            color,
+            intensity,
+            range,
+            spot_angle_deg,
+            ..Self::new(LightKind::Spot)
+        }
     }
 
     pub(crate) fn radiance(&self) -> Vec3 {
@@ -99,7 +121,11 @@ pub(crate) struct LightList {
 
 impl LightList {
     pub fn new() -> Self {
-        Self { lights: [PackedLight::default(); MAX_LIGHTS], scores: [0.0; MAX_LIGHTS], len: 0 }
+        Self {
+            lights: [PackedLight::default(); MAX_LIGHTS],
+            scores: [0.0; MAX_LIGHTS],
+            len: 0,
+        }
     }
 
     /// Lower score = more important. When full, replaces the worst light.
@@ -110,8 +136,12 @@ impl LightList {
             self.len += 1;
             return;
         }
-        let (worst, &worst_score) =
-            self.scores.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).expect("MAX_LIGHTS > 0");
+        let (worst, &worst_score) = self
+            .scores
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .expect("MAX_LIGHTS > 0");
         if score < worst_score {
             self.lights[worst] = light;
             self.scores[worst] = score;
@@ -157,7 +187,18 @@ impl CameraInfo {
             ((-fwd).extend(0.0), near_c)
         };
         let view_plane = fwd.extend(-fwd.dot(eye));
-        Self { camera, view_plane, eye, near, far, depth: if depth.is_finite() && depth > 0.0 { depth } else { f32::INFINITY } }
+        Self {
+            camera,
+            view_plane,
+            eye,
+            near,
+            far,
+            depth: if depth.is_finite() && depth > 0.0 {
+                depth
+            } else {
+                f32::INFINITY
+            },
+        }
     }
 }
 
@@ -173,18 +214,34 @@ pub(crate) struct ShadowFit {
 /// the camera frustum. The box is a bounding sphere (so it doesn't change
 /// size as the camera turns) snapped to whole texels (no shimmering when the
 /// camera moves).
-pub(crate) fn fit_shadow(cam: &CameraInfo, light_dir: Vec3, distance: f32, size: u32) -> Option<ShadowFit> {
+pub(crate) fn fit_shadow(
+    cam: &CameraInfo,
+    light_dir: Vec3,
+    distance: f32,
+    size: u32,
+) -> Option<ShadowFit> {
     let dir = light_dir.try_normalize()?;
-    let t = if cam.depth.is_finite() { (distance / cam.depth).min(1.0) } else { 0.0 };
+    let t = if cam.depth.is_finite() {
+        (distance / cam.depth).min(1.0)
+    } else {
+        0.0
+    };
     let mut points = [Vec3::ZERO; 8];
     for i in 0..4 {
         let (n, f) = (cam.near[i], cam.far[i]);
-        let f = if f.is_finite() && t > 0.0 { n + (f - n) * t } else { n + (n - cam.eye).normalize_or_zero() * distance };
+        let f = if f.is_finite() && t > 0.0 {
+            n + (f - n) * t
+        } else {
+            n + (n - cam.eye).normalize_or_zero() * distance
+        };
         points[i] = n;
         points[i + 4] = f;
     }
     let center = points.iter().copied().sum::<Vec3>() / 8.0;
-    let radius = points.iter().map(|p| p.distance(center)).fold(0.0f32, f32::max);
+    let radius = points
+        .iter()
+        .map(|p| p.distance(center))
+        .fold(0.0f32, f32::max);
     if !radius.is_finite() || !center.is_finite() || radius <= 0.0 {
         return None;
     }
@@ -197,8 +254,18 @@ pub(crate) fn fit_shadow(cam: &CameraInfo, light_dir: Vec3, distance: f32, size:
     let (cx, cy) = ((c.x / texel).floor() * texel, (c.y / texel).floor() * texel);
     // Casters between the light and the slice still need to land in the map.
     let pad = radius.max(50.0);
-    let proj = directx::orthographic(cx - radius, cx + radius, cy - radius, cy + radius, -c.z - radius - pad, -c.z + radius);
-    Some(ShadowFit { view_proj: proj * light_view, texel_world: texel })
+    let proj = directx::orthographic(
+        cx - radius,
+        cx + radius,
+        cy - radius,
+        cy + radius,
+        -c.z - radius - pad,
+        -c.z + radius,
+    );
+    Some(ShadowFit {
+        view_proj: proj * light_view,
+        texel_world: texel,
+    })
 }
 
 #[cfg(test)]
@@ -206,7 +273,8 @@ mod tests {
     use super::*;
 
     fn perspective_camera(eye: Vec3, target: Vec3) -> Mat4 {
-        directx::perspective(60f32.to_radians(), 1.0, 0.1, 500.0) * view::look_at_mat4(eye, target, Vec3::Y)
+        directx::perspective(60f32.to_radians(), 1.0, 0.1, 500.0)
+            * view::look_at_mat4(eye, target, Vec3::Y)
     }
 
     #[test]
@@ -218,7 +286,8 @@ mod tests {
         let depth = info.view_plane.truncate().dot(Vec3::ZERO) + info.view_plane.w;
         assert!((depth - eye.length()).abs() < 1e-3, "{depth}");
 
-        let ortho = directx::orthographic(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0) * view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+        let ortho = directx::orthographic(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0)
+            * view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
         let info = CameraInfo::from_view_proj(ortho);
         assert_eq!(info.camera.w, 0.0);
         assert!(info.camera.truncate().abs_diff_eq(eye.normalize(), 1e-3));
@@ -226,30 +295,52 @@ mod tests {
 
     #[test]
     fn shadow_fit_covers_the_near_slice_and_snaps_to_texels() {
-        let cam = CameraInfo::from_view_proj(perspective_camera(Vec3::new(0.0, 2.0, 0.0), Vec3::new(0.0, 2.0, -10.0)));
+        let cam = CameraInfo::from_view_proj(perspective_camera(
+            Vec3::new(0.0, 2.0, 0.0),
+            Vec3::new(0.0, 2.0, -10.0),
+        ));
         let dir = Vec3::new(-0.3, -1.0, -0.2);
         let fit = fit_shadow(&cam, dir, 60.0, 2048).unwrap();
         for p in [Vec3::new(0.0, 0.0, -5.0), Vec3::new(10.0, 0.0, -40.0)] {
             let c = fit.view_proj.project_point3(p);
-            assert!(c.x.abs() <= 1.0 && c.y.abs() <= 1.0 && (0.0..=1.0).contains(&c.z), "{p} -> {c}");
+            assert!(
+                c.x.abs() <= 1.0 && c.y.abs() <= 1.0 && (0.0..=1.0).contains(&c.z),
+                "{p} -> {c}"
+            );
         }
         // Moving the camera a fraction of a texel keeps the map's texel grid in place.
-        let moved = CameraInfo::from_view_proj(perspective_camera(Vec3::new(0.001, 2.0, 0.0), Vec3::new(0.001, 2.0, -10.0)));
+        let moved = CameraInfo::from_view_proj(perspective_camera(
+            Vec3::new(0.001, 2.0, 0.0),
+            Vec3::new(0.001, 2.0, -10.0),
+        ));
         let fit2 = fit_shadow(&moved, dir, 60.0, 2048).unwrap();
         let texel_ndc = 2.0 / 2048.0;
         let a = fit.view_proj.project_point3(Vec3::ZERO);
         let b = fit2.view_proj.project_point3(Vec3::ZERO);
         let dx = ((a.x - b.x) / texel_ndc).abs();
-        assert!((dx - dx.round()).abs() < 1e-2, "offset is whole texels: {dx}");
+        assert!(
+            (dx - dx.round()).abs() < 1e-2,
+            "offset is whole texels: {dx}"
+        );
     }
 
     #[test]
     fn light_list_keeps_the_best() {
         let mut list = LightList::new();
         for i in 0..40 {
-            list.push(PackedLight { position_range: [i as f32, 0.0, 0.0, 1.0], ..Default::default() }, i as f32);
+            list.push(
+                PackedLight {
+                    position_range: [i as f32, 0.0, 0.0, 1.0],
+                    ..Default::default()
+                },
+                i as f32,
+            );
         }
         assert_eq!(list.len, MAX_LIGHTS);
-        assert!(list.lights.iter().all(|l| l.position_range[0] < MAX_LIGHTS as f32));
+        assert!(
+            list.lights
+                .iter()
+                .all(|l| l.position_range[0] < MAX_LIGHTS as f32)
+        );
     }
 }

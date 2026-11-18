@@ -16,9 +16,105 @@ use crate::{Camera, Transform};
 pub struct SceneFile {
     /// Parents always come before their children; sibling order is display order.
     pub entities: Vec<EntityDesc>,
+    /// Lighting of the whole scene (Unity's Lighting window).
+    #[serde(default, skip_serializing_if = "Environment::is_default")]
+    pub environment: Environment,
     /// Data owned by editor plugins (e.g. animation clips), keyed by plugin id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, String>,
+}
+
+/// A named [`Environment`] maker.
+pub type Preset = (&'static str, fn() -> Environment);
+
+/// Scene-wide lighting: ambient, camera exposure, fog and shadows. Colours are linear.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Environment {
+    /// Ambient light from above (the sky) and from below (bounce off the ground).
+    pub sky: [f32; 3],
+    pub ground: [f32; 3],
+    pub ambient_intensity: f32,
+    /// Background where nothing is drawn.
+    pub background: [f32; 3],
+    pub exposure: f32,
+    /// ACES filmic tonemapping; off = plain clamp.
+    pub filmic: bool,
+    pub fog: Option<FogDesc>,
+    /// Shadows are drawn this far from the camera.
+    pub shadow_distance: f32,
+    /// Shadow map resolution (512..4096).
+    pub shadow_resolution: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FogDesc {
+    pub color: [f32; 3],
+    pub start: f32,
+    pub end: f32,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            sky: [0.15, 0.15, 0.18],
+            ground: [0.07, 0.065, 0.06],
+            ambient_intensity: 1.0,
+            background: [0.02, 0.02, 0.03],
+            exposure: 1.0,
+            filmic: true,
+            fog: None,
+            shadow_distance: 60.0,
+            shadow_resolution: 2048,
+        }
+    }
+}
+
+impl Environment {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Ready-made moods, like quick lighting presets in DCC tools.
+    pub const PRESETS: [Preset; 4] = [
+        ("Day", || Environment {
+            sky: [0.32, 0.4, 0.55],
+            ground: [0.12, 0.1, 0.08],
+            background: [0.36, 0.5, 0.72],
+            ..Default::default()
+        }),
+        ("Sunset", || Environment {
+            sky: [0.35, 0.22, 0.25],
+            ground: [0.1, 0.06, 0.05],
+            background: [0.55, 0.3, 0.22],
+            exposure: 1.1,
+            fog: Some(FogDesc {
+                color: [0.5, 0.3, 0.22],
+                start: 20.0,
+                end: 140.0,
+            }),
+            ..Default::default()
+        }),
+        ("Night", || Environment {
+            sky: [0.03, 0.04, 0.08],
+            ground: [0.01, 0.01, 0.015],
+            background: [0.005, 0.008, 0.02],
+            exposure: 1.4,
+            fog: Some(FogDesc {
+                color: [0.01, 0.015, 0.03],
+                start: 10.0,
+                end: 80.0,
+            }),
+            ..Default::default()
+        }),
+        ("Studio", || Environment {
+            sky: [0.4, 0.4, 0.42],
+            ground: [0.2, 0.2, 0.2],
+            background: [0.18, 0.18, 0.2],
+            filmic: false,
+            ..Default::default()
+        }),
+    ];
 }
 
 fn yes() -> bool {
@@ -110,16 +206,30 @@ pub struct LightDesc {
 
 impl LightDesc {
     pub fn new(kind: LightKind) -> Self {
-        Self { kind, color: [1.0, 0.96, 0.9], intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true }
+        Self {
+            kind,
+            color: [1.0, 0.96, 0.9],
+            intensity: 1.0,
+            range: 10.0,
+            spot_angle: 30.0,
+            shadows: true,
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ColliderShape {
-    Box { size: Vec3 },
-    Sphere { radius: f32 },
+    Box {
+        size: Vec3,
+    },
+    Sphere {
+        radius: f32,
+    },
     /// Along local Y; `height` includes the caps (like Unity).
-    Capsule { radius: f32, height: f32 },
+    Capsule {
+        radius: f32,
+        height: f32,
+    },
     /// The object's mesh (or the CSG level for brushes).
     Mesh,
 }
@@ -135,7 +245,13 @@ pub struct ColliderDesc {
 
 impl ColliderDesc {
     pub fn new(shape: ColliderShape) -> Self {
-        Self { shape, center: Vec3::ZERO, is_trigger: false, friction: 0.6, restitution: 0.0 }
+        Self {
+            shape,
+            center: Vec3::ZERO,
+            is_trigger: false,
+            friction: 0.6,
+            restitution: 0.0,
+        }
     }
 
     /// The collider Unity adds for a primitive.
@@ -143,7 +259,10 @@ impl ColliderDesc {
         Self::new(match shape {
             Shape::Cube => ColliderShape::Box { size: Vec3::ONE },
             Shape::Sphere => ColliderShape::Sphere { radius: 0.5 },
-            Shape::Capsule | Shape::Cylinder => ColliderShape::Capsule { radius: 0.5, height: 2.0 },
+            Shape::Capsule | Shape::Cylinder => ColliderShape::Capsule {
+                radius: 0.5,
+                height: 2.0,
+            },
             Shape::Plane | Shape::Quad => ColliderShape::Mesh,
         })
     }
@@ -191,7 +310,12 @@ pub struct CharacterControllerDesc {
 
 impl Default for CharacterControllerDesc {
     fn default() -> Self {
-        Self { height: 2.0, radius: 0.5, step_offset: 0.3, slope_limit_deg: 45.0 }
+        Self {
+            height: 2.0,
+            radius: 0.5,
+            step_offset: 0.3,
+            slope_limit_deg: 45.0,
+        }
     }
 }
 
@@ -248,13 +372,21 @@ pub struct CameraDesc {
 impl Default for CameraDesc {
     /// Same as `Camera::default()`, in round degrees.
     fn default() -> Self {
-        Self { fov_deg: 60.0, near: 0.1, far: 1000.0 }
+        Self {
+            fov_deg: 60.0,
+            near: 0.1,
+            far: 1000.0,
+        }
     }
 }
 
 impl From<&CameraDesc> for Camera {
     fn from(c: &CameraDesc) -> Self {
-        Camera { fov_y: c.fov_deg.to_radians(), near: c.near, far: c.far }
+        Camera {
+            fov_y: c.fov_deg.to_radians(),
+            near: c.near,
+            far: c.far,
+        }
     }
 }
 
@@ -384,11 +516,18 @@ impl SceneFile {
     pub fn sun(&self) -> Option<(Vec3, [f32; 3], f32)> {
         let worlds = self.world_matrices();
         self.entities.iter().find_map(|e| {
-            let l = e.light.as_ref().filter(|l| l.kind == LightKind::Directional)?;
+            let l = e
+                .light
+                .as_ref()
+                .filter(|l| l.kind == LightKind::Directional)?;
             if !self.active_in_hierarchy(e.id) {
                 return None;
             }
-            Some((EntityDesc::forward(*worlds.get(&e.id)?), l.color, l.intensity))
+            Some((
+                EntityDesc::forward(*worlds.get(&e.id)?),
+                l.color,
+                l.intensity,
+            ))
         })
     }
 
@@ -398,7 +537,10 @@ impl SceneFile {
     }
 
     /// Same, with a custom local transform (e.g. an animation preview pose).
-    pub fn world_matrices_with(&self, local: impl Fn(&EntityDesc) -> Transform) -> HashMap<u64, Mat4> {
+    pub fn world_matrices_with(
+        &self,
+        local: impl Fn(&EntityDesc) -> Transform,
+    ) -> HashMap<u64, Mat4> {
         let mut out = HashMap::with_capacity(self.entities.len());
         // Parents precede children, but tolerate hand-edited files with one extra pass.
         for _ in 0..2 {
@@ -430,7 +572,10 @@ mod tests {
         let mut child = EntityDesc::new(2, "child");
         child.parent = Some(1);
         child.position = Vec3::new(0.0, 0.0, -1.0);
-        child.mesh = Some(MeshDesc { shape: Shape::Cube, color: [1.0; 4] });
+        child.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
         scene.entities = vec![parent, child];
 
         let text = ron::to_string(&scene).unwrap();

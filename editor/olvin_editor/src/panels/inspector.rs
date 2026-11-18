@@ -436,9 +436,59 @@ fn light_ui(ui: &mut egui::Ui, l: &mut LightDesc) {
             ui.checkbox(&mut l.shadows, "");
         });
     });
-    if l.kind != LightKind::Directional {
-        ui.weak("The runtime renderer uses the first Directional light for now.");
+    ui.horizontal_wrapped(|ui| {
+        ui.weak("Temperature");
+        for (k, label) in [
+            (1900.0, "Candle"),
+            (2700.0, "Bulb"),
+            (4000.0, "Neutral"),
+            (5500.0, "Sun"),
+            (7500.0, "Sky"),
+        ] {
+            let c = kelvin_to_rgb(k);
+            let fill = egui::Color32::from_rgb(
+                (c[0].powf(1.0 / 2.2) * 255.0) as u8,
+                (c[1].powf(1.0 / 2.2) * 255.0) as u8,
+                (c[2].powf(1.0 / 2.2) * 255.0) as u8,
+            );
+            let b = egui::Button::new(
+                egui::RichText::new(label)
+                    .color(egui::Color32::from_gray(20))
+                    .small(),
+            )
+            .fill(fill);
+            if ui.add(b).on_hover_text(format!("{k} K")).clicked() {
+                l.color = c;
+            }
+        }
+    });
+    if l.kind != LightKind::Directional && l.shadows {
+        ui.weak("Only the sun (first Directional light) casts shadows for now.");
     }
+}
+
+/// Linear RGB of a black body at `k` kelvin (Tanner Helland's fit), max channel 1.
+fn kelvin_to_rgb(k: f32) -> [f32; 3] {
+    let t = k / 100.0;
+    let r = if t <= 66.0 {
+        255.0
+    } else {
+        329.7 * (t - 60.0).powf(-0.1332)
+    };
+    let g = if t <= 66.0 {
+        99.47 * t.ln() - 161.12
+    } else {
+        288.12 * (t - 60.0).powf(-0.0755)
+    };
+    let b = if t >= 66.0 {
+        255.0
+    } else if t <= 19.0 {
+        0.0
+    } else {
+        138.52 * (t - 10.0).ln() - 305.04
+    };
+    // The fit is in sRGB; the scene stores linear colour.
+    [r, g, b].map(|c| (c.clamp(0.0, 255.0) / 255.0).powf(2.2))
 }
 
 fn collider_ui(ui: &mut egui::Ui, c: &mut ColliderDesc) {
@@ -582,7 +632,7 @@ fn script_ui(ui: &mut egui::Ui, script: &mut ScriptDesc, index: usize) {
 }
 
 /// A component block; `remove` gets `Some(key)` when its ✖ is clicked.
-fn section(
+pub(crate) fn section(
     ui: &mut egui::Ui,
     title: &str,
     remove: Option<(&mut Option<&'static str>, &'static str)>,
@@ -622,7 +672,7 @@ fn section(
     ui.add_space(4.0);
 }
 
-fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
         .num_columns(2)
         .spacing([10.0, 4.0])
@@ -630,13 +680,13 @@ fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
         .show(ui, body);
 }
 
-fn row(ui: &mut egui::Ui, label: &str, body: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn row(ui: &mut egui::Ui, label: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.label(label);
     ui.horizontal(body);
     ui.end_row();
 }
 
-fn drag(
+pub(crate) fn drag(
     ui: &mut egui::Ui,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,

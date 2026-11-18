@@ -9,14 +9,16 @@ pub struct Frustum {
 impl Frustum {
     pub fn from_view_proj(m: Mat4) -> Self {
         let (r0, r1, r2, r3) = (m.row(0), m.row(1), m.row(2), m.row(3));
-        let planes = [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2]
-            .map(|p| p / p.truncate().length());
+        let planes =
+            [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2].map(|p| p / p.truncate().length());
         Self { planes }
     }
 
     #[inline]
     pub fn intersects_sphere(&self, center: Vec3, radius: f32) -> bool {
-        self.planes.iter().all(|p| p.truncate().dot(center) + p.w >= -radius)
+        self.planes
+            .iter()
+            .all(|p| p.truncate().dot(center) + p.w >= -radius)
     }
 }
 

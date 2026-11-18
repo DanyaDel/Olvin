@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use eframe::egui_wgpu;
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use olvin::core::App;
 use olvin::ecs::{EcsPlugin, World};
 use olvin::physics::PhysicsPlugin;
@@ -191,19 +191,44 @@ impl ScenePreview {
     }
 }
 
-/// Lighting for a scene: its first directional light, or a default sun.
+/// Lighting for a scene: its sun and environment (shared with the game loader).
 pub fn settings_for(scene: &SceneFile) -> RenderSettings {
     let mut settings = RenderSettings::default();
-    if let Some((dir, color, intensity)) = scene.sun() {
-        settings.light_dir = dir;
-        settings.light_color = Color([
-            color[0] * intensity,
-            color[1] * intensity,
-            color[2] * intensity,
-            1.0,
-        ]);
-    }
+    olvin::scene_file::apply_lighting(scene, &mut settings);
     settings
+}
+
+/// How the scene view is lit (Blender's viewport shading).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shading {
+    /// Studio light from behind the camera, scene lights off: for modelling.
+    Solid,
+    /// Scene lights, shadows, environment and fog, as in the game.
+    #[default]
+    Rendered,
+}
+
+/// Neutral studio lighting that follows the view.
+fn solid_settings(scene: &SceneFile, view_proj: Mat4) -> RenderSettings {
+    let inv = view_proj.inverse();
+    let forward = (inv.project_point3(Vec3::new(0.0, 0.0, 1.0)) - inv.project_point3(Vec3::ZERO))
+        .normalize_or(Vec3::NEG_Z);
+    let right = forward.cross(Vec3::Y).normalize_or(Vec3::X);
+    RenderSettings {
+        light_dir: (forward * 0.6 + right * 0.35 - Vec3::Y * 0.6).normalize(),
+        light_color: Color([1.05, 1.03, 1.0, 1.0]),
+        ambient: Color([0.36, 0.37, 0.4, 1.0]),
+        ground_ambient: Color([0.16, 0.16, 0.17, 1.0]),
+        clear_color: Color([
+            scene.environment.background[0],
+            scene.environment.background[1],
+            scene.environment.background[2],
+            1.0,
+        ]),
+        tonemapping: olvin::render::Tonemapping::None,
+        scene_lights: false,
+        ..RenderSettings::default()
+    }
 }
 
 /// Prepares engine view `id` for this frame: the running game while playing,
@@ -213,6 +238,7 @@ pub(crate) fn prepare_view(
     state: &mut crate::EditorState,
     id: u64,
     frame: u64,
+    shading: Shading,
     view_proj: impl FnOnce(&World) -> Option<Mat4>,
 ) -> Option<Source> {
     let gpu = state.gpu.clone()?;
@@ -236,7 +262,10 @@ pub(crate) fn prepare_view(
     } else {
         state.engine_scene.sync(&state.scene, frame);
         let vp = view_proj(&state.engine_scene.world)?;
-        let settings = settings_for(&state.scene);
+        let settings = match shading {
+            Shading::Rendered => settings_for(&state.scene),
+            Shading::Solid => solid_settings(&state.scene, vp),
+        };
         res.engine.prepare(
             id,
             Source::Edit,

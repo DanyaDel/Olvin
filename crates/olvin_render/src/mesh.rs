@@ -33,9 +33,13 @@ impl MeshData {
             let base = mesh.vertices.len() as u32;
             for (su, sv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
                 let p = (n + u * su + v * sv) * h;
-                mesh.vertices.push(Vertex { position: p.into(), normal: n.into() });
+                mesh.vertices.push(Vertex {
+                    position: p.into(),
+                    normal: n.into(),
+                });
             }
-            mesh.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            mesh.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
         mesh
     }
@@ -45,14 +49,31 @@ impl MeshData {
         let h = size * 0.5;
         let n = [0.0, 1.0, 0.0];
         let vertices = [[-h, 0.0, h], [h, 0.0, h], [h, 0.0, -h], [-h, 0.0, -h]]
-            .map(|position| Vertex { position, normal: n })
+            .map(|position| Vertex {
+                position,
+                normal: n,
+            })
             .to_vec();
-        Self { vertices, indices: vec![0, 1, 2, 0, 2, 3] }
+        Self {
+            vertices,
+            indices: vec![0, 1, 2, 0, 2, 3],
+        }
     }
 
     /// Flat-shaded triangles of positions, normals and indices.
-    pub fn from_triangles(positions: &[glam::Vec3], normals: &[glam::Vec3], indices: Vec<u32>) -> Self {
-        let vertices = positions.iter().zip(normals).map(|(p, n)| Vertex { position: p.to_array(), normal: n.to_array() }).collect();
+    pub fn from_triangles(
+        positions: &[glam::Vec3],
+        normals: &[glam::Vec3],
+        indices: Vec<u32>,
+    ) -> Self {
+        let vertices = positions
+            .iter()
+            .zip(normals)
+            .map(|(p, n)| Vertex {
+                position: p.to_array(),
+                normal: n.to_array(),
+            })
+            .collect();
         Self { vertices, indices }
     }
 
@@ -63,9 +84,15 @@ impl MeshData {
             .positions
             .iter()
             .zip(&p.normals)
-            .map(|(pos, n)| Vertex { position: pos.to_array(), normal: n.to_array() })
+            .map(|(pos, n)| Vertex {
+                position: pos.to_array(),
+                normal: n.to_array(),
+            })
             .collect();
-        Self { vertices, indices: p.indices }
+        Self {
+            vertices,
+            indices: p.indices,
+        }
     }
 
     /// Local-space bounding sphere (center, radius), used for frustum culling.

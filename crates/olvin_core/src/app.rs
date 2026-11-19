@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use crate::{Plugin, Resources, Schedule, Stage, Time, time};
+use crate::{Events, Plugin, Resources, Schedule, Stage, Time, events, time};
 
 /// Set `requested` to stop the main loop after the current frame.
 #[derive(Debug, Default)]
@@ -17,6 +17,7 @@ pub struct App {
     pub resources: Resources,
     schedule: Schedule,
     plugins: HashSet<TypeId>,
+    events: HashSet<TypeId>,
     runner: Option<Runner>,
     started: bool,
 }
@@ -33,6 +34,7 @@ impl App {
             resources: Resources::default(),
             schedule: Schedule::default(),
             plugins: HashSet::new(),
+            events: HashSet::new(),
             runner: None,
             started: false,
         };
@@ -74,6 +76,16 @@ impl App {
     pub fn init_resource<T: Default + 'static>(&mut self) -> &mut Self {
         if !self.resources.contains::<T>() {
             self.resources.insert(T::default());
+        }
+        self
+    }
+
+    /// Registers the event queue `Events<T>` and swaps its buffers at the start
+    /// of every frame (`Stage::First`). Registering the same type twice is a no-op.
+    pub fn add_event<T: 'static>(&mut self) -> &mut Self {
+        if self.events.insert(TypeId::of::<T>()) {
+            self.init_resource::<Events<T>>();
+            self.add_system(Stage::First, events::update_events::<T>);
         }
         self
     }

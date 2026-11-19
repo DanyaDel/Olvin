@@ -2,6 +2,7 @@
 //! plugins together through [`Resources`] and runs systems by [`Stage`].
 
 mod app;
+mod events;
 pub mod logging;
 mod plugin;
 mod resources;
@@ -10,6 +11,7 @@ mod surface;
 mod time;
 
 pub use app::{App, AppExit};
+pub use events::{EventCursor, Events};
 pub use logging::Logging;
 pub use plugin::Plugin;
 pub use resources::Resources;

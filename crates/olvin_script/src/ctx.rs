@@ -335,6 +335,41 @@ impl<'a> ScriptCtx<'a> {
             .raycast_filtered(origin, direction, max, Some(self.entity), false)
     }
 
+    /// Pushes this entity's dynamic body with a force (N) for the next physics
+    /// step: call it from `fixed_update` every step. False without a dynamic body.
+    #[cfg(feature = "physics")]
+    pub fn apply_force(&mut self, force: Vec3) -> bool {
+        match self.res.get_mut::<olvin_physics::Physics>() {
+            Some(mut p) => p.apply_force(self.world, self.entity, force),
+            None => false,
+        }
+    }
+
+    /// Instant kick (N*s) to this entity's dynamic body: velocity changes by
+    /// `impulse / mass`. False without a dynamic body.
+    #[cfg(feature = "physics")]
+    pub fn apply_impulse(&mut self, impulse: Vec3) -> bool {
+        match self.res.get_mut::<olvin_physics::Physics>() {
+            Some(mut p) => p.apply_impulse(self.world, self.entity, impulse),
+            None => false,
+        }
+    }
+
+    /// Sets this entity's dynamic body velocity (m/s). Characters use `motor()`.
+    #[cfg(feature = "physics")]
+    pub fn set_velocity(&mut self, velocity: Vec3) -> bool {
+        match self.res.get_mut::<olvin_physics::Physics>() {
+            Some(mut p) => p.set_velocity(self.world, self.entity, velocity),
+            None => false,
+        }
+    }
+
+    /// Linear velocity of this entity's dynamic body.
+    #[cfg(feature = "physics")]
+    pub fn velocity(&self) -> Option<Vec3> {
+        self.physics()?.velocity(self.world, self.entity)
+    }
+
     /// This entity's character motor (set `velocity`, read `grounded`).
     #[cfg(feature = "physics")]
     pub fn motor(&self) -> Option<hecs::RefMut<'_, olvin_physics::CharacterMotor>> {

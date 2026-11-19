@@ -9,11 +9,15 @@
 //!
 //! Features: `input` gives `ScriptCtx::input()` (olvin_input actions),
 //! `physics` gives fixed updates, collision callbacks, raycasts and the
-//! character motor. Without them the crate only needs core + ECS.
+//! character motor. Without them the crate only needs core + ECS. `lua` (off
+//! by default) adds behaviours written in Lua 5.4 with hot reload: see
+//! the `lua` module.
 
 mod behaviour;
 pub mod builtin;
 mod ctx;
+#[cfg(feature = "lua")]
+pub mod lua;
 mod params;
 mod registry;
 mod runtime;
@@ -103,5 +107,7 @@ impl ScriptAppExt for App {
     }
 }
 
+#[cfg(all(test, feature = "lua"))]
+mod lua_tests;
 #[cfg(test)]
 mod tests;

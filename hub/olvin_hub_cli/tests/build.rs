@@ -1,0 +1,115 @@
+//! `olvin-hub build` end to end. The hub config lives in a temporary
+//! XDG_CONFIG_HOME, so a test never reads or writes the real one.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn temp_dir(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("olvin-hub-cli-{test}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A game that builds offline in seconds: `olvin` is a stub crate.
+fn tiny_game(dir: &Path) -> PathBuf {
+    let root = dir.join("tiny");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("olvin/src")).unwrap();
+    fs::write(
+        root.join("olvin/Cargo.toml"),
+        "[package]\nname = \"olvin\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("olvin/src/lib.rs"), "").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"tiny\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nolvin = { path = \"olvin\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "use olvin as _;\nfn main() { println!(\"tiny\"); }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::write(root.join("assets/a.txt"), "a").unwrap();
+    root
+}
+
+fn hub(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_olvin-hub"))
+        .args(args)
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("HOME", dir.join("home"))
+        // The nested cargo gets its own target dir, not the test run's.
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn build_release_makes_folder_and_archive() {
+    let dir = temp_dir("release");
+    let game = tiny_game(&dir);
+    let out = dir.join("dist-out");
+    let result = hub(
+        &dir,
+        &[
+            "build",
+            "--release",
+            "--project",
+            game.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--archive",
+            "tar.gz",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(stdout.contains("1 asset files"), "{stdout}");
+    assert!(out.join("tiny").is_file());
+    assert!(out.join("assets/a.txt").is_file());
+    assert!(dir.join("dist-out.tar.gz").is_file());
+    assert!(dir.join("target/release").is_dir());
+    assert!(
+        !dir.join("config")
+            .join("olvin-hub")
+            .join("config.toml")
+            .exists(),
+        "build does not write the hub config"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn build_reports_errors() {
+    let dir = temp_dir("errors");
+    let game = tiny_game(&dir);
+    let result = hub(
+        &dir,
+        &[
+            "build",
+            "--project",
+            game.to_str().unwrap(),
+            "--archive",
+            "rar",
+        ],
+    );
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("unknown archive format"));
+
+    let result = hub(
+        &dir,
+        &["build", "--project", dir.join("nope").to_str().unwrap()],
+    );
+    assert!(!result.status.success());
+    fs::remove_dir_all(dir).unwrap();
+}

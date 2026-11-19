@@ -5,7 +5,9 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use olvin_hub::{Catalog, EditorInstall, EngineSource, HubConfig, Project};
+use olvin_hub::{
+    ArchiveFormat, BuildOptions, Catalog, EditorInstall, EngineSource, HubConfig, Project,
+};
 
 /// Text logo for the help header: `Olvin_` with a green underscore cursor
 /// (assets/logo/README.md). clap drops the colour itself under NO_COLOR or
@@ -68,6 +70,20 @@ enum Cmd {
         project: Option<PathBuf>,
         #[arg(long)]
         release: bool,
+    },
+    /// Build the game and lay out a folder (or archive) for players: executable + assets
+    Build {
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+        /// Optimized build (cargo build --release)
+        #[arg(long)]
+        release: bool,
+        /// Output folder (default: <project>/dist/<name>)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Also pack the folder: tar.gz or zip
+        #[arg(short, long, value_name = "FORMAT")]
+        archive: Option<String>,
     },
     /// Projects the hub knows about
     Projects,
@@ -203,6 +219,35 @@ fn run(cli: Cli) -> Result<()> {
             let status = cmd.status().context("could not start cargo")?;
             if !status.success() {
                 bail!("cargo exited with {status}");
+            }
+        }
+        Cmd::Build {
+            project,
+            release,
+            out,
+            archive,
+        } => {
+            let project = open(project.as_deref())?;
+            let archive = archive.as_deref().map(ArchiveFormat::parse).transpose()?;
+            println!(
+                "building {} ({})…",
+                project.name(),
+                if release { "release" } else { "debug" }
+            );
+            let report = project.build(&BuildOptions {
+                release,
+                out,
+                archive,
+                target_dir: None,
+            })?;
+            println!("game:    {}", report.binary.display());
+            println!(
+                "folder:  {} ({} asset files)",
+                report.out_dir.display(),
+                report.assets
+            );
+            if let Some(archive) = report.archive {
+                println!("archive: {}", archive.display());
             }
         }
         Cmd::Projects => {

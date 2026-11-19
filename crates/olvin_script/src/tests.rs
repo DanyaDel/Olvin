@@ -424,6 +424,75 @@ mod physics {
         assert!(enter < exit);
     }
 
+    #[test]
+    fn script_pushes_a_rigidbody() {
+        struct Pusher;
+        impl Behaviour for Pusher {
+            fn fixed_update(&mut self, ctx: &mut ScriptCtx<'_>) {
+                ctx.apply_force(Vec3::new(0.0, 100.0, 0.0));
+            }
+        }
+        let log = Shared::default();
+        let mut app = app_with_probe(&log);
+        app.resources
+            .fetch_mut::<ScriptRegistry>()
+            .register_fn("Pusher", vec![], |_| Box::new(Pusher));
+        app.add_plugin(PhysicsPlugin::default());
+        let ball = {
+            let mut world = app.resources.fetch_mut::<World>();
+            world.spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+                RigidbodyDesc {
+                    gravity_scale: 0.0,
+                    ..Default::default()
+                },
+                Scripts::new().with("Pusher", [("", "")]),
+            ))
+        };
+        for _ in 0..30 {
+            frame(&app);
+        }
+        let world = app.resources.fetch::<World>();
+        let physics = app.resources.fetch::<olvin_physics::Physics>();
+        let up = physics.velocity(&world, ball).unwrap().y;
+        assert!(
+            up > 0.1,
+            "a steady force should accelerate the body, got {up}"
+        );
+        drop((world, physics));
+        // From a script: set_velocity / apply_impulse / velocity.
+        struct Kick;
+        impl Behaviour for Kick {
+            fn update(&mut self, ctx: &mut ScriptCtx<'_>) {
+                assert!(ctx.set_velocity(Vec3::new(4.0, 0.0, 0.0)));
+                assert_eq!(ctx.velocity(), Some(Vec3::new(4.0, 0.0, 0.0)));
+                assert!(ctx.apply_impulse(Vec3::ZERO));
+            }
+        }
+        app.resources
+            .fetch_mut::<ScriptRegistry>()
+            .register_fn("Kick", vec![], |_| Box::new(Kick));
+        let kicked = app.resources.fetch_mut::<World>().spawn((
+            Transform::from_xyz(5.0, 0.0, 0.0),
+            ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+            RigidbodyDesc {
+                gravity_scale: 0.0,
+                ..Default::default()
+            },
+            Scripts::new().with("Kick", [("", "")]),
+        ));
+        for _ in 0..3 {
+            frame(&app);
+        }
+        let world = app.resources.fetch::<World>();
+        let x = world.get::<&Transform>(kicked).unwrap().translation.x;
+        assert!(
+            x > 5.0,
+            "set_velocity should carry the body along x, got {x}"
+        );
+    }
+
     #[cfg(feature = "input")]
     #[test]
     fn player_controller_walks_and_jumps_on_input() {

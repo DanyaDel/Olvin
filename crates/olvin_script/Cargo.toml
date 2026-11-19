@@ -12,6 +12,8 @@ default = ["input", "physics"]
 input = ["dep:olvin_input"]
 # fixed_update with physics steps, collision/trigger callbacks, raycasts, character motor.
 physics = ["dep:olvin_physics"]
+# Behaviours written in Lua 5.4 (mlua, vendored: no system Lua needed), with hot reload.
+lua = ["dep:mlua"]
 
 [dependencies]
 olvin_core = { path = "../olvin_core" }
@@ -26,3 +28,4 @@ glam.workspace = true
 log.workspace = true
 serde.workspace = true
 ron.workspace = true
+mlua = { version = "0.12", features = ["lua54", "vendored"], optional = true }

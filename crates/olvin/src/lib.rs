@@ -8,6 +8,8 @@ pub use glam as math;
 pub use olvin_audio as audio;
 pub use olvin_core as core;
 pub use olvin_ecs as ecs;
+#[cfg(feature = "game")]
+pub use olvin_game as game;
 #[cfg(feature = "input")]
 pub use olvin_input as input;
 #[cfg(feature = "physics")]

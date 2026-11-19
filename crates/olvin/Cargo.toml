@@ -16,10 +16,14 @@ scene = ["render", "olvin_scene/serde", "dep:olvin_csg", "dep:olvin_assets"]
 physics = ["dep:olvin_physics", "olvin_script?/physics"]
 # Unity-style behaviours in Rust (Scripts from scenes → instances).
 script = ["dep:olvin_script"]
+# Lua 5.4 behaviours with hot reload (`olvin::script::lua`, vendored Lua, no system library).
+lua = ["script", "olvin_script/lua"]
 # Action maps over keyboard, mouse and gamepads (gilrs).
 input = ["dep:olvin_input", "olvin_script?/input"]
 # Sound on kira: AudioSource / AudioListener, one-shots, streamed music.
 audio = ["dep:olvin_audio"]
+# Game states, background scene loading, save slots.
+game = ["dep:olvin_game"]
 
 [dependencies]
 olvin_core.workspace = true
@@ -34,5 +38,6 @@ olvin_physics = { workspace = true, optional = true }
 olvin_script = { path = "../olvin_script", optional = true, default-features = false }
 olvin_input = { path = "../olvin_input", optional = true }
 olvin_audio = { path = "../olvin_audio", optional = true }
+olvin_game = { path = "../olvin_game", optional = true }
 glam.workspace = true
 log.workspace = true

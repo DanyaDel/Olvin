@@ -109,7 +109,16 @@ hub/                  olvin-hub — отдельный инструмент, н�
 
 ## olvin_script
 
-Скрипты как в Unity на Rust: `trait Behaviour` (`start`, `update`, `fixed_update`, `on_collision_enter/exit`, `on_trigger_enter/exit`, `on_destroy`), экземпляры в ресурсе `ScriptRuntime`. `ScriptPlugin` превращает `Scripts` в экземпляры через `ScriptRegistry` (`register::<T: Behaviour + FromParams>`, `register_fn`, `register!`, `App::register_script`). `start` один раз, `fixed_update` перед шагом физики (`FixedSystems`), в Update сначала события коллизий, потом `update`. `ScriptCtx`: мир (spawn/despawn отложены), Transform-помощники, время, поиск по имени/тегу, ресурсы, ввод, raycast, `CharacterMotor`. `Params` типизирует строковые параметры, `FromParams::schema()`/`export_schema()` — для редактора. Паника отключает только скрипт. Встроенные: Rotator, Oscillator, Mover, FollowTarget, DestroyAfter, FreeFlyCamera, SimplePlayerController. 10 тестов.
+Скрипты как в Unity, на Rust. Фичи по умолчанию: `input`, `physics`.
+
+- `behaviour.rs`: `trait Behaviour` — `start`, `update`, `fixed_update`, `on_collision_enter/exit`, `on_trigger_enter/exit`, `on_destroy`.
+- `lib.rs`: компонент `Scripts(Vec<ScriptDesc>)` с билдером `Scripts::new().with(name, params)`; `ScriptPlugin` создаёт реестр и рантайм, `FixedSystems` получает `fixed_update`, `Update` получает `run_update`. Расширение `App::register_script::<T>(name)` (трейт `ScriptAppExt`).
+- `registry.rs`: `ScriptRegistry` — `register::<T: Behaviour + FromParams>(name)`, `register_fn(name, schema, make)`, `create`, `schema`, `export_schema() -> ScriptSchema` (RON для редактора). Макрос `register!` принимает `"имя" => Тип` или просто имена типов.
+- `runtime.rs`: `ScriptRuntime` (ресурс) хранит экземпляры; `run_pass` на каждый проход: attach новых, `start` один раз, события коллизий (только `Update`), затем `update` или `fixed_update`, затем отложенные команды и `on_destroy`. Паника в колбэке отключает только этот скрипт (`catch_unwind`).
+- `ctx.rs`: `ScriptCtx` — мир и компоненты (`get`, `component`, `has`), `spawn`/`despawn`/`insert`/`remove` (отложены до конца прохода, id у `spawn` валиден сразу), Transform-помощники (`translate`, `rotate_euler_deg`, `look_at`, `forward`), время (`TimeInfo`, `dt`, `fixed_dt`), поиск `find_by_name`/`find_by_tag`/`find_all_by_tag`, ресурсы `res`/`res_mut`, ввод `input()` (фича `input`), `raycast`, `motor()` и `move_character()` (фича `physics`), логи `log`/`warn`.
+- `params.rs`: `Params` и `FromParams` (`from_params`, `schema() -> Vec<ParamSpec>`) — строковые параметры из редактора с типами (`parse_vec3`, `parse_bool`).
+- `builtin.rs`: готовые поведения — Rotator, Oscillator, Mover, FollowTarget, DestroyAfter, FreeFlyCamera, SimplePlayerController.
+- `tests.rs`: 10 тестов.
 
 ## olvin_input
 

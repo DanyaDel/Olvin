@@ -29,3 +29,23 @@ pub fn pan(position: Vec3, rotation: Quat, source: Vec3) -> f32 {
     }
     (local.x / len) * 0.8
 }
+
+/// Quietest a fully occluded sound gets (linear gain), on top of the filter.
+pub const OCCLUDED_GAIN: f32 = 0.35;
+/// Low-pass cutoff of a fully occluded sound, in Hz.
+pub const OCCLUDED_CUTOFF: f64 = 500.0;
+/// Cutoff when nothing is in the way: above hearing, effectively off.
+pub const OPEN_CUTOFF: f64 = 20_000.0;
+
+/// Gain of a sound whose path to the listener is `occlusion` blocked
+/// (0 clear .. 1 fully behind walls).
+pub fn occlusion_gain(occlusion: f32) -> f32 {
+    1.0 + (OCCLUDED_GAIN - 1.0) * occlusion.clamp(0.0, 1.0)
+}
+
+/// Low-pass cutoff for the same: walls swallow highs first. Exponential in
+/// the amount, so the change sounds even.
+pub fn occlusion_cutoff(occlusion: f32) -> f64 {
+    let t = occlusion.clamp(0.0, 1.0) as f64;
+    OPEN_CUTOFF * (OCCLUDED_CUTOFF / OPEN_CUTOFF).powf(t)
+}

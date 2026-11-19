@@ -1,6 +1,6 @@
 [package]
 name = "olvin_audio"
-description = "Olvin audio (kira): audio sources, listener, one-shots, streamed music"
+description = "Olvin audio (kira): audio sources, listener, mixer buses, reverb, EQ, occlusion, voice priority, streamed music"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

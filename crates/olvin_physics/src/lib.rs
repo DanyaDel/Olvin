@@ -4,11 +4,14 @@
 //!
 //! Also: character controllers ([`CharacterMotor`], from
 //! `CharacterControllerDesc`), collision/trigger events ([`CollisionEvents`]),
-//! scene queries ([`Physics::raycast`], [`Physics::spherecast`]) and a hook for
+//! scene queries ([`Physics::raycast`], [`Physics::spherecast`]), pushing bodies
+//! ([`Physics::apply_force`], [`Physics::apply_impulse`], [`Physics::set_velocity`])
+//! and a hook for
 //! code that must run before every fixed step ([`FixedSystems`]).
 
 mod character;
 mod events;
+mod forces;
 mod query;
 
 pub use character::{CharacterMotor, CharacterMove, move_character};
@@ -51,6 +54,8 @@ enum Kind {
 pub struct Physics {
     pub world: rp::PhysicsWorld,
     accumulator: f32,
+    /// Bodies with a force pending, cleared after the step.
+    forced: Vec<rp::RigidBodyHandle>,
     collector: rp::ChannelEventCollector,
     collisions: mpsc::Receiver<rp::CollisionEvent>,
     // The collector needs these channels; their events are not used.
@@ -69,6 +74,7 @@ impl Physics {
         Self {
             world,
             accumulator: 0.0,
+            forced: Vec::new(),
             collector: rp::ChannelEventCollector::new(cs, fs, ts),
             collisions,
             _forces,
@@ -86,6 +92,7 @@ impl Physics {
         let steps = self.consume(dt);
         for _ in 0..steps {
             self.world.step();
+            self.clear_forces();
         }
         steps
     }
@@ -103,6 +110,7 @@ impl Physics {
 
     fn step_with_events(&mut self) {
         self.world.step_with_events(&(), &self.collector);
+        self.clear_forces();
     }
 
     /// The entity owning a collider (every collider made by this crate knows it).

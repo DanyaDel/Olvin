@@ -1,0 +1,21 @@
+// Сохранение версии 1, как его пишет SaveSlots.
+(
+    version: 1,
+    meta: (
+        title: "Старое сохранение",
+        scene: "level1.scene.ron",
+        playtime_secs: 61.0,
+        saved_at: 1700000000,
+    ),
+    entities: [
+        (
+            id: 10,
+            components: {
+                "health": "(40.0)",
+            },
+        ),
+    ],
+    resources: {
+        "progress": "(level:5,flags:{})",
+    },
+)

@@ -7,13 +7,17 @@
 
 mod binding;
 mod gamepad;
+mod hints;
 mod map;
+mod rebind;
 mod state;
 
 pub use binding::{Binding, GamepadAxis, GamepadButton, Raw, Stick};
-pub use gamepad::GamepadState;
+pub use gamepad::{GamepadState, Haptics, Rumble};
+pub use hints::{Device, PadStyle, key_label, mouse_label};
 pub use map::{DEFAULT_PATH, InputMap};
 pub use olvin_window::{CursorOptions, Input, KeyCode, MouseButton};
+pub use rebind::{Rebind, RebindEvent, Slot};
 pub use state::{ActionState, ActionValue};
 
 use olvin_core::{App, Plugin, Resources, Stage};
@@ -35,13 +39,18 @@ impl Plugin for InputPlugin {
         app.insert_resource(map)
             .init_resource::<Input>()
             .init_resource::<ActionState>()
-            .init_resource::<GamepadState>();
+            .init_resource::<GamepadState>()
+            .init_resource::<Haptics>()
+            .init_resource::<Rebind>();
         #[cfg(feature = "gamepad")]
         {
             app.insert_resource(gamepad::backend::Gamepads::new());
             app.add_system(Stage::First, |res| {
                 let mut pads = res.fetch_mut::<gamepad::backend::Gamepads>();
-                pads.poll(&mut res.fetch_mut::<GamepadState>());
+                pads.poll(
+                    &mut res.fetch_mut::<GamepadState>(),
+                    &mut res.fetch_mut::<Haptics>(),
+                );
             });
         }
         app.add_system(Stage::First, update_actions)
@@ -56,11 +65,21 @@ impl Plugin for InputPlugin {
 }
 
 /// Recomputes [`ActionState`] from the raw devices (what the plugin runs each frame).
+/// While [`Rebind`] listens, it takes the input (so the captured press does
+/// not also fire gameplay) and actions read idle.
 pub fn update_actions(res: &mut Resources) {
-    let map = res.fetch::<InputMap>();
+    let mut map = res.fetch_mut::<InputMap>();
     let input = res.fetch::<Input>();
     let pads = res.fetch::<GamepadState>();
-    res.fetch_mut::<ActionState>().update(&map, &input, &pads);
+    let mut rebind = res.fetch_mut::<Rebind>();
+    let was_listening = rebind.is_listening();
+    rebind.poll(&mut map, &input, &pads);
+    let mut actions = res.fetch_mut::<ActionState>();
+    if was_listening {
+        actions.update(&map, &Input::default(), &GamepadState::default());
+    } else {
+        actions.update(&map, &input, &pads);
+    }
 }
 
 fn apply_cursor(res: &mut Resources) {

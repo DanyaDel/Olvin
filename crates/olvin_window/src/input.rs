@@ -51,6 +51,11 @@ impl Input {
         self.keys.iter().copied()
     }
 
+    /// Mouse buttons held right now.
+    pub fn pressed_mouse(&self) -> impl Iterator<Item = MouseButton> + '_ {
+        self.buttons.iter().copied()
+    }
+
     // The setters below are what the platform layer calls; they are public so
     // other platforms (SDL, web) and tests can feed synthetic input.
 

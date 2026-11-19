@@ -6,7 +6,7 @@ use glam::Vec2;
 use olvin_window::Input;
 
 use crate::binding::Raw;
-use crate::{GamepadState, InputMap};
+use crate::{Device, GamepadAxis, GamepadButton, GamepadState, InputMap};
 
 /// One action this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -32,6 +32,8 @@ pub struct ActionState {
     /// frame when a window exists (`olvin_window::CursorOptions`).
     pub cursor_locked: bool,
     pub cursor_visible: bool,
+    /// Device touched last, for choosing prompts ([`InputMap::hint`]).
+    pub device: Device,
 }
 
 impl Default for ActionState {
@@ -43,6 +45,7 @@ impl Default for ActionState {
             scroll: Vec2::ZERO,
             cursor_locked: false,
             cursor_visible: true,
+            device: Device::default(),
         }
     }
 }
@@ -59,6 +62,7 @@ impl ActionState {
         self.mouse_position = input.cursor;
         self.mouse_delta = input.mouse_delta;
         self.scroll = input.scroll;
+        self.track_device(&raw);
         for (name, bindings) in &map.actions {
             let value = bindings
                 .iter()
@@ -78,6 +82,26 @@ impl ActionState {
         // Actions removed from the map go idle.
         self.actions
             .retain(|name, _| map.actions.contains_key(name));
+    }
+
+    /// Switches `device` when something on the other one is used this frame.
+    fn track_device(&mut self, raw: &Raw) {
+        let input = raw.input;
+        let keyboard_mouse = input.pressed_keys().next().is_some()
+            || input.pressed_mouse().next().is_some()
+            || input.mouse_delta != Vec2::ZERO
+            || input.scroll != Vec2::ZERO;
+        let pads = raw.gamepads;
+        let gamepad = GamepadButton::ALL.iter().any(|b| pads.pressed(*b))
+            || GamepadAxis::ALL
+                .iter()
+                .any(|a| pads.axis(*a).abs() > raw.deadzone);
+        // Both at once (a held key while the pad drifts): keep the current one.
+        match (keyboard_mouse, gamepad) {
+            (true, false) => self.device = Device::KeyboardMouse,
+            (false, true) => self.device = Device::Gamepad,
+            _ => {}
+        }
     }
 
     pub fn get(&self, action: &str) -> ActionValue {

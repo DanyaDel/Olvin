@@ -11,3 +11,5 @@ olvin_core.workspace = true
 winit.workspace = true
 glam.workspace = true
 log.workspace = true
+serde.workspace = true
+ron.workspace = true

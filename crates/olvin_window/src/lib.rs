@@ -2,8 +2,10 @@
 //! Publishes [`SurfaceTarget`] for renderers and [`Input`] for game code.
 
 mod input;
+mod settings;
 
 pub use input::Input;
+pub use settings::{DEFAULT_PATH, Monitors, Resolution, WindowMode, WindowSettings};
 
 /// What gameplay wants the OS cursor to do; the window applies changes after
 /// each frame. `grabbed` locks the cursor to the window (falls back to
@@ -33,14 +35,37 @@ use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::monitor::MonitorHandle;
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 #[derive(Clone, Debug)]
 pub struct WindowPlugin {
     pub title: String,
+    /// Initial size (logical pixels in a window, video mode in exclusive fullscreen).
     pub width: u32,
     pub height: u32,
     pub resizable: bool,
+    /// Initial mode. At run time change [`WindowSettings`] instead; to start
+    /// from a saved file use [`WindowPlugin::with_settings`].
+    pub mode: WindowMode,
+}
+
+impl WindowPlugin {
+    /// Takes size and mode from `settings` (e.g. loaded from [`DEFAULT_PATH`]).
+    pub fn with_settings(mut self, settings: WindowSettings) -> Self {
+        self.width = settings.width;
+        self.height = settings.height;
+        self.mode = settings.mode;
+        self
+    }
+
+    fn settings(&self) -> WindowSettings {
+        WindowSettings {
+            mode: self.mode,
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 impl Default for WindowPlugin {
@@ -50,6 +75,7 @@ impl Default for WindowPlugin {
             width: 1280,
             height: 720,
             resizable: true,
+            mode: WindowMode::Windowed,
         }
     }
 }
@@ -58,6 +84,8 @@ impl Plugin for WindowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Input>()
             .init_resource::<CursorOptions>()
+            .init_resource::<Monitors>()
+            .insert_resource(self.settings())
             .add_system(Stage::Last, |res| res.fetch_mut::<Input>().end_frame());
         let config = self.clone();
         app.set_runner(move |app| run(app, config));
@@ -72,6 +100,7 @@ fn run(app: App, config: WindowPlugin) {
         config,
         window: None,
         cursor: CursorOptions::default(),
+        applied: None,
     };
     if let Err(err) = event_loop.run_app(&mut runner) {
         log::error!("event loop error: {err}");
@@ -84,9 +113,82 @@ struct Runner {
     window: Option<Arc<Window>>,
     /// Last cursor state applied to the window.
     cursor: CursorOptions,
+    /// Last [`WindowSettings`] put on the window (or seen from it after a
+    /// user resize), so only real changes are applied.
+    applied: Option<WindowSettings>,
+}
+
+/// The winit fullscreen request for `settings` on `monitor`.
+fn fullscreen_for(settings: &WindowSettings, monitor: Option<MonitorHandle>) -> Option<Fullscreen> {
+    match settings.mode {
+        WindowMode::Windowed => None,
+        WindowMode::Borderless => Some(Fullscreen::Borderless(monitor)),
+        WindowMode::Exclusive => {
+            let Some(monitor) = monitor else {
+                return Some(Fullscreen::Borderless(None));
+            };
+            let modes: Vec<_> = monitor.video_modes().collect();
+            let table = Monitors {
+                modes: modes.iter().map(resolution).collect(),
+            };
+            match table.closest(settings.width, settings.height) {
+                Some(i) => Some(Fullscreen::Exclusive(modes[i].clone())),
+                None => Some(Fullscreen::Borderless(Some(monitor))),
+            }
+        }
+    }
+}
+
+fn resolution(mode: &winit::monitor::VideoModeHandle) -> Resolution {
+    let size = mode.size();
+    Resolution {
+        width: size.width,
+        height: size.height,
+        refresh_mhz: mode.refresh_rate_millihertz(),
+    }
 }
 
 impl Runner {
+    /// Puts [`WindowSettings`] on the window when they changed.
+    fn apply_settings(&mut self) {
+        let Some(window) = &self.window else { return };
+        let Some(wanted) = self.app.resources.get::<WindowSettings>().map(|s| *s) else {
+            return;
+        };
+        let was = self.applied.replace(wanted);
+        if was == Some(wanted) {
+            return;
+        }
+        let monitor = window
+            .current_monitor()
+            .or_else(|| window.primary_monitor());
+        let target = fullscreen_for(&wanted, monitor);
+        let size = |s: &WindowSettings| (s.width, s.height);
+        let size_changed = was.is_none_or(|w| size(&w) != size(&wanted));
+        let mode_changed = was.is_none_or(|w| w.mode != wanted.mode);
+        // Exclusive fullscreen picks its video mode from the size.
+        if mode_changed || (wanted.mode == WindowMode::Exclusive && size_changed) {
+            window.set_fullscreen(target);
+        }
+        let left_fullscreen = was.is_some_and(|w| w.mode.is_fullscreen());
+        if !wanted.mode.is_fullscreen() && (size_changed || left_fullscreen) {
+            // The size may be refused (tiling WMs); the Resized event then
+            // reports what the window really got.
+            let _ = window.request_inner_size(LogicalSize::new(wanted.width, wanted.height));
+        }
+    }
+
+    fn publish_monitors(&self, window: &Window) {
+        let Some(monitor) = window
+            .current_monitor()
+            .or_else(|| window.primary_monitor())
+        else {
+            return;
+        };
+        let modes = monitor.video_modes().map(|m| resolution(&m)).collect();
+        *self.app.resources.fetch_mut::<Monitors>() = Monitors { modes };
+    }
+
     fn apply_cursor(&mut self) {
         let Some(window) = &self.window else { return };
         let Some(wanted) = self.app.resources.get::<CursorOptions>().map(|c| *c) else {
@@ -121,10 +223,19 @@ impl ApplicationHandler for Runner {
         if self.window.is_some() {
             return;
         }
+        let wanted = self
+            .app
+            .resources
+            .get::<WindowSettings>()
+            .map_or(self.config.settings(), |s| *s);
+        let monitor = event_loop
+            .primary_monitor()
+            .or_else(|| event_loop.available_monitors().next());
         let attrs = Window::default_attributes()
             .with_title(&self.config.title)
-            .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
-            .with_resizable(self.config.resizable);
+            .with_inner_size(LogicalSize::new(wanted.width, wanted.height))
+            .with_resizable(self.config.resizable)
+            .with_fullscreen(fullscreen_for(&wanted, monitor));
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
             Err(err) => {
@@ -138,6 +249,8 @@ impl ApplicationHandler for Runner {
             window.clone(),
             (size.width, size.height),
         ));
+        self.applied = Some(wanted);
+        self.publish_monitors(&window);
         self.app.startup();
         window.request_redraw();
         self.window = Some(window);
@@ -149,6 +262,17 @@ impl ApplicationHandler for Runner {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 res.fetch_mut::<SurfaceTarget>().size = (size.width, size.height);
+                // The user dragged the window edge: remember that size, so
+                // saving the settings keeps it and it is not "corrected" back.
+                if let Some(window) = &self.window
+                    && window.fullscreen().is_none()
+                    && let Some(mut settings) = res.get_mut::<WindowSettings>()
+                    && settings.mode == WindowMode::Windowed
+                {
+                    let logical = size.to_logical::<u32>(window.scale_factor());
+                    settings.set_resolution(logical.width, logical.height);
+                    self.applied = Some(*settings);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key
@@ -177,6 +301,7 @@ impl ApplicationHandler for Runner {
             WindowEvent::RedrawRequested => {
                 self.app.update();
                 self.apply_cursor();
+                self.apply_settings();
                 if self.app.exit_requested() {
                     event_loop.exit();
                 } else if let Some(window) = &self.window {

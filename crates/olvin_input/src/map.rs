@@ -129,6 +129,67 @@ impl InputMap {
         self
     }
 
+    /// Replaces the binding at `index` (appends if it is past the end).
+    pub fn set_binding(&mut self, action: &str, index: usize, binding: Binding) -> &mut Self {
+        let list = self.actions.entry(action.to_owned()).or_default();
+        match list.get_mut(index) {
+            Some(slot) => *slot = binding,
+            None => list.push(binding),
+        }
+        self
+    }
+
+    /// Removes the binding at `index`; false if there is none.
+    pub fn remove_binding(&mut self, action: &str, index: usize) -> bool {
+        match self.actions.get_mut(action) {
+            Some(list) if index < list.len() => {
+                list.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Puts one action back to what `defaults` has (removes it if absent there).
+    pub fn reset_action(&mut self, action: &str, defaults: &InputMap) {
+        match defaults.actions.get(action) {
+            Some(list) => {
+                self.actions.insert(action.to_owned(), list.clone());
+            }
+            None => {
+                self.actions.remove(action);
+            }
+        }
+    }
+
+    /// Other actions that already use `binding` as one of their bindings
+    /// (`(action, index)`), skipping `except`.
+    pub fn conflicts(&self, binding: &Binding, except: Option<&str>) -> Vec<(String, usize)> {
+        let mut found = Vec::new();
+        for (name, list) in &self.actions {
+            if Some(name.as_str()) == except {
+                continue;
+            }
+            found.extend(
+                list.iter()
+                    .enumerate()
+                    .filter(|(_, b)| *b == binding)
+                    .map(|(i, _)| (name.clone(), i)),
+            );
+        }
+        found
+    }
+
+    /// Adds the actions of `defaults` that this map lacks (a saved user map
+    /// after the game gained a new action).
+    pub fn fill_missing(&mut self, defaults: &InputMap) {
+        for (name, list) in &defaults.actions {
+            self.actions
+                .entry(name.clone())
+                .or_insert_with(|| list.clone());
+        }
+    }
+
     pub fn from_ron(text: &str) -> Result<Self, String> {
         ron::from_str(text).map_err(|e| e.to_string())
     }

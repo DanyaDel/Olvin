@@ -1,0 +1,17 @@
+[package]
+name = "olvin_gui"
+description = "Olvin in-game UI: buttons, text, flex/stack/anchor layout, gamepad and keyboard focus, click events. No egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["gamepad"]
+# Gamepads in `olvin_input` (gilrs); without it the UI still reads whatever fills `GamepadState`.
+gamepad = ["olvin_input/gamepad"]
+
+[dependencies]
+olvin_core.workspace = true
+olvin_input = { path = "../olvin_input", default-features = false }
+glam.workspace = true

@@ -1,0 +1,184 @@
+//! Glue to the engine: reads `olvin_input` actions, runs the UI, publishes
+//! [`UiEvent`]s and a [`DrawList`].
+
+use glam::Vec2;
+use olvin_core::{App, Plugin, Resources, Stage, SurfaceTarget, Time};
+use olvin_input::{
+    ActionState, Binding, GamepadButton, Input, InputMap, KeyCode, MouseButton, Stick,
+};
+
+use crate::draw::DrawList;
+use crate::layout::{Monospace, TextMeasure};
+use crate::nav::NavRepeat;
+use crate::paint::Theme;
+use crate::ui::{Ui, UiEvent, UiInput};
+
+/// Names of the `olvin_input` actions the UI listens to. The plugin adds
+/// default bindings for any that the map lacks (a player's remapped
+/// `input.ron` wins), so menus work with keyboard, mouse and gamepad out of the box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiActions {
+    /// 2D: arrows, WASD, d-pad, left stick.
+    pub navigate: String,
+    /// Enter, Space, gamepad South.
+    pub accept: String,
+    /// Escape, gamepad East.
+    pub cancel: String,
+    /// Tab, right bumper.
+    pub next: String,
+    /// Left bumper.
+    pub prev: String,
+}
+
+impl Default for UiActions {
+    fn default() -> Self {
+        Self {
+            navigate: "UiNavigate".into(),
+            accept: "UiAccept".into(),
+            cancel: "UiCancel".into(),
+            next: "UiNext".into(),
+            prev: "UiPrev".into(),
+        }
+    }
+}
+
+impl UiActions {
+    /// Adds the default bindings for actions `map` does not have yet.
+    pub fn bind_missing(&self, map: &mut InputMap) {
+        let pad = Binding::GamepadButton;
+        let key = Binding::Key;
+        let mut add = |name: &str, bindings: Vec<Binding>| {
+            if !map.actions.contains_key(name) {
+                map.bind(name, bindings);
+            }
+        };
+        add(
+            &self.navigate,
+            vec![
+                Binding::arrows(),
+                Binding::wasd(),
+                Binding::Axis2D {
+                    up: Box::new(pad(GamepadButton::DPadUp)),
+                    down: Box::new(pad(GamepadButton::DPadDown)),
+                    left: Box::new(pad(GamepadButton::DPadLeft)),
+                    right: Box::new(pad(GamepadButton::DPadRight)),
+                },
+                Binding::GamepadStick {
+                    stick: Stick::Left,
+                    scale: 1.0,
+                },
+            ],
+        );
+        add(
+            &self.accept,
+            vec![
+                key(KeyCode::Enter),
+                key(KeyCode::Space),
+                pad(GamepadButton::South),
+            ],
+        );
+        add(
+            &self.cancel,
+            vec![key(KeyCode::Escape), pad(GamepadButton::East)],
+        );
+        add(
+            &self.next,
+            vec![key(KeyCode::Tab), pad(GamepadButton::RightBumper)],
+        );
+        add(&self.prev, vec![pad(GamepadButton::LeftBumper)]);
+    }
+}
+
+/// The in-game UI as a resource: the tree, its look and the per-frame output.
+pub struct Gui {
+    pub ui: Ui,
+    pub theme: Theme,
+    pub actions: UiActions,
+    pub repeat: NavRepeat,
+    /// Text sizes for layout. Replace with a font-backed measure once a text renderer exists.
+    pub measure: Box<dyn TextMeasure>,
+    /// Viewport in pixels. The plugin keeps it equal to `SurfaceTarget.size`
+    /// when there is one; set it yourself for headless use.
+    pub viewport: Vec2,
+    /// Output of the last frame, for the renderer.
+    pub draw: DrawList,
+}
+
+impl Default for Gui {
+    fn default() -> Self {
+        Self {
+            ui: Ui::new(),
+            theme: Theme::default(),
+            actions: UiActions::default(),
+            repeat: NavRepeat::default(),
+            measure: Box::new(Monospace::default()),
+            viewport: Vec2::new(1280.0, 720.0),
+            draw: DrawList::default(),
+        }
+    }
+}
+
+/// Inserts [`Gui`] and `Events<UiEvent>`. Needs `olvin_input::InputPlugin`
+/// (without it the UI simply sees no input). Input is handled in
+/// `PreUpdate` (so game systems in `Update` read this frame's clicks) and the
+/// layout and draw list are rebuilt in `PostUpdate`, after the game changed the tree.
+#[derive(Default)]
+pub struct GuiPlugin;
+
+impl Plugin for GuiPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Gui>()
+            .add_event::<UiEvent>()
+            .add_system(Stage::Startup, bind_actions)
+            .add_system(Stage::PreUpdate, gui_input)
+            .add_system(Stage::PostUpdate, gui_layout);
+    }
+}
+
+fn bind_actions(res: &mut Resources) {
+    if let Some(mut map) = res.get_mut::<InputMap>() {
+        res.fetch::<Gui>().actions.bind_missing(&mut map);
+    }
+}
+
+fn gui_input(res: &mut Resources) {
+    let mut gui = res.fetch_mut::<Gui>();
+    let gui = &mut *gui;
+    // Real time: menus must work while the game is paused or slowed.
+    let dt = res.get::<Time>().map_or(0.0, |t| t.unscaled_delta());
+    let mut input = UiInput::default();
+    if let Some(a) = res.get::<ActionState>() {
+        let n = &gui.actions;
+        if !a.cursor_locked {
+            input.pointer = Some(a.mouse_position);
+        }
+        input.nav = gui.repeat.update(a.axis2d(&n.navigate), dt);
+        input.next = a.just_pressed(&n.next);
+        input.prev = a.just_pressed(&n.prev);
+        input.accept_pressed = a.just_pressed(&n.accept);
+        input.accept_released = a.just_released(&n.accept);
+        input.cancel = a.just_pressed(&n.cancel);
+    }
+    if let Some(i) = res.get::<Input>() {
+        input.pointer_pressed = i.mouse_just_pressed(MouseButton::Left);
+        input.pointer_released = i.mouse_just_released(MouseButton::Left);
+    }
+    gui.ui.update(&input);
+    if !gui.ui.events().is_empty() {
+        res.fetch_mut::<olvin_core::Events<UiEvent>>()
+            .send_batch(gui.ui.events().iter().cloned());
+    }
+}
+
+fn gui_layout(res: &mut Resources) {
+    let mut gui = res.fetch_mut::<Gui>();
+    let gui = &mut *gui;
+    if let Some(s) = res.get::<SurfaceTarget>()
+        && s.size.0 > 0
+        && s.size.1 > 0
+    {
+        gui.viewport = Vec2::new(s.size.0 as f32, s.size.1 as f32);
+    }
+    gui.ui.layout(gui.viewport, gui.measure.as_ref());
+    gui.ui.paint(&gui.theme, &mut gui.draw);
+}

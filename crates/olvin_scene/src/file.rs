@@ -12,8 +12,30 @@ use serde::{Deserialize, Serialize};
 pub use crate::primitives::Shape;
 use crate::{Camera, Transform};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// The version of the format this build writes. Bump it together with a new entry
+/// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases.
+pub const FORMAT_VERSION: u32 = 1;
+
+/// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
+/// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
+/// and `#[serde(default)]`, and the migration fixes up the meaning of the data.
+pub type Migration = fn(&mut SceneFile);
+
+/// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1];
+
+/// Version 0 is a file from before versioning: the same data without the `version` field.
+fn v0_to_v1(_: &mut SceneFile) {}
+
+fn legacy_version() -> u32 {
+    0
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SceneFile {
+    /// Format version, see [`FORMAT_VERSION`]. A file without the field is version 0.
+    #[serde(default = "legacy_version")]
+    pub version: u32,
     /// Parents always come before their children; sibling order is display order.
     pub entities: Vec<EntityDesc>,
     /// Lighting of the whole scene (Unity's Lighting window).
@@ -22,6 +44,17 @@ pub struct SceneFile {
     /// Data owned by editor plugins (e.g. animation clips), keyed by plugin id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, String>,
+}
+
+impl Default for SceneFile {
+    fn default() -> Self {
+        Self {
+            version: FORMAT_VERSION,
+            entities: Vec::new(),
+            environment: Environment::default(),
+            extensions: BTreeMap::new(),
+        }
+    }
 }
 
 /// A named [`Environment`] maker.
@@ -544,7 +577,43 @@ impl SceneFile {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        ron::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+        Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Reads a scene from text of any supported version and migrates it to
+    /// [`FORMAT_VERSION`]. A file from a newer build is an error, not a silent downgrade.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_with(text, FORMAT_VERSION, MIGRATIONS)
+    }
+
+    /// [`SceneFile::parse`] with an explicit target version and migration chain.
+    pub fn parse_with(text: &str, target: u32, migrations: &[Migration]) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct Header {
+            #[serde(default = "legacy_version")]
+            version: u32,
+        }
+        let header: Header = ron::from_str(text).map_err(|e| e.to_string())?;
+        if header.version > target {
+            return Err(format!(
+                "scene format version {} is newer than supported {target}",
+                header.version
+            ));
+        }
+        let mut scene: SceneFile = ron::from_str(text).map_err(|e| e.to_string())?;
+        scene.migrate_with(target, migrations);
+        Ok(scene)
+    }
+
+    /// Runs the chain from `self.version` up to `target`; `version` is stamped after each step.
+    fn migrate_with(&mut self, target: u32, migrations: &[Migration]) {
+        while self.version < target {
+            let Some(step) = migrations.get(self.version as usize) else {
+                break;
+            };
+            step(self);
+            self.version += 1;
+        }
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
@@ -761,6 +830,7 @@ mod tests {
                 ..Default::default()
             },
             extensions: BTreeMap::from([("animator".into(), "(clips: [])".into())]),
+            ..Default::default()
         }
     }
 
@@ -826,5 +896,102 @@ mod tests {
         assert!(dir.y < -0.5, "солнце светит вниз: {dir}");
         assert!(intensity > 0.0);
         assert_eq!(scene.csg_brushes().len(), 1);
+    }
+
+    const V0: &str = include_str!("../tests/fixtures/v0_legacy.scene.ron");
+    const V1: &str = include_str!("../tests/fixtures/v1.scene.ron");
+
+    #[test]
+    fn legacy_file_without_version_loads_as_current() {
+        let scene = SceneFile::parse(V0).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        assert_eq!(scene.entities.len(), 3);
+        let player = scene.get(2).unwrap();
+        assert_eq!(player.name, "Player");
+        assert_eq!(player.parent, Some(1));
+        assert_eq!(player.position, Vec3::new(1.0, 0.0, 2.0));
+        assert_eq!(player.scripts[0].name, "PlayerMove");
+        assert!(scene.sun().is_some());
+        assert_eq!(scene.environment.shadow_distance, 40.0);
+        // Старый файл при сохранении становится файлом текущей версии.
+        let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        assert!(text.contains("version: 1"), "{text}");
+        assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+    }
+
+    #[test]
+    fn current_fixture_matches_legacy_content() {
+        let v0 = SceneFile::parse(V0).unwrap();
+        let v1 = SceneFile::parse(V1).unwrap();
+        assert_eq!(v0, v1);
+    }
+
+    #[test]
+    fn new_scenes_are_written_with_a_version() {
+        let text = ron::to_string(&SceneFile::default()).unwrap();
+        assert!(
+            text.contains(&format!("version:{FORMAT_VERSION}")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn future_version_is_rejected() {
+        let err = SceneFile::parse("(version: 999, entities: [])").unwrap_err();
+        assert!(err.contains("999") && err.contains("newer"), "{err}");
+    }
+
+    #[test]
+    fn broken_text_is_an_error() {
+        assert!(SceneFile::parse("(version: 1, entities: [").is_err());
+    }
+
+    #[test]
+    fn migration_chain_runs_in_order_from_the_file_version() {
+        fn first(s: &mut SceneFile) {
+            // 0 -> 1: переименование объектов.
+            for e in &mut s.entities {
+                e.name = format!("a_{}", e.name);
+            }
+        }
+        fn second(s: &mut SceneFile) {
+            // 1 -> 2: слой по умолчанию для всех.
+            for e in &mut s.entities {
+                e.layer = 7;
+                e.name.push_str("_b");
+            }
+        }
+        let chain: &[Migration] = &[first, second];
+        let body = "entities: [(id: 1, name: \"x\", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0))]";
+
+        let from0 = SceneFile::parse_with(&format!("({body})"), 2, chain).unwrap();
+        assert_eq!(from0.version, 2);
+        assert_eq!(from0.entities[0].name, "a_x_b");
+        assert_eq!(from0.entities[0].layer, 7);
+
+        // Файл версии 1 пропускает первую миграцию.
+        let from1 = SceneFile::parse_with(&format!("(version: 1, {body})"), 2, chain).unwrap();
+        assert_eq!(from1.entities[0].name, "x_b");
+
+        // Файл текущей версии не трогают.
+        let same = SceneFile::parse_with(&format!("(version: 2, {body})"), 2, chain).unwrap();
+        assert_eq!(same.entities[0].name, "x");
+        assert_eq!(same.entities[0].layer, 0);
+    }
+
+    #[test]
+    fn migration_chain_covers_every_version() {
+        assert_eq!(MIGRATIONS.len(), FORMAT_VERSION as usize);
+    }
+
+    #[test]
+    fn load_migrates_old_files_from_disk() {
+        let dir = std::env::temp_dir().join(format!("olvin_scene_old_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.scene.ron");
+        std::fs::write(&path, V0).unwrap();
+        let scene = SceneFile::load(&path).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

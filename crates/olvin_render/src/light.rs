@@ -159,6 +159,8 @@ pub(crate) struct CameraInfo {
     pub view_plane: Vec4,
     /// A point to rank lights by distance.
     pub eye: Vec3,
+    /// View depth of the near plane.
+    near_depth: f32,
     near: [Vec3; 4],
     far: [Vec3; 4],
     /// Depth of the far plane from the near plane (may be infinite).
@@ -191,6 +193,7 @@ impl CameraInfo {
             camera,
             view_plane,
             eye,
+            near_depth: view_plane.dot(near_c.extend(1.0)),
             near,
             far,
             depth: if depth.is_finite() && depth > 0.0 {
@@ -202,41 +205,97 @@ impl CameraInfo {
     }
 }
 
-/// The fitted directional shadow camera.
+/// Most cascades the sun's shadow map is split into (a 2x2 atlas).
+pub const MAX_CASCADES: usize = 4;
+
+/// Blend of logarithmic and uniform split distances (1 = all logarithmic).
+const SPLIT_LAMBDA: f32 = 0.6;
+
+/// The sun's cascaded shadow cameras.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ShadowFit {
-    pub view_proj: Mat4,
+pub(crate) struct ShadowCascades {
+    pub count: usize,
+    /// Orthographic view-projection per cascade, onto its own tile.
+    pub view_proj: [Mat4; MAX_CASCADES],
+    /// View depth where each cascade ends.
+    pub splits: [f32; MAX_CASCADES],
     /// World size of one shadow texel.
-    pub texel_world: f32,
+    pub texel_world: [f32; MAX_CASCADES],
 }
 
-/// Fits an orthographic shadow camera around the first `distance` metres of
-/// the camera frustum. The box is a bounding sphere (so it doesn't change
-/// size as the camera turns) snapped to whole texels (no shimmering when the
-/// camera moves).
-pub(crate) fn fit_shadow(
+/// Splits the first `distance` metres of the camera frustum into `count`
+/// slices (logarithmic / uniform mix, uniform for orthographic cameras) and
+/// fits an orthographic shadow camera around each. A box is a bounding
+/// sphere (so it doesn't change size as the camera turns) snapped to whole
+/// texels (no shimmering when the camera moves); `tile` is the texel size of
+/// one cascade's square.
+pub(crate) fn fit_cascades(
     cam: &CameraInfo,
     light_dir: Vec3,
     distance: f32,
-    size: u32,
-) -> Option<ShadowFit> {
+    count: usize,
+    tile: u32,
+) -> Option<ShadowCascades> {
     let dir = light_dir.try_normalize()?;
-    let t = if cam.depth.is_finite() {
-        (distance / cam.depth).min(1.0)
+    let count = count.clamp(1, MAX_CASCADES);
+    let reach = if cam.depth.is_finite() {
+        distance.min(cam.depth)
     } else {
-        0.0
+        distance
     };
-    let mut points = [Vec3::ZERO; 8];
-    for i in 0..4 {
-        let (n, f) = (cam.near[i], cam.far[i]);
-        let f = if f.is_finite() && t > 0.0 {
-            n + (f - n) * t
-        } else {
-            n + (n - cam.eye).normalize_or_zero() * distance
-        };
-        points[i] = n;
-        points[i + 4] = f;
+    if !reach.is_finite() || reach <= 0.0 {
+        return None;
     }
+    // Slice ends as distances from the near plane.
+    let zn = cam.near_depth.max(0.05);
+    let perspective = cam.camera.w > 0.5;
+    let mut ends = [0.0f32; MAX_CASCADES];
+    for (i, end) in ends.iter_mut().enumerate().take(count) {
+        let k = (i + 1) as f32 / count as f32;
+        let uniform = zn + reach * k;
+        let log = zn * ((zn + reach) / zn).powf(k);
+        let z = if perspective {
+            SPLIT_LAMBDA * log + (1.0 - SPLIT_LAMBDA) * uniform
+        } else {
+            uniform
+        };
+        *end = (z - cam.near_depth).clamp(0.0, reach);
+    }
+    ends[count - 1] = reach;
+
+    let at = |i: usize, d: f32| {
+        let (n, f) = (cam.near[i], cam.far[i]);
+        if f.is_finite() && cam.depth.is_finite() {
+            n + (f - n) * (d / cam.depth)
+        } else {
+            n + (n - cam.eye).normalize_or_zero() * d
+        }
+    };
+    let mut out = ShadowCascades {
+        count,
+        view_proj: [Mat4::IDENTITY; MAX_CASCADES],
+        splits: [f32::MAX; MAX_CASCADES],
+        texel_world: [0.0; MAX_CASCADES],
+    };
+    let mut start = 0.0;
+    for c in 0..count {
+        let mut points = [Vec3::ZERO; 8];
+        for i in 0..4 {
+            points[i] = at(i, start);
+            points[i + 4] = at(i, ends[c]);
+        }
+        let (view_proj, texel) = fit_slice(&points, dir, tile)?;
+        out.view_proj[c] = view_proj;
+        out.texel_world[c] = texel;
+        out.splits[c] = cam.near_depth + ends[c];
+        start = ends[c];
+    }
+    Some(out)
+}
+
+/// Orthographic light camera around the bounding sphere of `points`,
+/// snapped to the texel grid. Returns it with the world size of a texel.
+fn fit_slice(points: &[Vec3; 8], dir: Vec3, size: u32) -> Option<(Mat4, f32)> {
     let center = points.iter().copied().sum::<Vec3>() / 8.0;
     let radius = points
         .iter()
@@ -262,10 +321,7 @@ pub(crate) fn fit_shadow(
         -c.z - radius - pad,
         -c.z + radius,
     );
-    Some(ShadowFit {
-        view_proj: proj * light_view,
-        texel_world: texel,
-    })
+    Some((proj * light_view, texel))
 }
 
 #[cfg(test)]
@@ -293,35 +349,67 @@ mod tests {
         assert!(info.camera.truncate().abs_diff_eq(eye.normalize(), 1e-3));
     }
 
+    fn test_cascades(eye: Vec3, count: usize) -> ShadowCascades {
+        let cam = CameraInfo::from_view_proj(perspective_camera(eye, eye + Vec3::NEG_Z * 10.0));
+        fit_cascades(&cam, Vec3::new(-0.3, -1.0, -0.2), 60.0, count, 1024).unwrap()
+    }
+
     #[test]
-    fn shadow_fit_covers_the_near_slice_and_snaps_to_texels() {
-        let cam = CameraInfo::from_view_proj(perspective_camera(
-            Vec3::new(0.0, 2.0, 0.0),
-            Vec3::new(0.0, 2.0, -10.0),
-        ));
-        let dir = Vec3::new(-0.3, -1.0, -0.2);
-        let fit = fit_shadow(&cam, dir, 60.0, 2048).unwrap();
+    fn cascades_split_the_range_and_cover_their_slices() {
+        let eye = Vec3::new(0.0, 2.0, 0.0);
+        let cam = CameraInfo::from_view_proj(perspective_camera(eye, eye + Vec3::NEG_Z * 10.0));
+        let fit = fit_cascades(&cam, Vec3::new(-0.3, -1.0, -0.2), 60.0, 4, 1024).unwrap();
+        assert_eq!(fit.count, 4);
+        assert!(
+            fit.splits.windows(2).all(|w| w[0] < w[1]),
+            "{:?}",
+            fit.splits
+        );
+        // The last cascade ends where the shadow distance does (from the near plane).
+        assert!((fit.splits[3] - (cam.near_depth + 60.0)).abs() < 1e-3);
+        // Texels get coarser with distance.
+        assert!(fit.texel_world.windows(2).all(|w| w[0] < w[1]));
+        // A point on the view axis inside each slice lands in that cascade's map.
+        let mut start = cam.near_depth;
+        for c in 0..4 {
+            let depth = (start + fit.splits[c]) * 0.5;
+            let p = eye + Vec3::NEG_Z * depth;
+            let ndc = fit.view_proj[c].project_point3(p);
+            assert!(
+                ndc.x.abs() <= 1.0 && ndc.y.abs() <= 1.0 && (0.0..=1.0).contains(&ndc.z),
+                "cascade {c}: {p} -> {ndc}"
+            );
+            start = fit.splits[c];
+        }
+    }
+
+    #[test]
+    fn one_cascade_covers_the_near_slice_and_snaps_to_texels() {
+        let eye = Vec3::new(0.0, 2.0, 0.0);
+        let fit = test_cascades(eye, 1);
+        assert_eq!(fit.count, 1);
         for p in [Vec3::new(0.0, 0.0, -5.0), Vec3::new(10.0, 0.0, -40.0)] {
-            let c = fit.view_proj.project_point3(p);
+            let c = fit.view_proj[0].project_point3(p);
             assert!(
                 c.x.abs() <= 1.0 && c.y.abs() <= 1.0 && (0.0..=1.0).contains(&c.z),
                 "{p} -> {c}"
             );
         }
         // Moving the camera a fraction of a texel keeps the map's texel grid in place.
-        let moved = CameraInfo::from_view_proj(perspective_camera(
-            Vec3::new(0.001, 2.0, 0.0),
-            Vec3::new(0.001, 2.0, -10.0),
-        ));
-        let fit2 = fit_shadow(&moved, dir, 60.0, 2048).unwrap();
-        let texel_ndc = 2.0 / 2048.0;
-        let a = fit.view_proj.project_point3(Vec3::ZERO);
-        let b = fit2.view_proj.project_point3(Vec3::ZERO);
-        let dx = ((a.x - b.x) / texel_ndc).abs();
-        assert!(
-            (dx - dx.round()).abs() < 1e-2,
-            "offset is whole texels: {dx}"
-        );
+        for count in [1, 3] {
+            let a = test_cascades(eye, count);
+            let b = test_cascades(eye + Vec3::X * 0.001, count);
+            let texel_ndc = 2.0 / 1024.0;
+            let (pa, pb) = (
+                a.view_proj[0].project_point3(Vec3::ZERO),
+                b.view_proj[0].project_point3(Vec3::ZERO),
+            );
+            let dx = ((pa.x - pb.x) / texel_ndc).abs();
+            assert!(
+                (dx - dx.round()).abs() < 1e-2,
+                "{count} cascades: offset is whole texels: {dx}"
+            );
+        }
     }
 
     #[test]

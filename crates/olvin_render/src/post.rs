@@ -1,0 +1,299 @@
+//! Post-processing on the HDR frame (Full tier): the scene is drawn into an
+//! `Rgba16Float` target without tonemapping, then a short chain of
+//! fullscreen passes adds bloom, applies exposure and the tonemapper, and
+//! writes the surface. Compat hardware skips all of this and tonemaps in the
+//! mesh shader.
+
+use bytemuck::{Pod, Zeroable};
+
+use crate::{RenderSettings, Tonemapping};
+
+/// What the scene is drawn into before post-processing.
+pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// Uniform of post.wgsl (three vec4).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Params {
+    /// threshold, intensity, exposure, ACES.
+    bloom_exposure: [f32; 4],
+    /// sRGB encode, -, -, -.
+    output: [f32; 4],
+    /// Blur step in uv.
+    blur: [f32; 4],
+}
+
+/// Textures and bind groups that depend on the frame size.
+struct Targets {
+    size: (u32, u32),
+    hdr: wgpu::TextureView,
+    half: wgpu::TextureView,
+    quarter: wgpu::TextureView,
+    quarter_blur: wgpu::TextureView,
+    // One bind group per pass.
+    bright: wgpu::BindGroup,
+    down: wgpu::BindGroup,
+    blur_h: wgpu::BindGroup,
+    blur_v: wgpu::BindGroup,
+    composite: wgpu::BindGroup,
+}
+
+/// The HDR target and the bloom / tonemap passes. Owned by the window
+/// renderer, which draws the scene into [`Self::hdr_view`].
+pub struct PostProcess {
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    bright: wgpu::RenderPipeline,
+    down: wgpu::RenderPipeline,
+    blur: wgpu::RenderPipeline,
+    composite: wgpu::RenderPipeline,
+    /// Parameter buffers: main (composite, bright-pass), horizontal and
+    /// vertical blur.
+    main: wgpu::Buffer,
+    horizontal: wgpu::Buffer,
+    vertical: wgpu::Buffer,
+    encode_srgb: bool,
+    targets: Option<Targets>,
+}
+
+impl PostProcess {
+    /// `output` is the format of the surface the chain writes to.
+    pub fn new(device: &wgpu::Device, output: wgpu::TextureFormat) -> Self {
+        let module = device.create_shader_module(wgpu::include_wgsl!("post.wgsl"));
+        let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
+        let texture = wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post"),
+            entries: &[
+                entry(
+                    0,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(size_of::<Params>() as u64),
+                    },
+                ),
+                entry(1, texture),
+                entry(2, texture),
+                entry(
+                    3,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("post"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = |fragment: &str, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(fragment),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_post"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(format.into())],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let uniform = |label| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size_of::<Params>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            bright: pipeline("fs_bright", HDR_FORMAT),
+            down: pipeline("fs_down", HDR_FORMAT),
+            blur: pipeline("fs_blur", HDR_FORMAT),
+            composite: pipeline("fs_composite", output),
+            main: uniform("post params"),
+            horizontal: uniform("post blur h"),
+            vertical: uniform("post blur v"),
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("post"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            layout,
+            encode_srgb: !output.is_srgb(),
+            targets: None,
+        }
+    }
+
+    /// (Re)creates the frame-sized targets when the size changed. Call
+    /// before [`Self::hdr_view`] each frame.
+    pub fn resize(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+        let size = (size.0.max(1), size.1.max(1));
+        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+            return;
+        }
+        let target = |label, (w, h): (u32, u32)| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w.max(1),
+                        height: h.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: HDR_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let hdr = target("post hdr", size);
+        let half = target("post half", (size.0 / 2, size.1 / 2));
+        let quarter = target("post quarter", (size.0 / 4, size.1 / 4));
+        let quarter_blur = target("post quarter blur", (size.0 / 4, size.1 / 4));
+        let bind =
+            |params: &wgpu::Buffer, source: &wgpu::TextureView, bloom: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: params.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(source),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(bloom),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                })
+            };
+        self.targets = Some(Targets {
+            size,
+            // The unused second texture is one the pass doesn't write to.
+            bright: bind(&self.main, &hdr, &quarter_blur),
+            down: bind(&self.main, &half, &quarter_blur),
+            blur_h: bind(&self.horizontal, &quarter, &half),
+            blur_v: bind(&self.vertical, &quarter_blur, &half),
+            composite: bind(&self.main, &hdr, &quarter),
+            half,
+            quarter,
+            quarter_blur,
+            hdr,
+        });
+    }
+
+    /// The target to draw the scene into (after [`Self::resize`]).
+    pub fn hdr_view(&self) -> Option<&wgpu::TextureView> {
+        self.targets.as_ref().map(|t| &t.hdr)
+    }
+
+    /// Records the chain from the HDR frame into `output`. Bloom runs when
+    /// `settings.bloom` is set; exposure and the tonemapper always.
+    pub fn run(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        output: &wgpu::TextureView,
+        settings: &RenderSettings,
+    ) {
+        let Some(t) = &self.targets else {
+            return;
+        };
+        let bloom = settings.bloom.filter(|b| b.intensity > 0.0);
+        let (w, h) = (t.size.0 as f32, t.size.1 as f32);
+        let main = Params {
+            bloom_exposure: [
+                bloom.map_or(1.0, |b| b.threshold.max(0.0)),
+                bloom.map_or(0.0, |b| b.intensity),
+                settings.exposure.max(0.0),
+                if settings.tonemapping == Tonemapping::Aces {
+                    1.0
+                } else {
+                    0.0
+                },
+            ],
+            output: [if self.encode_srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            blur: [0.0; 4],
+        };
+        queue.write_buffer(&self.main, 0, bytemuck::bytes_of(&main));
+        if bloom.is_some() {
+            let blur = |x: f32, y: f32| Params {
+                blur: [x, y, 0.0, 0.0],
+                ..main
+            };
+            let (qw, qh) = ((w / 4.0).floor().max(1.0), (h / 4.0).floor().max(1.0));
+            queue.write_buffer(
+                &self.horizontal,
+                0,
+                bytemuck::bytes_of(&blur(1.0 / qw, 0.0)),
+            );
+            queue.write_buffer(&self.vertical, 0, bytemuck::bytes_of(&blur(0.0, 1.0 / qh)));
+            pass(encoder, &t.half, &self.bright, &t.bright);
+            pass(encoder, &t.quarter, &self.down, &t.down);
+            pass(encoder, &t.quarter_blur, &self.blur, &t.blur_h);
+            pass(encoder, &t.quarter, &self.blur, &t.blur_v);
+        }
+        pass(encoder, output, &self.composite, &t.composite);
+    }
+}
+
+/// One fullscreen triangle into `target`.
+fn pass(
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("olvin post"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind, &[]);
+    pass.draw(0..3, 0..1);
+}

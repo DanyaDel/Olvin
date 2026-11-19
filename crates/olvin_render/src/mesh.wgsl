@@ -6,7 +6,7 @@
 // 6 sampled textures in the fragment stage.
 //
 // Lighting, Unity built-in style: hemisphere ambient + roughness-faded sky
-// reflection, a sun with PCF shadows, up to 16 point / spot / extra
+// reflection, a sun with cascaded PCF shadows, up to 16 point / spot / extra
 // directional lights, GGX + height-correlated Smith + Schlick
 // (metallic-roughness), linear fog (towards the sky at the horizon when a sky
 // is set), exposure + ACES, then sRGB.
@@ -140,31 +140,92 @@ fn env_brdf(f0: vec3<f32>, roughness: f32, nv: f32) -> vec3<f32> {
     return f0 * ab.x + ab.y;
 }
 
-// 1 = lit, 0 = in the sun's shadow. 3x3 taps of a linear comparison sampler.
-fn sun_shadow(p: vec3<f32>, n: vec3<f32>) -> f32 {
-    if (globals.sun_dir.w < 0.5) {
-        return 1.0;
-    }
+// Interleaved gradient noise (Jimenez): a cheap per-pixel rotation.
+fn gradient_noise(pixel: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// One cascade's lookup: x = 1 lit .. 0 shadowed, y = 1 when the point falls
+// inside the cascade's tile (with room for the filter), else 0.
+fn cascade_shadow(i: u32, p: vec3<f32>, n: vec3<f32>, ndl: f32, pixel: vec2<f32>) -> vec2<f32> {
     // Normal offset: slide the lookup off the surface, more at grazing angles.
-    let ndl = clamp(dot(n, -globals.sun_dir.xyz), 0.0, 1.0);
-    let offset_p = p + n * globals.shadow_params.x * (1.0 - 0.5 * ndl);
-    let c = globals.shadow_view_proj * vec4<f32>(offset_p, 1.0);
+    let offset_p = p + n * globals.shadow_offsets[i] * (1.0 - 0.5 * ndl);
+    let c = globals.shadow_view_proj[i] * vec4<f32>(offset_p, 1.0);
     let ndc = c.xyz / c.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     let texel = globals.params.z;
-    var sum = 0.0;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(f32(x), f32(y)) * texel, ndc.z);
+    let filter_mode = globals.shadow_cfg.y;
+    let radius = max(globals.shadow_cfg.z, 0.0) * texel;
+    // Keeps the filter inside the tile (the disc reaches 1.5 radii).
+    let margin = texel + radius * select(1.0, 1.5, filter_mode > 1.5) * select(0.0, 1.0, filter_mode > 0.5);
+    // Tile bounds in the atlas.
+    let tiled = globals.shadow_cfg.x > 1.5;
+    let size = select(1.0, 0.5, tiled);
+    let origin = select(vec2<f32>(0.0), vec2<f32>(f32(i % 2u), f32(i / 2u)) * 0.5, tiled);
+    let inside = all(uv >= origin + vec2<f32>(margin)) && all(uv <= origin + vec2<f32>(size - margin))
+        && ndc.z <= 1.0 && ndc.z >= 0.0;
+    var lit = 1.0;
+    if (inside) {
+        if (filter_mode < 0.5) {
+            lit = textureSampleCompareLevel(shadow_map, shadow_sampler, uv, ndc.z);
+        } else if (filter_mode < 1.5) {
+            var sum = 0.0;
+            for (var y = -1; y <= 1; y++) {
+                for (var x = -1; x <= 1; x++) {
+                    sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(f32(x), f32(y)) * radius, ndc.z);
+                }
+            }
+            lit = sum / 9.0;
+        } else {
+            // Vogel disc, rotated per pixel so the banding turns into noise.
+            let angle = gradient_noise(pixel) * 6.2831853;
+            var sum = 0.0;
+            for (var k = 0; k < 16; k++) {
+                let r = sqrt((f32(k) + 0.5) / 16.0);
+                let a = f32(k) * 2.3999632 + angle;
+                sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(cos(a), sin(a)) * r * radius * 1.5, ndc.z);
+            }
+            lit = sum / 16.0;
         }
     }
-    var lit = sum / 9.0;
-    // Fade out towards the shadow distance instead of a hard edge.
+    return vec2<f32>(lit, select(0.0, 1.0, inside));
+}
+
+// 1 = lit, 0 = in the sun's shadow. Picks the cascade by view depth, blends
+// into the next one near its far edge, fades out towards the shadow distance.
+fn sun_shadow(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    if (globals.sun_dir.w < 0.5) {
+        return 1.0;
+    }
     let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
+    let count = u32(globals.shadow_cfg.x);
+    let ndl = clamp(dot(n, -globals.sun_dir.xyz), 0.0, 1.0);
+    var i = 0u;
+    while (i + 1u < count && depth > globals.shadow_splits[i]) {
+        i++;
+    }
+    var s = cascade_shadow(i, p, n, ndl, pixel);
+    // A point that doesn't fit its tile (a filter at the edge) tries the next one.
+    if (s.y < 0.5 && i + 1u < count) {
+        i++;
+        s = cascade_shadow(i, p, n, ndl, pixel);
+    }
+    var lit = s.x;
+    if (s.y > 0.5 && i + 1u < count) {
+        let start = select(0.0, globals.shadow_splits[i - 1u], i > 0u);
+        let band = max((globals.shadow_splits[i] - start) * 0.1, 1e-3);
+        let t = clamp((depth - (globals.shadow_splits[i] - band)) / band, 0.0, 1.0);
+        if (t > 0.0) {
+            let next = cascade_shadow(i + 1u, p, n, ndl, pixel);
+            if (next.y > 0.5) {
+                lit = mix(lit, next.x, t);
+            }
+        }
+    }
+    // Fade out towards the shadow distance instead of a hard edge.
     let fade = clamp((depth - globals.shadow_params.y) / max(globals.params.w - globals.shadow_params.y, 1e-3), 0.0, 1.0);
     lit = mix(lit, 1.0, fade);
-    let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)) && ndc.z <= 1.0;
-    return select(1.0, lit, inside);
+    return select(1.0, lit, s.y > 0.5);
 }
 
 // Tangent-space normal (green up) to world space.
@@ -262,7 +323,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let spec_dir = normalize(mix(r, sn, roughness * roughness));
         color += env_brdf(f0, roughness, nv) * sky_radiance(spec_dir, roughness) * ao;
 
-        color += brdf(albedo, metallic, roughness, sn, v, -globals.sun_dir.xyz, globals.sun_color.rgb * sun_shadow(p, geo_n));
+        color += brdf(albedo, metallic, roughness, sn, v, -globals.sun_dir.xyz, globals.sun_color.rgb * sun_shadow(p, geo_n, in.clip.xy));
 
         let count = min(u32(globals.ground.w), MAX_LIGHTS);
         for (var i = 0u; i < count; i++) {

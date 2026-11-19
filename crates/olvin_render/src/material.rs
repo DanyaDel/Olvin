@@ -5,6 +5,18 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{Color, ShaderHandle, TextureHandle};
 
+/// How a material's fragments combine with what's behind them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    /// Written over the framebuffer (alpha only matters for `alpha_cutoff`).
+    #[default]
+    Opaque,
+    /// Alpha-blended in a separate pass after the opaque meshes and the sky,
+    /// sorted back to front by the instance's view depth; no depth writes, no
+    /// shadows cast.
+    Alpha,
+}
+
 /// A surface: textures and factors for the PBR shader, or a custom surface
 /// shader on top of them. The [`MeshRenderer`](crate::MeshRenderer)'s colour
 /// multiplies `base_color`.
@@ -33,6 +45,7 @@ pub struct Material {
     pub point_filter: bool,
     /// Alpha below this is discarded (0 = opaque).
     pub alpha_cutoff: f32,
+    pub blend: BlendMode,
     /// Ignores lights: colour + emissive only.
     pub unlit: bool,
     /// Custom surface shader, see `SURFACE_SHADER_CONTRACT`.
@@ -57,6 +70,7 @@ impl Default for Material {
             triplanar: false,
             point_filter: false,
             alpha_cutoff: 0.0,
+            blend: BlendMode::Opaque,
             unlit: false,
             shader: None,
         }

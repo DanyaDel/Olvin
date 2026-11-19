@@ -1,16 +1,21 @@
 [package]
 name = "olvin_render"
-description = "Olvin renderer (wgpu): instanced meshes, frustum culling, render tiers"
+description = "Olvin renderer (wgpu): instanced meshes, frustum culling, render tiers, particles, 2D sprites"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[features]
+# Serialization of the data components (particles, sprites, tilemaps).
+serde = ["dep:serde"]
 
 [dependencies]
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true
 olvin_transform.workspace = true
+olvin_anim.workspace = true
 wgpu.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
@@ -18,3 +23,7 @@ pollster.workspace = true
 log.workspace = true
 # Same naga as wgpu 30: validates surface shaders before they reach the GPU.
 naga = { version = "30.0.2", features = ["wgsl-in"] }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+ron.workspace = true

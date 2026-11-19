@@ -17,7 +17,8 @@ struct Light {
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    shadow_view_proj: mat4x4<f32>,
+    // World to the sun's shadow atlas (clip space of the whole map), per cascade.
+    shadow_view_proj: array<mat4x4<f32>, 4>,
     inv_view_proj: mat4x4<f32>,
     // Perspective: (eye, 1); orthographic: (direction towards the camera, 0).
     camera: vec4<f32>,
@@ -36,8 +37,15 @@ struct Globals {
     fog_color: vec4<f32>,
     // x: fog start; y: fog end; z: 1 / shadow map size; w: shadow distance.
     params: vec4<f32>,
-    // x: normal offset (world units); y: shadow fade start; z = 1: ACES; w: time (s).
+    // x = 1: HDR output (no clamping); y: shadow fade start; z = 1: ACES; w: time (s).
     shadow_params: vec4<f32>,
+    // View depth where each shadow cascade ends.
+    shadow_splits: vec4<f32>,
+    // Per cascade: world-space normal offset for the shadow lookup.
+    shadow_offsets: vec4<f32>,
+    // x: cascade count (> 1: a 2x2 atlas of tiles); y: filter (0 hard, 1 PCF
+    // 3x3, 2 rotated disc); z: filter radius in texels.
+    shadow_cfg: vec4<f32>,
     // rgb: procedural zenith; w: cos of the sun disc's radius.
     sky_zenith: vec4<f32>,
     // rgb: procedural horizon; w: cos of the disc's soft outer edge.
@@ -105,11 +113,16 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-// Exposure, tonemapping, then sRGB when the target doesn't do it.
+// Exposure, tonemapping, then sRGB when the target doesn't do it (HDR
+// output skips all of it).
 fn finish(c: vec3<f32>) -> vec3<f32> {
     var color = c * globals.sky.w;
     if (globals.shadow_params.z > 0.5) {
         color = aces(color);
+    }
+    if (globals.shadow_params.x > 0.5) {
+        // Linear HDR for the post-processing chain (below f16's maximum).
+        return clamp(color, vec3<f32>(0.0), vec3<f32>(60000.0));
     }
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
     if (globals.sun_color.w > 0.5) {

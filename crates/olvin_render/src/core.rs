@@ -5,7 +5,8 @@
 //! Frame order for a view: `upload` + `upload_assets` (new meshes, textures,
 //! materials, shaders) → `prepare` (CPU: culling, lights, shadow fit,
 //! uniforms) → `render_shadows` (own depth pass into the view's shadow map)
-//! → `draw` (into the caller's main pass: meshes, then the sky).
+//! → `draw` (into the caller's main pass: opaque meshes, the sky, then the
+//! alpha-blended meshes sorted back to front).
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -18,12 +19,13 @@ use olvin_ecs::World;
 use olvin_scene::{Camera, Transform};
 use olvin_transform::GlobalTransform;
 
-use crate::light::{CameraInfo, LightList, MAX_LIGHTS, PackedLight, fit_shadow};
+use crate::light::{CameraInfo, LightList, MAX_CASCADES, MAX_LIGHTS, PackedLight, fit_cascades};
 use crate::material::MaterialUniform;
 use crate::shader::{DEFAULT_SURFACE_SHADER, mesh_source, sky_source};
 use crate::{
-    Frustum, Light, LightKind, Material, Materials, MeshData, MeshRenderer, Meshes, RenderSettings,
-    RenderStats, Shaders, SkyMode, TextureData, TextureHandle, Textures, Tonemapping, Vertex,
+    BlendMode, Frustum, Light, LightKind, Material, Materials, MeshData, MeshRenderer, Meshes,
+    RenderSettings, RenderStats, RenderTier, Shaders, ShadowFilter, SkyMode, TextureData,
+    TextureHandle, Textures, Tonemapping, Vertex,
 };
 
 const MIN_INSTANCE_CAPACITY: usize = 1024;
@@ -37,7 +39,7 @@ const NO_MATERIAL: u32 = u32::MAX;
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
-    shadow_view_proj: [[f32; 4]; 4],
+    shadow_view_proj: [[[f32; 4]; 4]; MAX_CASCADES],
     inv_view_proj: [[f32; 4]; 4],
     camera: [f32; 4],
     view_plane: [f32; 4],
@@ -48,6 +50,9 @@ struct Globals {
     fog_color: [f32; 4],
     params: [f32; 4],
     shadow_params: [f32; 4],
+    shadow_splits: [f32; 4],
+    shadow_offsets: [f32; 4],
+    shadow_cfg: [f32; 4],
     sky_zenith: [f32; 4],
     sky_horizon: [f32; 4],
     sky_ground: [f32; 4],
@@ -83,6 +88,14 @@ struct GpuMaterial {
     bind: wgpu::BindGroup,
 }
 
+/// A compiled surface shader: its opaque pipeline, and the alpha-blended
+/// one, built the first time a blended material uses the shader.
+struct SurfacePipeline {
+    module: wgpu::ShaderModule,
+    opaque: wgpu::RenderPipeline,
+    blend: Option<wgpu::RenderPipeline>,
+}
+
 /// GPU copies of one set of registries ([`Meshes`], [`Textures`],
 /// [`Materials`], [`Shaders`]; handles index into them), plus the pipelines
 /// of its surface shaders. Belongs to the [`RenderCore`] that uploaded it.
@@ -92,11 +105,27 @@ pub struct GpuMeshes {
     textures: Vec<Option<GpuTexture>>,
     materials: Vec<Option<GpuMaterial>>,
     /// Indexed by `ShaderHandle`; the last pipeline that compiled.
-    pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    pipelines: Vec<Option<SurfacePipeline>>,
     generation: u64,
 }
 
 impl GpuMeshes {
+    /// An uploaded texture and its generation (changes when it's replaced),
+    /// for the quad renderers (particles, sprites).
+    pub(crate) fn texture_view(&self, handle: TextureHandle) -> Option<(&wgpu::TextureView, u64)> {
+        self.textures
+            .get(handle.0 as usize)
+            .and_then(Option::as_ref)
+            .map(|t| (&t.view, t.generation))
+    }
+
+    fn is_blended(&self, material: u32) -> bool {
+        self.materials
+            .get(material as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|m| m.material.blend == BlendMode::Alpha)
+    }
+
     /// Pipeline id of a material slot: 0 = built-in, `h + 1` = shader `h`.
     fn pipeline_of(&self, material: u32) -> u32 {
         self.materials
@@ -226,15 +255,100 @@ impl InstanceSet {
                 instances: start..staging.len() as u32,
             });
         }
-        if staging.len() > self.capacity {
-            self.capacity = staging.len().next_power_of_two();
-            self.buffer = instance_buffer(device, self.capacity);
-        }
-        if !staging.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(staging));
-        }
+        write_instances(device, queue, &mut self.buffer, &mut self.capacity, staging);
         self.count = staging.len() as u32;
     }
+}
+
+/// One alpha-blended instance waiting to be sorted.
+struct BlendItem {
+    /// View depth of the instance's bounding sphere centre.
+    depth: f32,
+    key: u64,
+    instance: InstanceRaw,
+}
+
+/// Alpha-blended instances, drawn back to front. Consecutive instances of
+/// the same (material, mesh) share a draw call; items and ranges are reused.
+struct BlendSet {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+    items: Vec<BlendItem>,
+    ranges: Vec<DrawRange>,
+    count: u32,
+}
+
+impl BlendSet {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            buffer: instance_buffer(device, MIN_INSTANCE_CAPACITY),
+            capacity: MIN_INSTANCE_CAPACITY,
+            items: Vec::new(),
+            ranges: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Sorts far to back (ties by key, so equal depths still batch), packs
+    /// the instances through `staging` and uploads them.
+    fn finish(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        staging: &mut Vec<InstanceRaw>,
+        pipeline_of: impl Fn(u32) -> u32,
+    ) {
+        self.items
+            .sort_unstable_by(|a, b| b.depth.total_cmp(&a.depth).then(a.key.cmp(&b.key)));
+        staging.clear();
+        self.ranges.clear();
+        let mut last = None;
+        for item in &self.items {
+            let i = staging.len() as u32;
+            staging.push(item.instance);
+            match self.ranges.last_mut() {
+                Some(range) if last == Some(item.key) => range.instances.end = i + 1,
+                _ => {
+                    let material = (item.key >> 32) as u32;
+                    self.ranges.push(DrawRange {
+                        pipeline: pipeline_of(material),
+                        material,
+                        mesh: item.key as u32,
+                        instances: i..i + 1,
+                    });
+                    last = Some(item.key);
+                }
+            }
+        }
+        write_instances(device, queue, &mut self.buffer, &mut self.capacity, staging);
+        self.count = staging.len() as u32;
+    }
+}
+
+/// Uploads `staging` at the start of `buffer`, growing it (to a power of
+/// two) when it doesn't fit.
+fn write_instances(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &mut wgpu::Buffer,
+    capacity: &mut usize,
+    staging: &[InstanceRaw],
+) {
+    if staging.len() > *capacity {
+        *capacity = staging.len().next_power_of_two();
+        *buffer = instance_buffer(device, *capacity);
+    }
+    if !staging.is_empty() {
+        queue.write_buffer(buffer, 0, bytemuck::cast_slice(staging));
+    }
+}
+
+/// One cascade of the sun's shadow map: its camera and its casters.
+struct Cascade {
+    /// The cascade's tile-local view-projection.
+    globals: wgpu::Buffer,
+    bind: wgpu::BindGroup,
+    casters: InstanceSet,
 }
 
 /// Per-camera state: uniforms, instance buffers, the sun's shadow map and
@@ -244,13 +358,16 @@ pub struct ViewData {
     /// Globals + shadow map + sky texture.
     bind: wgpu::BindGroup,
     main: InstanceSet,
+    blend: BlendSet,
     staging: Vec<InstanceRaw>,
-    shadow_globals: wgpu::Buffer,
-    shadow_bind: wgpu::BindGroup,
-    shadow: InstanceSet,
+    /// Created on demand, kept afterwards; the first `cascade_count` are live.
+    cascades: Vec<Cascade>,
+    cascade_count: usize,
+    /// Side of one cascade's tile in the shadow map, in texels (the map is a
+    /// 2x2 atlas of tiles when there is more than one cascade).
+    shadow_tile: u32,
     /// Attachment view and size; created on first use, kept afterwards.
     shadow_map: Option<(wgpu::TextureView, u32)>,
-    shadow_active: bool,
     /// Generation of the sky texture in `bind` (None = the default).
     sky_bound: Option<u64>,
     sky_active: bool,
@@ -260,7 +377,12 @@ impl ViewData {
     /// Whether the last `prepare` enabled the sun's shadows (so
     /// `render_shadows` has work to do).
     pub fn shadows_active(&self) -> bool {
-        self.shadow_active
+        self.cascade_count > 0
+    }
+
+    /// Cascades of the sun's shadow the last `prepare` rendered (0 = off).
+    pub fn shadow_cascades(&self) -> usize {
+        self.cascade_count
     }
 
     /// Whether `draw` paints a sky (procedural or texture) behind the meshes.
@@ -283,6 +405,8 @@ pub struct RenderCore {
     pub queue: wgpu::Queue,
     /// The built-in mesh pipeline (default surface).
     pipeline: wgpu::RenderPipeline,
+    /// The same, alpha-blended without depth writes.
+    blend_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
@@ -300,6 +424,9 @@ pub struct RenderCore {
     fallback_material: wgpu::BindGroup,
     target: (wgpu::TextureFormat, u32, wgpu::TextureFormat),
     encode_srgb: bool,
+    /// Writes untonemapped linear light for a post-processing chain.
+    hdr_output: bool,
+    tier: RenderTier,
     time: Option<f32>,
     start: Instant,
 }
@@ -325,7 +452,8 @@ impl RenderCore {
             label: Some("mesh"),
             source: wgpu::ShaderSource::Wgsl(mesh_source(DEFAULT_SURFACE_SHADER).into()),
         });
-        let pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target);
+        let pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target, false);
+        let blend_pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target, true);
         let sky_pipeline = create_sky_pipeline(&device, &layout, target);
         let (shadow_pipeline, shadow_layout) = create_shadow_pipeline(&device);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -365,6 +493,7 @@ impl RenderCore {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let tier = tier_of_device(&device);
         let dummy_shadow = shadow_texture(&device, 1);
         let solid = |rgba, srgb| {
             upload_texture(&device, &queue, &TextureData::solid(rgba, srgb), u32::MAX).view
@@ -390,6 +519,7 @@ impl RenderCore {
             device,
             queue,
             pipeline,
+            blend_pipeline,
             layout,
             material_layout,
             pipeline_layout,
@@ -404,9 +534,30 @@ impl RenderCore {
             defaults,
             target,
             encode_srgb: !color.is_srgb(),
+            hdr_output: false,
+            tier,
             time: None,
             start: Instant::now(),
         }
+    }
+
+    /// The feature level the core runs at: Compat unless the device is on a
+    /// native API (Vulkan, Metal, DX12). [`Self::set_tier`] overrides it.
+    pub fn tier(&self) -> RenderTier {
+        self.tier
+    }
+
+    /// Forces a feature level, e.g. the one the window renderer measured
+    /// from its adapter.
+    pub fn set_tier(&mut self, tier: RenderTier) {
+        self.tier = tier;
+    }
+
+    /// For a core drawing into an HDR target ([`crate::HDR_FORMAT`]): the
+    /// shaders skip exposure, tonemapping, clamping and sRGB encoding, which
+    /// the post-processing chain does instead.
+    pub fn set_hdr_output(&mut self, on: bool) {
+        self.hdr_output = on;
     }
 
     /// Seconds for surface shaders' `in.time`. Until it's called, the time
@@ -425,28 +576,41 @@ impl RenderCore {
             })
         };
         let globals = uniform("olvin globals", size_of::<Globals>() as u64);
-        let shadow_globals = uniform("olvin shadow globals", size_of::<Mat4>() as u64);
         let bind = self.main_bind_group(&globals, &self.dummy_shadow, &self.defaults.base);
-        let shadow_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("olvin shadow globals"),
-            layout: &self.shadow_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: shadow_globals.as_entire_binding(),
-            }],
-        });
         ViewData {
             globals,
             bind,
             main: InstanceSet::new(&self.device),
+            blend: BlendSet::new(&self.device),
             staging: Vec::new(),
-            shadow_globals,
-            shadow_bind,
-            shadow: InstanceSet::new(&self.device),
+            cascades: Vec::new(),
+            cascade_count: 0,
+            shadow_tile: 1,
             shadow_map: None,
-            shadow_active: false,
             sky_bound: None,
             sky_active: false,
+        }
+    }
+
+    fn create_cascade(&self) -> Cascade {
+        let globals = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("olvin shadow globals"),
+            size: size_of::<Mat4>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("olvin shadow globals"),
+            layout: &self.shadow_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
+        });
+        Cascade {
+            globals,
+            bind,
+            casters: InstanceSet::new(&self.device),
         }
     }
 
@@ -548,6 +712,7 @@ impl RenderCore {
         materials: &mut Materials,
         shaders: &mut Shaders,
     ) {
+        let changed = !shaders.pending.is_empty() || !materials.pending.is_empty();
         for (handle, source) in std::mem::take(&mut shaders.pending) {
             match self.compile_surface(&source) {
                 Ok(pipeline) => put(&mut gpu.pipelines, handle.0, pipeline),
@@ -612,11 +777,43 @@ impl RenderCore {
                 },
             );
         }
+
+        if changed {
+            self.build_blend_pipelines(gpu);
+        }
+    }
+
+    /// Builds the alpha-blended pipeline of every shader a blended material
+    /// uses and that doesn't have one yet.
+    fn build_blend_pipelines(&self, gpu: &mut GpuMeshes) {
+        for slot in 0..gpu.materials.len() {
+            let Some(m) = &gpu.materials[slot] else {
+                continue;
+            };
+            let Some(shader) = m
+                .material
+                .shader
+                .filter(|_| m.material.blend == BlendMode::Alpha)
+            else {
+                continue;
+            };
+            if let Some(Some(p)) = gpu.pipelines.get_mut(shader.0 as usize)
+                && p.blend.is_none()
+            {
+                p.blend = Some(create_mesh_pipeline(
+                    &self.device,
+                    &self.pipeline_layout,
+                    &p.module,
+                    self.target,
+                    true,
+                ));
+            }
+        }
     }
 
     /// Builds a mesh pipeline from a full template source, catching wgpu's
     /// errors instead of letting them reach the device's panic handler.
-    fn compile_surface(&self, source: &str) -> Result<wgpu::RenderPipeline, String> {
+    fn compile_surface(&self, source: &str) -> Result<SurfacePipeline, String> {
         let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = self
@@ -625,23 +822,33 @@ impl RenderCore {
                 label: Some("surface shader"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             });
-        let pipeline =
-            create_mesh_pipeline(&self.device, &self.pipeline_layout, &module, self.target);
+        let opaque = create_mesh_pipeline(
+            &self.device,
+            &self.pipeline_layout,
+            &module,
+            self.target,
+            false,
+        );
         let validation = pollster::block_on(validation.pop());
         let internal = pollster::block_on(internal.pop());
         match validation.or(internal) {
-            None => Ok(pipeline),
+            None => Ok(SurfacePipeline {
+                module,
+                opaque,
+                blend: None,
+            }),
             Some(e) => Err(e.to_string()),
         }
     }
 
     /// The hot path: gathers lights (the first directional [`Light`] is the
     /// sun, up to [`MAX_LIGHTS`] others ranked by distance), fits the sun's
-    /// shadow map, then one linear pass over (GlobalTransform, MeshRenderer),
-    /// culled against the camera (and the shadow box) and bucketed by
-    /// (material, mesh) into flat arrays, drawn sorted by (pipeline,
-    /// material, mesh). Writes uniforms and instances for `view`.
-    /// Call before `render_shadows` and `draw`.
+    /// shadow cascades, then one linear pass over (GlobalTransform,
+    /// MeshRenderer), culled against the camera (and the cascade boxes) and
+    /// bucketed by (material, mesh) into flat arrays, drawn sorted by
+    /// (pipeline, material, mesh). Alpha-blended materials go to a separate
+    /// list sorted back to front by view depth. Writes uniforms and
+    /// instances for `view`. Call before `render_shadows` and `draw`.
     pub fn prepare(
         &self,
         view: &mut ViewData,
@@ -686,21 +893,36 @@ impl RenderCore {
         ));
         let sun_dir = sun_dir.normalize_or(Vec3::NEG_Y);
 
-        // Shadow map fit (and lazy (re)creation).
+        // Shadow cascades (the map is created lazily, an atlas of tiles for
+        // more than one cascade).
         let max_size = self.device.limits().max_texture_dimension_2d;
         let size = settings.shadow_map_size.clamp(16, max_size.max(16));
+        let max_cascades = match self.tier {
+            RenderTier::Compat => 2,
+            RenderTier::Full => MAX_CASCADES,
+        };
+        let wanted = (settings.shadow_cascades as usize).clamp(1, max_cascades);
+        let tile = if wanted > 1 { size / 2 } else { size };
         let fit = if sun_shadows && sun_color != Vec3::ZERO && settings.shadow_distance > 0.0 {
-            fit_shadow(&cam, sun_dir, settings.shadow_distance, size)
+            fit_cascades(&cam, sun_dir, settings.shadow_distance, wanted, tile)
         } else {
             None
         };
-        view.shadow_active = fit.is_some();
+        let count = fit.map_or(0, |f| f.count);
+        view.cascade_count = count;
+        view.shadow_tile = tile;
         let mut rebind = false;
-        if fit.is_some() && view.shadow_map.as_ref().is_none_or(|(_, s)| *s != size) {
+        if count > 0 && view.shadow_map.as_ref().is_none_or(|(_, s)| *s != size) {
             view.shadow_map = Some((shadow_texture(&self.device, size), size));
             rebind = true;
         }
-        let shadow_frustum = fit.map(|f| Frustum::from_view_proj(f.view_proj));
+        while view.cascades.len() < count {
+            view.cascades.push(self.create_cascade());
+        }
+        let cascade_frusta: [Option<Frustum>; MAX_CASCADES] = std::array::from_fn(|c| {
+            fit.filter(|f| c < f.count)
+                .map(|f| Frustum::from_view_proj(f.view_proj[c]))
+        });
 
         // Sky (its texture lives in the view's bind group).
         let sky_texture = match settings.sky {
@@ -723,7 +945,10 @@ impl RenderCore {
 
         // Meshes.
         view.main.begin();
-        view.shadow.begin();
+        view.blend.items.clear();
+        for cascade in &mut view.cascades {
+            cascade.casters.begin();
+        }
         let mut culled = 0;
         for (global, transform, renderer) in world
             .query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>()
@@ -737,6 +962,7 @@ impl RenderCore {
                 Some(m) if matches!(gpu.materials.get(m.0 as usize), Some(Some(_))) => m.0,
                 _ => NO_MATERIAL,
             };
+            let blended = gpu.is_blended(material);
             let model = global.map_or_else(|| transform.matrix(), |g| g.0);
             let scale = model
                 .x_axis
@@ -749,31 +975,69 @@ impl RenderCore {
                 model: model.to_cols_array_2d(),
                 color: renderer.color.0,
             };
-            if let Some(f) = &shadow_frustum
-                && f.intersects_sphere(center, radius)
-            {
-                view.shadow.push(bucket_key(NO_MATERIAL, i), instance);
+            // Blended meshes don't cast shadows.
+            if !blended {
+                for (cascade, f) in view.cascades.iter_mut().zip(&cascade_frusta) {
+                    if let Some(f) = f
+                        && f.intersects_sphere(center, radius)
+                    {
+                        cascade.casters.push(bucket_key(NO_MATERIAL, i), instance);
+                    }
+                }
             }
-            if frustum.intersects_sphere(center, radius) {
-                view.main.push(bucket_key(material, i), instance);
-            } else {
+            if !frustum.intersects_sphere(center, radius) {
                 culled += 1;
+            } else if blended {
+                view.blend.items.push(BlendItem {
+                    depth: cam.view_plane.truncate().dot(center) + cam.view_plane.w,
+                    key: bucket_key(material, i),
+                    instance,
+                });
+            } else {
+                view.main.push(bucket_key(material, i), instance);
             }
         }
         view.main
             .finish(&self.device, &self.queue, &mut view.staging, |m| {
                 gpu.pipeline_of(m)
             });
-        if view.shadow_active {
-            view.shadow
+        view.blend
+            .finish(&self.device, &self.queue, &mut view.staging, |m| {
+                gpu.pipeline_of(m)
+            });
+        for cascade in view.cascades.iter_mut().take(count) {
+            cascade
+                .casters
                 .finish(&self.device, &self.queue, &mut view.staging, |_| 0);
         }
 
         // Uniforms.
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let fog = settings.fog;
-        let shadow_view_proj = fit.map_or(Mat4::IDENTITY, |f| f.view_proj);
-        let texel_world = fit.map_or(0.0, |f| f.texel_world);
+        // Sampling matrices land in the cascade's tile of the atlas.
+        let mut shadow_view_proj = [Mat4::IDENTITY; MAX_CASCADES];
+        let mut shadow_offsets = [0.0; 4];
+        let mut shadow_splits = [f32::MAX; 4];
+        if let Some(f) = fit {
+            for c in 0..f.count {
+                shadow_view_proj[c] = if f.count > 1 {
+                    let (col, row) = ((c % 2) as f32, (c / 2) as f32);
+                    Mat4::from_translation(Vec3::new(col - 0.5, 0.5 - row, 0.0))
+                        * Mat4::from_scale(Vec3::new(0.5, 0.5, 1.0))
+                        * f.view_proj[c]
+                } else {
+                    f.view_proj[c]
+                };
+                shadow_offsets[c] = f.texel_world[c] * 1.5;
+                shadow_splits[c] = f.splits[c];
+            }
+        }
+        let filter = match settings.shadow_filter {
+            ShadowFilter::Hard => 0.0,
+            ShadowFilter::Pcf => 1.0,
+            ShadowFilter::Soft if self.tier == RenderTier::Full => 2.0,
+            ShadowFilter::Soft => 1.0,
+        };
         let time = self
             .time
             .unwrap_or_else(|| self.start.elapsed().as_secs_f32());
@@ -809,14 +1073,20 @@ impl RenderCore {
         view.sky_active = sky.params[0] > 0.5;
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
-            shadow_view_proj: shadow_view_proj.to_cols_array_2d(),
+            shadow_view_proj: shadow_view_proj.map(|m| m.to_cols_array_2d()),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera: cam.camera.into(),
             view_plane: cam.view_plane.into(),
-            sun_dir: sun_dir.extend(flag(view.shadow_active)).into(),
-            sun_color: sun_color.extend(flag(self.encode_srgb)).into(),
+            sun_dir: sun_dir.extend(flag(count > 0)).into(),
+            sun_color: sun_color
+                .extend(flag(self.encode_srgb && !self.hdr_output))
+                .into(),
             sky: rgb(settings.ambient.0)
-                .extend(settings.exposure.max(0.0))
+                .extend(if self.hdr_output {
+                    1.0
+                } else {
+                    settings.exposure.max(0.0)
+                })
                 .into(),
             ground: rgb(settings.ground_ambient.0)
                 .extend(lights.len as f32)
@@ -829,10 +1099,18 @@ impl RenderCore {
                 settings.shadow_distance,
             ],
             shadow_params: [
-                texel_world * 1.5,
+                flag(self.hdr_output),
                 settings.shadow_distance * 0.85,
-                flag(settings.tonemapping == Tonemapping::Aces),
+                flag(settings.tonemapping == Tonemapping::Aces && !self.hdr_output),
                 time,
+            ],
+            shadow_splits,
+            shadow_offsets,
+            shadow_cfg: [
+                count as f32,
+                filter,
+                settings.shadow_filter_radius.max(0.0),
+                0.0,
             ],
             sky_zenith: sky.zenith,
             sky_horizon: sky.horizon,
@@ -842,31 +1120,30 @@ impl RenderCore {
         };
         self.queue
             .write_buffer(&view.globals, 0, bytemuck::bytes_of(&globals));
-        if view.shadow_active {
-            self.queue.write_buffer(
-                &view.shadow_globals,
-                0,
-                bytemuck::bytes_of(&shadow_view_proj.to_cols_array_2d()),
-            );
+        if let Some(f) = fit {
+            for (cascade, m) in view.cascades.iter().zip(&f.view_proj).take(f.count) {
+                self.queue
+                    .write_buffer(&cascade.globals, 0, bytemuck::bytes_of(m));
+            }
         }
 
         RenderStats {
-            draw_calls: view.main.ranges.len() as u32,
-            instances: view.main.count,
+            draw_calls: (view.main.ranges.len() + view.blend.ranges.len()) as u32,
+            instances: view.main.count + view.blend.count,
             culled,
         }
     }
 
-    /// Records the sun's shadow-map pass (depth only) for `view`. Call after
-    /// `prepare` and before the pass that `draw`s this view; does nothing
-    /// when shadows are off.
+    /// Records the sun's shadow-map pass (depth only, one viewport per
+    /// cascade) for `view`. Call after `prepare` and before the pass that
+    /// `draw`s this view; does nothing when shadows are off.
     pub fn render_shadows(
         &self,
         view: &ViewData,
         gpu: &GpuMeshes,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        if !view.shadow_active {
+        if view.cascade_count == 0 {
             return;
         }
         let Some((map, _)) = &view.shadow_map else {
@@ -885,63 +1162,93 @@ impl RenderCore {
             }),
             ..Default::default()
         });
-        if view.shadow.ranges.is_empty() {
-            return;
-        }
         pass.set_pipeline(&self.shadow_pipeline);
-        pass.set_bind_group(0, &view.shadow_bind, &[]);
-        pass.set_vertex_buffer(1, view.shadow.buffer.slice(..));
-        for range in &view.shadow.ranges {
-            if let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
+        let tile = view.shadow_tile as f32;
+        for (c, cascade) in view.cascades.iter().take(view.cascade_count).enumerate() {
+            if cascade.casters.ranges.is_empty() {
+                continue;
+            }
+            // Cascade c's tile: column c % 2, row c / 2 (the whole map for one).
+            let (col, row) = if view.cascade_count > 1 {
+                ((c % 2) as f32, (c / 2) as f32)
+            } else {
+                (0.0, 0.0)
+            };
+            pass.set_viewport(col * tile, row * tile, tile, tile, 0.0, 1.0);
+            pass.set_bind_group(0, &cascade.bind, &[]);
+            pass.set_vertex_buffer(1, cascade.casters.buffer.slice(..));
+            for range in &cascade.casters.ranges {
+                if let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
+                }
             }
         }
     }
 
     /// Records the prepared draws into a pass compatible with this core:
-    /// meshes sorted by pipeline / material / mesh, then the sky (if any) on
-    /// the far plane. Call it even when `prepare` reported no draw calls, so
-    /// the sky still shows.
+    /// opaque meshes sorted by pipeline / material / mesh, then the sky (if
+    /// any) on the far plane, then the alpha-blended meshes back to front.
+    /// Call it even when `prepare` reported no draw calls, so the sky still
+    /// shows.
     pub fn draw(&self, view: &ViewData, gpu: &GpuMeshes, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_bind_group(0, &view.bind, &[]);
-        if !view.main.ranges.is_empty() {
-            pass.set_vertex_buffer(1, view.main.buffer.slice(..));
-            let mut bound_pipeline = None;
-            let mut bound_material = None;
-            for range in &view.main.ranges {
-                let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) else {
-                    continue;
-                };
-                if bound_pipeline != Some(range.pipeline) {
-                    let pipeline = match range.pipeline {
-                        0 => &self.pipeline,
-                        id => match gpu.pipelines.get(id as usize - 1) {
-                            Some(Some(p)) => p,
-                            _ => &self.pipeline,
-                        },
-                    };
-                    pass.set_pipeline(pipeline);
-                    bound_pipeline = Some(range.pipeline);
-                }
-                if bound_material != Some(range.material) {
-                    let bind = gpu
-                        .materials
-                        .get(range.material as usize)
-                        .and_then(Option::as_ref)
-                        .map_or(&self.fallback_material, |m| &m.bind);
-                    pass.set_bind_group(1, bind, &[]);
-                    bound_material = Some(range.material);
-                }
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
-            }
-        }
+        self.draw_ranges(gpu, pass, &view.main.buffer, &view.main.ranges, false);
         if view.sky_active {
             pass.set_pipeline(&self.sky_pipeline);
             pass.draw(0..3, 0..1);
+        }
+        self.draw_ranges(gpu, pass, &view.blend.buffer, &view.blend.ranges, true);
+    }
+
+    fn draw_ranges(
+        &self,
+        gpu: &GpuMeshes,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: &wgpu::Buffer,
+        ranges: &[DrawRange],
+        blend: bool,
+    ) {
+        if ranges.is_empty() {
+            return;
+        }
+        pass.set_vertex_buffer(1, instances.slice(..));
+        let mut bound_pipeline = None;
+        let mut bound_material = None;
+        for range in ranges {
+            let Some(Some(mesh)) = gpu.meshes.get(range.mesh as usize) else {
+                continue;
+            };
+            if bound_pipeline != Some(range.pipeline) {
+                let builtin = if blend {
+                    &self.blend_pipeline
+                } else {
+                    &self.pipeline
+                };
+                let pipeline = match range.pipeline {
+                    0 => builtin,
+                    id => match gpu.pipelines.get(id as usize - 1) {
+                        Some(Some(p)) if blend => p.blend.as_ref().unwrap_or(builtin),
+                        Some(Some(p)) => &p.opaque,
+                        _ => builtin,
+                    },
+                };
+                pass.set_pipeline(pipeline);
+                bound_pipeline = Some(range.pipeline);
+            }
+            if bound_material != Some(range.material) {
+                let bind = gpu
+                    .materials
+                    .get(range.material as usize)
+                    .and_then(Option::as_ref)
+                    .map_or(&self.fallback_material, |m| &m.bind);
+                pass.set_bind_group(1, bind, &[]);
+                bound_material = Some(range.material);
+            }
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
         }
     }
 }
@@ -1081,6 +1388,15 @@ fn upload_texture(
     }
 }
 
+/// Native APIs run Full; GL / WebGL stay Compat (see [`crate::tier_of`]).
+fn tier_of_device(device: &wgpu::Device) -> RenderTier {
+    if device.adapter_info().backend == wgpu::Backend::Gl {
+        RenderTier::Compat
+    } else {
+        RenderTier::Full
+    }
+}
+
 fn rgb(c: [f32; 4]) -> Vec3 {
     Vec3::new(c[0], c[1], c[2])
 }
@@ -1209,6 +1525,7 @@ fn create_mesh_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     (format, samples, depth): (wgpu::TextureFormat, u32, wgpu::TextureFormat),
+    blend: bool,
 ) -> wgpu::RenderPipeline {
     let vertex_attrs = wgpu::vertex_attr_array![
         0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4
@@ -1217,7 +1534,7 @@ fn create_mesh_pipeline(
         4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
     ];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("mesh"),
+        label: Some(if blend { "mesh blend" } else { "mesh" }),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -1238,7 +1555,7 @@ fn create_mesh_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: depth,
-            depth_write_enabled: Some(true),
+            depth_write_enabled: Some(!blend),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: Default::default(),
             bias: Default::default(),
@@ -1253,7 +1570,11 @@ fn create_mesh_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(if blend {
+                    wgpu::BlendState::ALPHA_BLENDING
+                } else {
+                    wgpu::BlendState::REPLACE
+                }),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1710,6 +2031,348 @@ mod tests {
                 "editor_like={editor_like}: no shadow {s:?} vs {o:?}"
             );
         }
+    }
+
+    /// The sun's shadow test scene: a cube casting a shadow onto x ∈ [0.5, 2.5];
+    /// returns (shadowed, open) pixel columns.
+    fn shadow_scene(h: &mut Harness) -> (World, (u32, u32), (u32, u32)) {
+        let plane = h.meshes.add(MeshData::plane(20.0));
+        let cube = h.meshes.add(MeshData::cube(1.0));
+        let mut world = World::new();
+        world.spawn((Transform::IDENTITY, MeshRenderer::new(plane, Color::WHITE)));
+        world.spawn((
+            Transform::from_xyz(0.0, 1.5, 0.0),
+            MeshRenderer::new(cube, Color::WHITE),
+        ));
+        world.spawn(top_down_camera(8.0));
+        let sun_dir = Vec3::new(1.0, -1.0, 0.0).normalize();
+        world.spawn((
+            Transform::IDENTITY.looking_at(sun_dir, Vec3::Y),
+            Light::directional([1.0; 3], 1.0),
+        ));
+        let (shadowed, open) = ((column(1.5, 8.0), SIZE / 2), (column(-2.5, 8.0), SIZE / 2));
+        (world, shadowed, open)
+    }
+
+    #[test]
+    fn cascades_and_filters_all_shadow_the_cube() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let (world, shadowed, open) = shadow_scene(&mut h);
+        for tier in [RenderTier::Compat, RenderTier::Full] {
+            h.core.set_tier(tier);
+            for cascades in 1..=4 {
+                for filter in [ShadowFilter::Hard, ShadowFilter::Pcf, ShadowFilter::Soft] {
+                    let settings = RenderSettings {
+                        shadow_cascades: cascades,
+                        shadow_filter: filter,
+                        shadow_distance: 20.0,
+                        ..Default::default()
+                    };
+                    let (_, at) = h.render(&world, &settings);
+                    let cap = if tier == RenderTier::Full { 4 } else { 2 };
+                    assert_eq!(h.view.shadow_cascades(), (cascades as usize).min(cap));
+                    let (s, o) = (at(shadowed.0, shadowed.1), at(open.0, open.1));
+                    assert!(
+                        luma(s) + 150 < luma(o),
+                        "{tier:?} {cascades} cascades {filter:?}: shadowed {s:?} vs open {o:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    // ---- Alpha blending.
+
+    /// Flat colour with alpha, drawn in the blend pass when `blend`.
+    fn tinted(rgb: [f32; 3], alpha: f32, blend: bool) -> Material {
+        Material {
+            base_color: Color([rgb[0], rgb[1], rgb[2], alpha]),
+            unlit: true,
+            blend: if blend {
+                BlendMode::Alpha
+            } else {
+                BlendMode::Opaque
+            },
+            ..Default::default()
+        }
+    }
+
+    fn layer(h: &mut Harness, world: &mut World, y: f32, material: Material) {
+        let plane = h.meshes.add(MeshData::plane(4.0));
+        let material = h.materials.add(material);
+        world.spawn((
+            Transform::from_xyz(0.0, y, 0.0),
+            MeshRenderer::new(plane, Color::WHITE).with_material(material),
+        ));
+    }
+
+    #[test]
+    fn blended_material_mixes_with_what_is_behind() {
+        for editor_like in [false, true] {
+            let Some(mut h) = Harness::new(editor_like) else {
+                return;
+            };
+            let mut world = World::new();
+            world.spawn(top_down_camera(8.0));
+            layer(&mut h, &mut world, 0.0, tinted([1.0, 0.0, 0.0], 1.0, false));
+            layer(&mut h, &mut world, 1.0, tinted([0.0, 1.0, 0.0], 0.5, true));
+            let (stats, at) = h.render(&world, &flat_settings());
+            assert_eq!(stats.draw_calls, 2);
+            // Half green over red: blended in linear light on an sRGB target
+            // (188 = sRGB of 0.5), in encoded values on the editor's non-sRGB one.
+            let mid = at(SIZE / 2, SIZE / 2);
+            if editor_like {
+                assert!(
+                    mid[0].abs_diff(mid[1]) < 12 && mid[0] > 100 && mid[2] < 10,
+                    "{mid:?}"
+                );
+            } else {
+                assert!(close(mid, [188, 188, 0]), "{mid:?}");
+            }
+
+            // Behind an opaque surface the blended one is hidden (depth test).
+            let mut world = World::new();
+            world.spawn(top_down_camera(8.0));
+            layer(&mut h, &mut world, 0.0, tinted([1.0, 0.0, 0.0], 1.0, false));
+            layer(&mut h, &mut world, -1.0, tinted([0.0, 1.0, 0.0], 0.5, true));
+            let (_, at) = h.render(&world, &flat_settings());
+            let hidden = at(SIZE / 2, SIZE / 2);
+            assert!(hidden[0] > 200 && hidden[1] < 10, "{hidden:?}");
+        }
+    }
+
+    #[test]
+    fn blended_material_with_a_surface_shader_gets_its_own_blend_pipeline() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let shader = h.shaders.add(
+            "fn surface(in: SurfaceInput) -> SurfaceOutput {\n    var out = default_surface(in);\n    \
+             out.color = vec4<f32>(0.0, 1.0, 0.0, 0.5);\n    return out;\n}\n"
+                .into(),
+        );
+        let mut world = World::new();
+        world.spawn(top_down_camera(8.0));
+        layer(&mut h, &mut world, 0.0, tinted([1.0, 0.0, 0.0], 1.0, false));
+        layer(
+            &mut h,
+            &mut world,
+            1.0,
+            Material {
+                shader: Some(shader),
+                unlit: false,
+                ..tinted([1.0; 3], 1.0, true)
+            },
+        );
+        let settings = RenderSettings {
+            // Lit by a white sun straight down: green stays green, half-covered.
+            light_dir: Vec3::NEG_Y,
+            light_color: Color::WHITE,
+            ..flat_settings()
+        };
+        let (_, at) = h.render(&world, &settings);
+        let mid = at(SIZE / 2, SIZE / 2);
+        assert_eq!(h.shaders.error(shader), None);
+        assert!(
+            mid[0] > 40 && mid[1] > 40,
+            "red below, green above: {mid:?}"
+        );
+    }
+
+    #[test]
+    fn blended_layers_sort_back_to_front_whatever_the_spawn_order() {
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        let red = tinted([1.0, 0.0, 0.0], 0.5, true);
+        let green = tinted([0.0, 1.0, 0.0], 0.5, true);
+        let mut pixels = Vec::new();
+        // Near layer (y = 2, green) over far layer (y = 1, red), both orders.
+        for near_first in [true, false] {
+            let mut world = World::new();
+            world.spawn(top_down_camera(8.0));
+            if near_first {
+                layer(&mut h, &mut world, 2.0, green);
+                layer(&mut h, &mut world, 1.0, red);
+            } else {
+                layer(&mut h, &mut world, 1.0, red);
+                layer(&mut h, &mut world, 2.0, green);
+            }
+            let (_, at) = h.render(&world, &flat_settings());
+            pixels.push(at(SIZE / 2, SIZE / 2));
+        }
+        assert_eq!(pixels[0], pixels[1]);
+        // The near green dominates the far red: g = 0.5, r = 0.25 in linear light.
+        let [r, g, _] = pixels[0];
+        assert!(g > r + 40, "{:?}", pixels[0]);
+    }
+
+    // ---- Post-processing.
+
+    /// An emissive 8.0 square in the middle of a black frame, through the
+    /// HDR target and the post chain; returns the output's RGB at (x, y).
+    fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] + use<>> {
+        let (device, queue) = device()?;
+        let mut core = RenderCore::new(
+            device.clone(),
+            queue,
+            crate::HDR_FORMAT,
+            1,
+            wgpu::TextureFormat::Depth24Plus,
+        );
+        core.set_hdr_output(true);
+        let mut post = crate::PostProcess::new(&device, FORMAT);
+        post.resize(&device, (SIZE, SIZE));
+        let (mut gpu, mut meshes, mut materials) = (
+            GpuMeshes::default(),
+            Meshes::default(),
+            Materials::default(),
+        );
+        let (mut textures, mut shaders) = (Textures::default(), Shaders::default());
+        let quad = meshes.add(MeshData::plane(1.0));
+        let glow = materials.add(Material {
+            base_color: Color::BLACK,
+            emissive: [8.0; 3],
+            unlit: true,
+            ..Default::default()
+        });
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(quad, Color::WHITE).with_material(glow),
+        ));
+        world.spawn(top_down_camera(8.0));
+        core.upload(&mut gpu, &mut meshes);
+        core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
+        let mut view = core.create_view();
+        core.prepare(
+            &mut view,
+            &gpu,
+            &world,
+            camera_view_proj(&world, 1.0).unwrap(),
+            settings,
+        );
+        let texture = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let out = texture(
+            FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = texture(
+            wgpu::TextureFormat::Depth24Plus,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        )
+        .create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (SIZE * SIZE * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let hdr = post.hdr_view().unwrap();
+            let mut pass = begin_pass(&mut encoder, hdr, &depth, settings);
+            core.draw(&view, &gpu, &mut pass);
+        }
+        post.run(
+            &core.queue,
+            &mut encoder,
+            &out.create_view(&Default::default()),
+            settings,
+        );
+        encoder.copy_texture_to_buffer(
+            out.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(SIZE * 4),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        core.queue.submit([encoder.finish()]);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
+        Some(move |x: u32, y: u32| {
+            let i = ((y * SIZE + x) * 4) as usize;
+            [pixels[i], pixels[i + 1], pixels[i + 2]]
+        })
+    }
+
+    #[test]
+    fn post_chain_tonemaps_the_hdr_frame_and_blooms() {
+        let settings = RenderSettings {
+            clear_color: Color::BLACK,
+            tonemapping: Tonemapping::None,
+            ..Default::default()
+        };
+        let Some(plain) = post_frame(&settings) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        // 8.0 is brighter than white (clamped); away from the square it's black.
+        assert_eq!(plain(SIZE / 2, SIZE / 2), [255, 255, 255]);
+        let near = (SIZE / 2 + 10, SIZE / 2);
+        assert!(
+            luma(plain(near.0, near.1)) < 6,
+            "{:?}",
+            plain(near.0, near.1)
+        );
+
+        // ACES compresses the highlight below pure white only for dimmer
+        // values: exposure 0.05 puts the square at 0.4.
+        let dim = RenderSettings {
+            exposure: 0.05,
+            tonemapping: Tonemapping::Aces,
+            ..settings.clone()
+        };
+        let Some(dim_frame) = post_frame(&dim) else {
+            return;
+        };
+        let c = dim_frame(SIZE / 2, SIZE / 2);
+        assert!(c[0] > 150 && c[0] < 250 && c[0] == c[1], "{c:?}");
+
+        // Bloom lights up the pixels around the square.
+        let bloom = RenderSettings {
+            bloom: Some(crate::Bloom {
+                threshold: 1.0,
+                intensity: 2.0,
+            }),
+            ..settings
+        };
+        let Some(bloomed) = post_frame(&bloom) else {
+            return;
+        };
+        let glow = bloomed(near.0, near.1);
+        assert!(luma(glow) > 60, "{glow:?}");
+        // Far from it, still dark.
+        assert!(luma(bloomed(2, 2)) < luma(glow), "{:?}", bloomed(2, 2));
     }
 
     #[test]
@@ -2247,5 +2910,80 @@ mod tests {
         // The floor just below the horizon is fully fogged: horizon red, not fog green.
         let c = at(SIZE / 2, SIZE / 2 + 4);
         assert!(close(c, [255, 0, 0]), "{c:?}");
+    }
+
+    #[test]
+    fn skinned_mesh_renders_in_its_posed_place() {
+        use crate::SkinnedMesh;
+        use olvin_anim::{Joint, JointPose, Skeleton};
+        let Some(mut h) = Harness::new(false) else {
+            return;
+        };
+        // A strip along +X of three columns (z = ±0.5): the first on the root
+        // joint, the other two on the tip joint that sits at x = 1.
+        let joint = |name: &str, parent, target, x: f32| Joint {
+            name: name.into(),
+            parent,
+            target,
+            rest: JointPose {
+                translation: Vec3::new(x, 0.0, 0.0),
+                ..JointPose::IDENTITY
+            },
+            inverse_bind: glam::Mat4::from_translation(Vec3::new(-x, 0.0, 0.0)),
+        };
+        let skeleton = Skeleton::new(vec![
+            joint("root", None, 0, 0.0),
+            joint("tip", Some(0), 1, 1.0),
+        ])
+        .unwrap();
+        let mut bind = MeshData::default();
+        for x in [0.0, 1.0, 2.0] {
+            for z in [-0.5, 0.5] {
+                bind.vertices
+                    .push(crate::Vertex::new([x, 0.0, z], [0.0, 1.0, 0.0]));
+            }
+        }
+        for c in 0..2u32 {
+            let (a, b, c0, d) = (2 * c, 2 * c + 1, 2 * c + 2, 2 * c + 3);
+            // Both windings: the test is about where it is drawn, not culling.
+            bind.indices.extend([a, b, d, a, d, c0, a, d, b, a, c0, d]);
+        }
+        let joints = vec![[0; 4], [0; 4], [1; 4], [1; 4], [1; 4], [1; 4]];
+        let weights = vec![[1.0, 0.0, 0.0, 0.0]; 6];
+        let skinned =
+            SkinnedMesh::new(bind.clone(), joints, weights, olvin_ecs::Entity::DANGLING).unwrap();
+        let mesh = h.meshes.add(bind);
+        let material = h.materials.add(unlit(None));
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(mesh, Color::rgb(1.0, 0.0, 0.0)).with_material(material),
+        ));
+        world.spawn(top_down_camera(8.0));
+        let settings = flat_settings();
+        let row =
+            |z: f32| ((0.5 + z / (8.0 * 30f32.to_radians().tan()) * 0.5) * SIZE as f32) as u32;
+
+        // Rest pose: red at x = 1.5, z = 0; background at z = 2.
+        h.meshes.set(
+            mesh,
+            skinned.skin(&skeleton.skin_matrices(&skeleton.rest_pose())),
+        );
+        let (_, at) = h.render(&world, &settings);
+        assert!(close(at(column(1.5, 8.0), row(0.0)), [255, 0, 0]));
+        assert!(close(at(column(1.5, 8.0), row(2.0)), [0, 0, 255]));
+
+        // The tip slides 2 m along +Z: its columns now cover z = 2.
+        let mut pose = skeleton.rest_pose();
+        pose.joints[1].translation += Vec3::new(0.0, 0.0, 2.0);
+        h.meshes
+            .set(mesh, skinned.skin(&skeleton.skin_matrices(&pose)));
+        let (_, at) = h.render(&world, &settings);
+        assert!(
+            close(at(column(1.9, 8.0), row(2.0)), [255, 0, 0]),
+            "{:?}",
+            at(column(1.9, 8.0), row(2.0))
+        );
+        assert!(close(at(column(1.9, 8.0), row(0.0)), [0, 0, 255]));
     }
 }

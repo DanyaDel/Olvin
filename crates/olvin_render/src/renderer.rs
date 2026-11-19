@@ -5,6 +5,9 @@ use olvin_core::{AppExit, Resources, SurfaceTarget, WindowHandleSource};
 use olvin_ecs::World;
 
 use crate::core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
+use crate::particles::ParticleRenderer;
+use crate::post::{HDR_FORMAT, PostProcess};
+use crate::sprite::SpriteRenderer;
 use crate::{Materials, Meshes, RenderSettings, Shaders, Textures};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
@@ -41,6 +44,11 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     depth: wgpu::TextureView,
+    /// Full tier: the scene goes into an HDR target and through this chain.
+    post: Option<PostProcess>,
+    /// Particles and 2D sprites, drawn after the meshes in the same pass.
+    particles: ParticleRenderer,
+    sprites: SpriteRenderer,
 }
 
 /// `Stage::Startup`: creates the GPU device once a surface exists.
@@ -171,7 +179,22 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let depth = create_depth(&device, width, height);
-        let core = RenderCore::new(device, queue, config.format, 1, DEPTH_FORMAT);
+        let post =
+            (info.tier == RenderTier::Full).then(|| PostProcess::new(&device, config.format));
+        let scene_format = if post.is_some() {
+            HDR_FORMAT
+        } else {
+            config.format
+        };
+        let mut core = RenderCore::new(device, queue, scene_format, 1, DEPTH_FORMAT);
+        core.set_tier(info.tier);
+        core.set_hdr_output(post.is_some());
+        let mut particles =
+            ParticleRenderer::new(&core.device, &core.queue, scene_format, 1, DEPTH_FORMAT);
+        let mut sprites =
+            SpriteRenderer::new(&core.device, &core.queue, scene_format, 1, DEPTH_FORMAT);
+        particles.set_hdr_output(post.is_some());
+        sprites.set_hdr_output(post.is_some());
         let view = core.create_view();
         Ok((
             Self {
@@ -181,6 +204,9 @@ impl Renderer {
                 surface,
                 config,
                 depth,
+                post,
+                particles,
+                sprites,
             },
             info,
         ))
@@ -214,6 +240,15 @@ impl Renderer {
             None => Default::default(),
         };
 
+        match view_proj {
+            Some(vp) => {
+                self.particles
+                    .prepare(&self.core.device, &self.core.queue, &self.gpu, world, vp);
+            }
+            None => self.particles.clear(),
+        }
+        self.sprites
+            .prepare(&self.core.device, &self.core.queue, &self.gpu, world, size);
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -232,12 +267,25 @@ impl Renderer {
             self.core
                 .render_shadows(&self.view, &self.gpu, &mut encoder);
         }
-        {
+        if let Some(post) = &mut self.post {
+            post.resize(&self.core.device, size);
+            let hdr = post.hdr_view().expect("resized above");
+            let mut pass = begin_pass(&mut encoder, hdr, &self.depth, settings);
+            if view_proj.is_some() {
+                self.core.draw(&self.view, &self.gpu, &mut pass);
+            }
+            self.particles.draw(&mut pass);
+            self.sprites.draw(&mut pass);
+            drop(pass);
+            post.run(&self.core.queue, &mut encoder, &target, settings);
+        } else {
             let mut pass = begin_pass(&mut encoder, &target, &self.depth, settings);
             // Even without meshes: the sky.
             if view_proj.is_some() {
                 self.core.draw(&self.view, &self.gpu, &mut pass);
             }
+            self.particles.draw(&mut pass);
+            self.sprites.draw(&mut pass);
         }
         self.core.queue.submit([encoder.finish()]);
         self.core.queue.present(frame);

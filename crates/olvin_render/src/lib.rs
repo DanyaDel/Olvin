@@ -7,17 +7,33 @@ mod frustum;
 mod light;
 mod material;
 mod mesh;
+mod particles;
+mod post;
+mod quad;
 mod renderer;
 mod shader;
+mod skinning;
+mod sprite;
 mod texture;
 
 pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
-pub use light::{Light, LightKind, MAX_LIGHTS};
-pub use material::{Material, MaterialHandle, Materials};
+pub use light::{Light, LightKind, MAX_CASCADES, MAX_LIGHTS};
+pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
+pub use particles::{
+    Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
+    update_emitters,
+};
+pub use post::{HDR_FORMAT, PostProcess};
+pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
 pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
+pub use skinning::SkinnedMesh;
+pub use sprite::{
+    AtlasRegion, Camera2d, Space2d, Sprite, SpriteAtlas, SpriteRenderer, TileSet, Tilemap,
+    screen_view_proj,
+};
 pub use texture::{TextureData, TextureFormat, TextureHandle, Textures};
 /// The wgpu version the engine renders with (the editor shares it).
 pub use wgpu;
@@ -28,6 +44,7 @@ use olvin_ecs::EcsPlugin;
 
 /// Linear RGBA.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color(pub [f32; 4]);
 
 impl Color {
@@ -106,6 +123,37 @@ pub enum Tonemapping {
     Aces,
 }
 
+/// How the sun's shadow map is filtered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShadowFilter {
+    /// One hardware-filtered tap: crisp, cheapest.
+    Hard,
+    /// 3×3 hardware-filtered taps (PCF), everywhere.
+    #[default]
+    Pcf,
+    /// 16 taps over a rotated disc: smooth penumbrae at large radii. Needs
+    /// [`RenderTier::Full`]; Compat hardware falls back to `Pcf`.
+    Soft,
+}
+
+/// Glow around bright areas (post-processing, Full tier only).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bloom {
+    /// Scene brightness (linear, before exposure) where glow starts.
+    pub threshold: f32,
+    /// How much of the blurred bright areas is added back.
+    pub intensity: f32,
+}
+
+impl Default for Bloom {
+    fn default() -> Self {
+        Self {
+            threshold: 1.0,
+            intensity: 0.3,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RenderSettings {
     /// Fifo when on: no tearing, and the GPU idles instead of burning battery.
@@ -130,10 +178,21 @@ pub struct RenderSettings {
     pub exposure: f32,
     pub tonemapping: Tonemapping,
     pub fog: Option<Fog>,
+    /// Bloom; needs the post-processing chain of [`RenderTier::Full`] in the
+    /// window renderer, ignored elsewhere.
+    pub bloom: Option<Bloom>,
     /// How far from the camera the sun's shadows reach (metres).
     pub shadow_distance: f32,
     /// Shadow map resolution (square); clamped to the device's limit.
     pub shadow_map_size: u32,
+    /// Cascades the sun's shadow map is split into (1 to [`MAX_CASCADES`]):
+    /// sharp shadows near the camera, coarse far away. They share the map as
+    /// tiles, so more cascades means smaller tiles. Compat hardware uses at
+    /// most 2.
+    pub shadow_cascades: u32,
+    pub shadow_filter: ShadowFilter,
+    /// Filter reach in shadow texels (1 = the classic 3×3 PCF kernel).
+    pub shadow_filter_radius: f32,
     /// Use `Light` components; off = only the fallback sun (editor's Solid view).
     pub scene_lights: bool,
 }
@@ -153,8 +212,12 @@ impl Default for RenderSettings {
             exposure: 1.0,
             tonemapping: Tonemapping::Aces,
             fog: None,
+            bloom: None,
             shadow_distance: 60.0,
             shadow_map_size: 2048,
+            shadow_cascades: 4,
+            shadow_filter: ShadowFilter::Pcf,
+            shadow_filter_radius: 1.0,
             scene_lights: true,
         }
     }
@@ -169,6 +232,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
             .add_plugin(olvin_transform::TransformPlugin)
+            .add_plugin(olvin_anim::AnimPlugin)
             .insert_resource(self.settings.clone())
             .init_resource::<Meshes>()
             .init_resource::<Textures>()
@@ -176,6 +240,8 @@ impl Plugin for RenderPlugin {
             .init_resource::<Shaders>()
             .init_resource::<RenderStats>()
             .add_system(Stage::Startup, renderer::init)
+            .add_system(Stage::PostUpdate, particles::update)
+            .add_system(Stage::PostUpdate, skinning::skin_meshes)
             .add_system(Stage::Render, renderer::render);
     }
 }

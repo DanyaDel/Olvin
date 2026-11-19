@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 olvin_core.workspace = true
+olvin_anim.workspace = true
 olvin_scene = { workspace = true, features = ["serde"] }
 glam.workspace = true
 serde.workspace = true

@@ -544,3 +544,483 @@ fn plugin_inserts_root() {
     assert!(root.guid_of("x.wgsl").is_some());
     assert!(dir.path().join("x.wgsl.meta").is_file());
 }
+
+const WAIT: Duration = Duration::from_secs(10);
+
+fn write_material(dir: &TempDir, rel: &str, base: Option<&str>, normal: Option<&str>) {
+    let mat = olvin_scene::material::MaterialDesc {
+        base_texture: base.map(Into::into),
+        normal_texture: normal.map(Into::into),
+        ..Default::default()
+    };
+    mat.save(dir.path().join(rel)).unwrap();
+}
+
+#[test]
+fn manager_loads_in_background_and_shares_handles() {
+    let dir = TempDir::new("mgr_load");
+    dir.write("tex/a.png", &png_bytes(4, 4));
+    let mut mgr = AssetManager::new(dir.path());
+    let a = mgr.load::<ImageData>("tex/a.png");
+    let b = mgr.load::<ImageData>("./tex\\a.png");
+    assert_eq!(a, b, "same asset, same handle");
+    assert_eq!(mgr.len(), 1);
+    assert_eq!(mgr.ref_count(&a), 2);
+    assert!(mgr.wait_idle(WAIT));
+    assert_eq!(mgr.state(&a), LoadState::Ready);
+    let img = mgr.get(&a).expect("loaded");
+    assert_eq!((img.width, img.height), (4, 4));
+    assert_eq!(mgr.version(&a), 1);
+    assert_eq!(
+        mgr.take_changes(),
+        [AssetChange {
+            path: "tex/a.png".into(),
+            kind: AssetKind::Texture,
+            version: 1
+        }]
+    );
+    let missing = mgr.load::<ImageData>("tex/none.png");
+    assert!(mgr.wait_idle(WAIT));
+    assert!(matches!(mgr.state(&missing), LoadState::Failed(_)));
+    assert!(mgr.get(&missing).is_none());
+}
+
+#[test]
+fn manager_unloads_only_unused() {
+    let dir = TempDir::new("mgr_unload");
+    dir.write("a.png", &png_bytes(2, 2));
+    dir.write("b.png", &png_bytes(2, 2));
+    let mut mgr = AssetManager::new(dir.path());
+    mgr.set_auto_unload(false);
+    let a = mgr.load::<ImageData>("a.png");
+    let b = mgr.load::<ImageData>("b.png");
+    assert!(mgr.wait_idle(WAIT));
+    drop(b);
+    assert_eq!(mgr.unload_unused(), 1);
+    assert!(mgr.contains::<ImageData>("a.png"));
+    assert!(!mgr.contains::<ImageData>("b.png"));
+    // Dropped but not swept: asking again revives the cached data without a reload.
+    drop(a);
+    let again = mgr.load::<ImageData>("a.png");
+    assert_eq!(mgr.pending(), 0);
+    assert!(mgr.get(&again).is_some());
+    assert_eq!(mgr.version(&again), 1);
+    // Auto unload does it on update.
+    mgr.set_auto_unload(true);
+    drop(again);
+    mgr.update();
+    assert!(mgr.is_empty());
+}
+
+#[test]
+fn material_keeps_its_textures_alive() {
+    let dir = TempDir::new("mgr_deps");
+    dir.write("t/base.png", &png_bytes(2, 2));
+    dir.write("t/norm.png", &png_bytes(2, 2));
+    write_material(&dir, "m/a.mat.ron", Some("t/base.png"), Some("t/norm.png"));
+    write_material(&dir, "m/b.mat.ron", Some("t/base.png"), None);
+    let mut mgr = AssetManager::new(dir.path());
+    let a = mgr.load::<olvin_scene::material::MaterialDesc>("m/a.mat.ron");
+    let b = mgr.load::<olvin_scene::material::MaterialDesc>("m/b.mat.ron");
+    assert!(!mgr.is_fully_loaded(&a));
+    // Dependencies are requested once the material is parsed: wait until it settles.
+    let start = Instant::now();
+    while !(mgr.is_fully_loaded(&a) && mgr.is_fully_loaded(&b)) {
+        assert!(start.elapsed() < WAIT, "never settled");
+        mgr.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(mgr.len(), 4);
+    let deps = mgr.dependencies(&a);
+    let paths: Vec<&str> = deps.iter().map(AnyHandle::path).collect();
+    assert_eq!(paths, ["t/base.png", "t/norm.png"]);
+    let base = deps[0].typed::<ImageData>().unwrap();
+    assert!(
+        deps[0]
+            .typed::<olvin_scene::material::MaterialDesc>()
+            .is_none()
+    );
+    // Both materials, our clone and the untyped one in `deps`.
+    assert_eq!(mgr.ref_count(&base), 4);
+    drop(base);
+    drop(deps);
+
+    // Nobody holds a handle to the textures, yet they live as long as materials do.
+    mgr.update();
+    assert_eq!(mgr.len(), 4);
+    drop(a);
+    mgr.update();
+    assert!(!mgr.contains::<olvin_scene::material::MaterialDesc>("m/a.mat.ron"));
+    assert!(!mgr.contains::<ImageData>("t/norm.png"), "only a used it");
+    assert!(mgr.contains::<ImageData>("t/base.png"), "b still uses it");
+    drop(b);
+    mgr.update();
+    assert!(mgr.is_empty());
+}
+
+#[test]
+fn model_pulls_in_its_textures() {
+    let dir = TempDir::new("mgr_model");
+    write_test_gltf(&dir);
+    let mut mgr = AssetManager::new(dir.path());
+    let model = mgr.load::<ModelData>("models/crate.gltf");
+    let start = Instant::now();
+    while !mgr.is_fully_loaded(&model) {
+        assert!(start.elapsed() < WAIT, "never settled");
+        mgr.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let data = mgr.get(&model).unwrap();
+    assert_eq!(data.meshes.len(), 1);
+    let deps = mgr.dependencies(&model);
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].kind(), AssetKind::Texture);
+    assert!(deps[0].path().ends_with("bricks.png"), "{}", deps[0].path());
+    assert!(mgr.get(&deps[0].typed::<ImageData>().unwrap()).is_some());
+    drop(deps);
+    drop(model);
+    mgr.update();
+    assert!(mgr.is_empty());
+}
+
+#[test]
+fn manual_reload_swaps_data_and_keeps_old_on_failure() {
+    let dir = TempDir::new("mgr_reload");
+    let path = dir.write("a.png", &png_bytes(2, 2));
+    let mut mgr = AssetManager::new(dir.path());
+    let a = mgr.load::<ImageData>("a.png");
+    assert!(mgr.wait_idle(WAIT));
+    assert_eq!(mgr.get(&a).unwrap().width, 2);
+
+    std::fs::write(&path, png_bytes(8, 8)).unwrap();
+    mgr.reload(&a);
+    assert_eq!(mgr.state(&a), LoadState::Loading);
+    assert_eq!(
+        mgr.get(&a).unwrap().width,
+        2,
+        "old data until the new one is ready"
+    );
+    assert!(mgr.wait_idle(WAIT));
+    assert_eq!(mgr.get(&a).unwrap().width, 8);
+    assert_eq!(mgr.version(&a), 2);
+
+    std::fs::write(&path, b"not an image").unwrap();
+    mgr.reload(&a);
+    assert!(mgr.wait_idle(WAIT));
+    assert!(matches!(mgr.state(&a), LoadState::Failed(_)));
+    assert_eq!(mgr.get(&a).unwrap().width, 8, "last good data stays");
+}
+
+#[test]
+fn hot_reload_follows_file_changes() {
+    let dir = TempDir::new("mgr_hot");
+    let path = dir.write("a.png", &png_bytes(2, 2));
+    let mut mgr = AssetManager::new(dir.path());
+    mgr.enable_hot_reload().unwrap();
+    assert!(mgr.hot_reload_enabled());
+    let a = mgr.load::<ImageData>("a.png");
+    assert!(mgr.wait_idle(WAIT));
+    mgr.take_changes();
+
+    std::fs::write(&path, png_bytes(6, 6)).unwrap();
+    let start = Instant::now();
+    while mgr.version(&a) < 2 {
+        assert!(start.elapsed() < WAIT, "no reload");
+        mgr.update();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(mgr.get(&a).unwrap().width, 6);
+    assert_eq!(mgr.take_changes().last().map(|c| c.version), Some(2));
+}
+
+#[test]
+fn plugin_inserts_manager() {
+    let dir = TempDir::new("mgr_plugin");
+    dir.write("x.png", &png_bytes(2, 2));
+    let mut app = olvin_core::App::new();
+    app.add_plugin(AssetsPlugin::new(dir.path()));
+    let handle = app
+        .resources
+        .fetch_mut::<AssetManager>()
+        .load::<ImageData>("x.png");
+    let start = Instant::now();
+    while app.resources.fetch::<AssetManager>().get(&handle).is_none() {
+        assert!(start.elapsed() < WAIT);
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Buffer builder for glTF fixtures: 4-byte aligned views.
+#[derive(Default)]
+struct GltfBuf {
+    data: Vec<u8>,
+    views: Vec<(usize, usize)>,
+}
+
+impl GltfBuf {
+    fn add(&mut self, bytes: &[u8]) -> usize {
+        while !self.data.len().is_multiple_of(4) {
+            self.data.push(0);
+        }
+        self.views.push((self.data.len(), bytes.len()));
+        self.data.extend(bytes);
+        self.views.len() - 1
+    }
+
+    fn floats(&mut self, v: &[f32]) -> usize {
+        self.add(&v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<_>>())
+    }
+
+    fn views_json(&self) -> String {
+        let v: Vec<String> = self
+            .views
+            .iter()
+            .map(|(o, l)| format!(r#"{{"buffer": 0, "byteOffset": {o}, "byteLength": {l}}}"#))
+            .collect();
+        format!("[{}]", v.join(","))
+    }
+
+    fn buffer_json(&self) -> String {
+        format!(
+            r#"[{{"byteLength": {}, "uri": "data:application/octet-stream;base64,{}"}}]"#,
+            self.data.len(),
+            base64(&self.data)
+        )
+    }
+}
+
+/// Two-joint bar (Root → Tip at y = 1) skinned onto a unit quad: the bottom
+/// vertices follow Root, the top ones Tip. Animation "bend" turns Root by 90°
+/// about Z over one second. Plus a perspective camera node.
+fn write_skinned_gltf(dir: &TempDir) -> PathBuf {
+    let mut b = GltfBuf::default();
+    let pos = b.floats(&[0., 0., 0., 1., 0., 0., 0., 1., 0., 1., 1., 0.]);
+    let joints = b.add(&[0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    let weights = b.floats(&[
+        1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0.,
+    ]);
+    let idx = b.add(
+        &[0u16, 1, 2, 1, 3, 2]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let ibm = b.floats(&[
+        1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., //
+        1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., -1., 0., 1.,
+    ]);
+    let times = b.floats(&[0.0, 1.0]);
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let rots = b.floats(&[0., 0., 0., 1., 0., 0., h, h]);
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0, 1, 3]}}],
+  "nodes": [
+    {{"name": "Body", "mesh": 0, "skin": 0}},
+    {{"name": "Root", "children": [2]}},
+    {{"name": "Tip", "translation": [0, 1, 0]}},
+    {{"name": "Cam", "camera": 0, "translation": [0, 0, 5]}}
+  ],
+  "meshes": [{{"name": "Bar", "primitives": [{{"attributes": {{"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}}, "indices": 3}}]}}],
+  "skins": [{{"name": "Rig", "joints": [1, 2], "inverseBindMatrices": 4}}],
+  "cameras": [{{"name": "Main", "type": "perspective", "perspective": {{"yfov": 0.8, "znear": 0.1, "zfar": 50}}}}],
+  "animations": [{{"name": "bend",
+    "channels": [{{"sampler": 0, "target": {{"node": 1, "path": "rotation"}}}}],
+    "samplers": [{{"input": 5, "output": 6, "interpolation": "LINEAR"}}]}}],
+  "accessors": [
+    {{"bufferView": {pos}, "componentType": 5126, "count": 4, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": {joints}, "componentType": 5121, "count": 4, "type": "VEC4"}},
+    {{"bufferView": {weights}, "componentType": 5126, "count": 4, "type": "VEC4"}},
+    {{"bufferView": {idx}, "componentType": 5123, "count": 6, "type": "SCALAR"}},
+    {{"bufferView": {ibm}, "componentType": 5126, "count": 2, "type": "MAT4"}},
+    {{"bufferView": {times}, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1]}},
+    {{"bufferView": {rots}, "componentType": 5126, "count": 2, "type": "VEC4"}}
+  ],
+  "bufferViews": {},
+  "buffers": {}
+}}"#,
+        b.views_json(),
+        b.buffer_json()
+    );
+    dir.write("models/rig.gltf", json.as_bytes())
+}
+
+#[test]
+fn gltf_imports_skin_animation_and_camera() {
+    let dir = TempDir::new("gltf_skin");
+    let path = write_skinned_gltf(&dir);
+    let model = import_gltf(&path, dir.path(), &ModelImport::default()).unwrap();
+    assert!(model.skipped.is_empty(), "{:?}", model.skipped);
+
+    assert_eq!(model.skeletons.len(), 1);
+    let sk = &model.skeletons[0];
+    assert_eq!(sk.len(), 2);
+    assert_eq!(sk.joints[0].name, "Root");
+    assert_eq!(sk.joints[0].parent, None);
+    assert_eq!(sk.joints[1].parent, Some(0));
+    assert_eq!(sk.joints[1].rest.translation, Vec3::Y);
+    // Joint targets are model node indices.
+    assert_eq!(model.nodes[sk.joints[1].target].name, "Tip");
+
+    let bar = &model.meshes[0];
+    assert_eq!(bar.skin, Some(0));
+    // No normals in the file: un-indexed, joints follow.
+    assert_eq!(bar.joints.len(), bar.positions.len());
+    assert_eq!(bar.weights.len(), bar.positions.len());
+    assert_eq!(bar.joints[2], [1, 0, 0, 0]);
+    assert_eq!(bar.weights[0], [1.0, 0.0, 0.0, 0.0]);
+
+    assert_eq!(model.clips.len(), 1);
+    assert_eq!(model.clips[0].name, "bend");
+    assert_eq!(model.clips[0].duration, 1.0);
+
+    // End of the clip: the tip (bind position (0, 1, 0)) swings to (-1, 0, 0).
+    let mut animator = model.animator(0).unwrap();
+    let mut pose = sk.rest_pose();
+    model.clips[0].apply(1.0, sk, &mut pose);
+    let tip = sk.skin_matrices(&pose)[1].transform_point3(Vec3::Y);
+    assert!(tip.abs_diff_eq(Vec3::new(-1.0, 0.0, 0.0), 1e-5), "{tip:?}");
+    // The same through the runtime component.
+    animator = animator.with_graph(olvin_anim::AnimGraph::single(0));
+    // 0.9 s of a looping second: 81 degrees.
+    for _ in 0..9 {
+        animator.update(0.1);
+    }
+    assert!(animator.matrices[1].transform_point3(Vec3::Y).x < -0.98);
+    assert!(model.animator(5).is_none());
+
+    assert_eq!(model.cameras.len(), 1);
+    let cam = &model.cameras[0];
+    assert_eq!(model.nodes[cam.node].name, "Cam");
+    assert!(matches!(
+        cam.projection,
+        CameraProjection::Perspective { far: Some(f), .. } if f == 50.0
+    ));
+    let ents = model_to_entities(&model, 100, &[]);
+    let cam_entity = ents.entities.iter().find(|e| e.name == "Cam").unwrap();
+    let desc = cam_entity.camera.as_ref().unwrap();
+    assert!((desc.fov_deg - 0.8f32.to_degrees()).abs() < 1e-4 && desc.far == 50.0);
+}
+
+#[test]
+fn gltf_scale_applies_to_skeleton_and_clips() {
+    let dir = TempDir::new("gltf_skin_scale");
+    let path = write_skinned_gltf(&dir);
+    let settings = ModelImport {
+        scale: 2.0,
+        ..Default::default()
+    };
+    let model = import_gltf(&path, dir.path(), &settings).unwrap();
+    let sk = &model.skeletons[0];
+    assert_eq!(sk.joints[1].rest.translation, Vec3::new(0.0, 2.0, 0.0));
+    let mut pose = sk.rest_pose();
+    model.clips[0].apply(1.0, sk, &mut pose);
+    // Vertices are scaled too: the tip bind position (0, 2, 0) lands at (-2, 0, 0).
+    let tip = sk.skin_matrices(&pose)[1].transform_point3(Vec3::new(0.0, 2.0, 0.0));
+    assert!(tip.abs_diff_eq(Vec3::new(-2.0, 0.0, 0.0), 1e-4), "{tip:?}");
+    // At rest, skinning changes nothing.
+    for m in sk.skin_matrices(&sk.rest_pose()) {
+        assert!(m.abs_diff_eq(glam::Mat4::IDENTITY, 1e-5));
+    }
+}
+
+#[test]
+fn gltf_skin_with_joint_outside_the_scene_is_skipped() {
+    let dir = TempDir::new("gltf_skin_bad");
+    let path = write_skinned_gltf(&dir);
+    let text = std::fs::read_to_string(&path).unwrap();
+    // Drop the joints from the scene roots: Root / Tip are no longer imported.
+    let text = text.replace(r#""nodes": [0, 1, 3]"#, r#""nodes": [0, 3]"#);
+    std::fs::write(&path, text).unwrap();
+    let model = import_gltf(&path, dir.path(), &ModelImport::default()).unwrap();
+    assert!(model.skeletons.is_empty());
+    assert!(model.meshes[0].joints.is_empty() && model.meshes[0].skin.is_none());
+    assert!(
+        model.skipped.iter().any(|s| s.contains("skin ignored")),
+        "{:?}",
+        model.skipped
+    );
+}
+
+fn solid_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(w, h, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+/// One quad whose material has a rotated KHR_texture_transform and a
+/// separate occlusion image (2×2) next to a metallic-roughness image (4×4).
+fn write_material_gltf(dir: &TempDir) -> PathBuf {
+    let mut b = GltfBuf::default();
+    let pos = b.floats(&[0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.]);
+    let uv = b.floats(&[0., 0., 1., 0., 1., 1., 0., 1.]);
+    let idx = b.add(
+        &[0u16, 1, 2, 0, 2, 3]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let img = |png: Vec<u8>| format!(r#"{{"uri": "data:image/png;base64,{}"}}"#, base64(&png));
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "extensionsUsed": ["KHR_texture_transform"],
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"name": "Quad", "mesh": 0}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "TEXCOORD_0": 1}}, "indices": 2, "material": 0}}]}}],
+  "materials": [{{"name": "Pan", "pbrMetallicRoughness": {{
+      "baseColorTexture": {{"index": 0, "extensions": {{"KHR_texture_transform": {{"rotation": 1.5707964, "scale": [2, 1], "offset": [0.5, 0]}}}}}},
+      "metallicRoughnessTexture": {{"index": 2}}}},
+    "occlusionTexture": {{"index": 1}}}}],
+  "textures": [{{"source": 0}}, {{"source": 1}}, {{"source": 2}}],
+  "images": [{}, {}, {}],
+  "accessors": [
+    {{"bufferView": {pos}, "componentType": 5126, "count": 4, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": {uv}, "componentType": 5126, "count": 4, "type": "VEC2"}},
+    {{"bufferView": {idx}, "componentType": 5123, "count": 6, "type": "SCALAR"}}
+  ],
+  "bufferViews": {},
+  "buffers": {}
+}}"#,
+        img(solid_png(2, 2, [255, 255, 255])),
+        img(solid_png(2, 2, [200, 7, 7])),
+        img(solid_png(4, 4, [9, 100, 50])),
+        b.views_json(),
+        b.buffer_json()
+    );
+    dir.write("models/pan.gltf", json.as_bytes())
+}
+
+#[test]
+fn gltf_rotated_texture_transform_is_baked_and_occlusion_merged() {
+    let dir = TempDir::new("gltf_mat");
+    let path = write_material_gltf(&dir);
+    let model = import_gltf(&path, dir.path(), &ModelImport::default()).unwrap();
+    assert!(model.skipped.is_empty(), "{:?}", model.skipped);
+
+    // uv' = offset + R(90°) * (scale * uv): (1, 0) -> (2, 0) -> (0, -2) -> + (0.5, 0).
+    let uvs = &model.meshes[0].uvs;
+    assert!(
+        uvs[1].abs_diff_eq(glam::Vec2::new(0.5, -2.0), 1e-5),
+        "{:?}",
+        uvs[1]
+    );
+    assert!(uvs[0].abs_diff_eq(glam::Vec2::new(0.5, 0.0), 1e-5));
+    // The material no longer scales or offsets on top of it.
+    assert_eq!(model.materials[0].uv_scale, [1.0, 1.0]);
+    assert_eq!(model.materials[0].uv_offset, [0.0, 0.0]);
+
+    // R from the occlusion image, G and B from metallic-roughness, mr's size.
+    let orm = model.materials[0].orm_texture.clone().unwrap();
+    assert!(orm.ends_with("Pan_orm.png"), "{orm}");
+    let img = image::open(dir.path().join(&orm)).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (4, 4));
+    assert_eq!(img.get_pixel(1, 2).0, [200, 100, 50, 255]);
+    assert!(dir.path().join(format!("{orm}.meta")).is_file());
+    assert!(model.extracted_textures.contains(&orm));
+}

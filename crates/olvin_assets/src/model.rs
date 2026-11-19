@@ -4,10 +4,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use glam::{EulerRot, Quat, Vec2, Vec3, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec2, Vec3, Vec4};
 use gltf::mesh::Mode;
 use gltf::texture::MagFilter;
-use olvin_scene::file::{EntityDesc, MeshDesc, PolyMesh, Shape};
+use olvin_anim::{Animator, Channel, Clip, Interpolation, Joint, JointPose, Property, Skeleton};
+use olvin_scene::file::{CameraDesc, EntityDesc, MeshDesc, PolyMesh, Shape};
 use olvin_scene::material::MaterialDesc;
 
 use crate::AssetKind;
@@ -29,6 +30,13 @@ pub struct MeshPrimitive {
     pub indices: Vec<u32>,
     /// Index into [`ModelData::materials`].
     pub material: Option<usize>,
+    /// JOINTS_0 (indices into the skin's joints) and WEIGHTS_0 (normalized),
+    /// both empty unless the primitive is skinned.
+    pub joints: Vec<[u16; 4]>,
+    pub weights: Vec<[f32; 4]>,
+    /// Index into [`ModelData::skeletons`]: the skin of the node using this
+    /// primitive (the first one, if several nodes share the mesh).
+    pub skin: Option<usize>,
 }
 
 /// A node of the model's hierarchy, parents always before children.
@@ -43,6 +51,34 @@ pub struct NodeData {
     pub scale: Vec3,
     /// Index into [`ModelData::meshes`].
     pub mesh: Option<usize>,
+    /// Index into [`ModelData::cameras`].
+    pub camera: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CameraProjection {
+    /// Vertical field of view in radians; `far` is `None` for an infinite plane.
+    Perspective {
+        yfov: f32,
+        aspect: Option<f32>,
+        near: f32,
+        far: Option<f32>,
+    },
+    Orthographic {
+        xmag: f32,
+        ymag: f32,
+        near: f32,
+        far: f32,
+    },
+}
+
+/// A glTF camera on a node (looks down its -Z, like Olvin's cameras).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CameraData {
+    pub name: String,
+    /// Index into [`ModelData::nodes`].
+    pub node: usize,
+    pub projection: CameraProjection,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -56,8 +92,29 @@ pub struct ModelData {
     pub nodes: Vec<NodeData>,
     /// Texture files written while importing (embedded images), assets-relative.
     pub extracted_textures: Vec<String>,
-    /// Things the importer ignored: skins, animations, cameras, unsupported features.
+    /// One per glTF skin. Joint order is the skin's, so `MeshPrimitive::joints`
+    /// index it directly; `Joint::target` is the node index in `nodes`. Poses
+    /// are in model space (the model's scale applied, nodes above the skeleton
+    /// baked into the roots); a skinned mesh is drawn at the model's root,
+    /// like glTF ignores the transform of a skinned node.
+    pub skeletons: Vec<Skeleton>,
+    /// glTF animations; `Channel::target` is a node index in `nodes`.
+    pub clips: Vec<Clip>,
+    pub cameras: Vec<CameraData>,
+    /// Things the importer ignored: morph targets, sparse/other features, unsupported extensions.
     pub skipped: Vec<String>,
+}
+
+impl ModelData {
+    /// An [`Animator`] over skeleton `skin` with all of the model's clips and
+    /// no layers yet (add one with `with_graph`). `None` for a bad index.
+    pub fn animator(&self, skin: usize) -> Option<Animator> {
+        let skeleton = self.skeletons.get(skin)?;
+        Some(Animator::new(
+            std::sync::Arc::new(skeleton.clone()),
+            self.clips.clone().into(),
+        ))
+    }
 }
 
 /// Entities made from a model by [`model_to_entities`].
@@ -193,6 +250,9 @@ pub fn import_gltf(
         info.and_then(|t| image_paths.get(t.source().index()).cloned().flatten())
     };
 
+    // Per material: KHR_texture_transform with rotation, baked into the UVs of
+    // the primitives that use it (the material only has scale and offset).
+    let mut uv_bake: Vec<Option<UvTransform>> = Vec::new();
     for (mi, m) in doc.materials().enumerate() {
         let label = m
             .name()
@@ -220,9 +280,41 @@ pub fn import_gltf(
                 .metallic_roughness_texture()
                 .map(|t| t.texture().source().index());
             if mr != Some(occ.texture().source().index()) {
-                model.skipped.push(format!(
-                    "{label}: separate occlusion texture ignored (ORM expects AO in R)"
-                ));
+                // The ORM texture expects occlusion in R: merge into one.
+                let file = |rel: &Option<String>| {
+                    let rel = rel.as_deref()?;
+                    [assets_root.join(rel), base.join(rel)]
+                        .into_iter()
+                        .find(|p| p.is_file())
+                };
+                let occ_file = image_paths
+                    .get(occ.texture().source().index())
+                    .and_then(file);
+                let mr_file = desc.orm_texture.iter().find_map(|r| file(&Some(r.clone())));
+                let out = tex_dir.join(format!("{}_orm.png", sanitize(&label)));
+                match occ_file.map(|o| merge_orm(&o, mr_file.as_deref(), &out)) {
+                    Some(Ok(())) => {
+                        let rel = relative_to(assets_root, &out).unwrap_or_else(|| {
+                            format!("{stem}_textures/{}_orm.png", sanitize(&label))
+                        });
+                        if !meta_path(&out).exists() {
+                            let mut meta = Meta::new(AssetKind::Texture);
+                            meta.importer = Importer::Texture(TextureImport {
+                                srgb: false,
+                                ..Default::default()
+                            });
+                            meta.save(meta_path(&out))?;
+                        }
+                        model.extracted_textures.push(rel.clone());
+                        desc.orm_texture = Some(rel);
+                    }
+                    Some(Err(e)) => model
+                        .skipped
+                        .push(format!("{label}: occlusion texture not merged: {e}")),
+                    None => model
+                        .skipped
+                        .push(format!("{label}: occlusion texture file not found")),
+                }
             }
         }
         match m.alpha_mode() {
@@ -234,6 +326,7 @@ pub fn import_gltf(
                 ));
             }
         }
+        let mut bake = None;
         if let Some(info) = pbr.base_color_texture() {
             if info.texture().sampler().mag_filter() == Some(MagFilter::Nearest) {
                 desc.point_filter = true;
@@ -249,12 +342,15 @@ pub fn import_gltf(
                     desc.uv_scale = tt.scale();
                     desc.uv_offset = tt.offset();
                 } else {
-                    model
-                        .skipped
-                        .push(format!("{label}: rotated KHR_texture_transform ignored"));
+                    bake = Some(UvTransform {
+                        scale: Vec2::from_array(tt.scale()),
+                        rotation: tt.rotation(),
+                        offset: Vec2::from_array(tt.offset()),
+                    });
                 }
             }
         }
+        uv_bake.push(bake);
         model.materials.push(desc);
         model.material_names.push(label);
     }
@@ -292,7 +388,19 @@ pub fn import_gltf(
         mesh_prims.push(list);
     }
 
+    for prim in &mut model.meshes {
+        if let Some(t) = prim.material.and_then(|m| uv_bake[m]) {
+            for uv in &mut prim.uvs {
+                *uv = t.apply(*uv);
+            }
+            // Tangents follow the UV directions: let the renderer recompute them.
+            prim.tangents = None;
+        }
+    }
+
     // Nodes, depth-first from the scene roots (parents first).
+    let mut node_map: HashMap<usize, usize> = HashMap::new();
+    let mut skinned: Vec<(usize, Vec<usize>)> = Vec::new();
     let roots: Vec<gltf::Node> = match doc.default_scene().or_else(|| doc.scenes().next()) {
         Some(scene) => scene.nodes().collect(),
         None => {
@@ -315,14 +423,6 @@ pub fn import_gltf(
         let name = node
             .name()
             .map_or_else(|| format!("Node {}", node.index()), str::to_string);
-        if node.skin().is_some() {
-            model
-                .skipped
-                .push(format!("{name}: skin ignored (static pose)"));
-        }
-        if node.camera().is_some() {
-            model.skipped.push(format!("{name}: camera ignored"));
-        }
         let (t, r, s) = node.transform().decomposed();
         let (y, x, z) = Quat::from_array(r).normalize().to_euler(EulerRot::YXZ);
         let prims = node
@@ -330,6 +430,32 @@ pub fn import_gltf(
             .map(|m| mesh_prims[m.index()].clone())
             .unwrap_or_default();
         let me = model.nodes.len();
+        node_map.insert(node.index(), me);
+        if let Some(skin) = node.skin() {
+            skinned.push((skin.index(), prims.clone()));
+        }
+        let camera = node.camera().map(|c| {
+            let projection = match c.projection() {
+                gltf::camera::Projection::Perspective(p) => CameraProjection::Perspective {
+                    yfov: p.yfov(),
+                    aspect: p.aspect_ratio(),
+                    near: p.znear() * scale,
+                    far: p.zfar().map(|f| f * scale),
+                },
+                gltf::camera::Projection::Orthographic(o) => CameraProjection::Orthographic {
+                    xmag: o.xmag() * scale,
+                    ymag: o.ymag() * scale,
+                    near: o.znear() * scale,
+                    far: o.zfar() * scale,
+                },
+            };
+            model.cameras.push(CameraData {
+                name: c.name().map_or_else(|| name.clone(), str::to_string),
+                node: me,
+                projection,
+            });
+            model.cameras.len() - 1
+        });
         model.nodes.push(NodeData {
             name: name.clone(),
             parent,
@@ -337,6 +463,7 @@ pub fn import_gltf(
             rotation_euler_deg: Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees()),
             scale: Vec3::from_array(s),
             mesh: prims.first().copied(),
+            camera,
         });
         // Extra primitives (other materials) become identity children.
         for &p in prims.iter().skip(1) {
@@ -347,6 +474,7 @@ pub fn import_gltf(
                 rotation_euler_deg: Vec3::ZERO,
                 scale: Vec3::ONE,
                 mesh: Some(p),
+                camera: None,
             });
         }
         for child in node.children().collect::<Vec<_>>().into_iter().rev() {
@@ -354,11 +482,129 @@ pub fn import_gltf(
         }
     }
 
+    // Skins → skeletons.
+    let parent_of: HashMap<usize, usize> = doc
+        .nodes()
+        .flat_map(|n| n.children().map(move |c| (c.index(), n.index())))
+        .collect();
+    let local: Vec<Mat4> = doc
+        .nodes()
+        .map(|n| Mat4::from_cols_array_2d(&n.transform().matrix()))
+        .collect();
+    let world_of = |mut i: usize| {
+        let mut m = local[i];
+        while let Some(&p) = parent_of.get(&i) {
+            m = local[p] * m;
+            i = p;
+        }
+        m.w_axis *= Vec4::new(scale, scale, scale, 1.0);
+        m
+    };
+    let mut skin_map: Vec<Option<usize>> = Vec::new();
+    for skin in doc.skins() {
+        let label = skin
+            .name()
+            .map_or_else(|| format!("Skin {}", skin.index()), str::to_string);
+        match build_skeleton(
+            &skin, &buffers, &node_map, &parent_of, &world_of, &model, scale,
+        ) {
+            Ok(sk) => {
+                skin_map.push(Some(model.skeletons.len()));
+                model.skeletons.push(sk);
+            }
+            Err(e) => {
+                skin_map.push(None);
+                model.skipped.push(format!("{label}: skin ignored ({e})"));
+            }
+        }
+    }
+    for (skin, prims) in skinned {
+        for p in prims {
+            let prim = &mut model.meshes[p];
+            if prim.skin.is_none() && !prim.joints.is_empty() {
+                prim.skin = skin_map[skin];
+            }
+        }
+    }
+    // Skinned data without a usable skin is just a static mesh.
+    for prim in model.meshes.iter_mut().filter(|p| p.skin.is_none()) {
+        prim.joints.clear();
+        prim.weights.clear();
+    }
+
     for anim in doc.animations() {
         let name = anim
             .name()
             .map_or_else(|| format!("#{}", anim.index()), str::to_string);
-        model.skipped.push(format!("animation {name} ignored"));
+        let mut channels = Vec::new();
+        let mut morph = false;
+        for ch in anim.channels() {
+            let Some(&target) = node_map.get(&ch.target().node().index()) else {
+                model.skipped.push(format!(
+                    "animation {name}: channel on a node outside the scene"
+                ));
+                continue;
+            };
+            let reader = ch.reader(|b| buffers.get(b.index()).map(|d| &d[..]));
+            let (Some(times), Some(outputs)) = (reader.read_inputs(), reader.read_outputs()) else {
+                model
+                    .skipped
+                    .push(format!("animation {name}: channel without data"));
+                continue;
+            };
+            use gltf::animation::util::ReadOutputs;
+            let (property, values): (_, Vec<Vec4>) = match outputs {
+                ReadOutputs::Translations(t) => (
+                    Property::Translation,
+                    t.map(|v| (Vec3::from_array(v) * scale).extend(0.0))
+                        .collect(),
+                ),
+                ReadOutputs::Scales(s) => (
+                    Property::Scale,
+                    s.map(|v| Vec3::from_array(v).extend(0.0)).collect(),
+                ),
+                ReadOutputs::Rotations(r) => (
+                    Property::Rotation,
+                    r.into_f32().map(Vec4::from_array).collect(),
+                ),
+                ReadOutputs::MorphTargetWeights(_) => {
+                    morph = true;
+                    continue;
+                }
+            };
+            let interpolation = match ch.sampler().interpolation() {
+                gltf::animation::Interpolation::Step => Interpolation::Step,
+                gltf::animation::Interpolation::Linear => Interpolation::Linear,
+                gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
+            };
+            let times: Vec<f32> = times.collect();
+            let ok = if interpolation == Interpolation::CubicSpline {
+                values.len() == times.len() * 3
+            } else {
+                values.len() == times.len()
+            };
+            if !ok || times.is_empty() {
+                model
+                    .skipped
+                    .push(format!("animation {name}: channel with mismatched keys"));
+                continue;
+            }
+            channels.push(Channel {
+                target,
+                property,
+                interpolation,
+                times,
+                values,
+            });
+        }
+        if morph {
+            model
+                .skipped
+                .push(format!("animation {name}: morph target weights ignored"));
+        }
+        if !channels.is_empty() {
+            model.clips.push(Clip::new(name, channels));
+        }
     }
     const SUPPORTED: [&str; 3] = [
         "KHR_materials_emissive_strength",
@@ -394,6 +640,25 @@ fn read_primitive(
     let tangents: Option<Vec<Vec4>> = reader
         .read_tangents()
         .map(|t| t.map(Vec4::from_array).collect());
+    let joints: Vec<[u16; 4]> = reader
+        .read_joints(0)
+        .map(|j| j.into_u16().collect())
+        .unwrap_or_default();
+    let weights: Vec<[f32; 4]> = reader
+        .read_weights(0)
+        .map(|w| {
+            w.into_f32()
+                .map(|w| {
+                    let sum: f32 = w.iter().sum();
+                    if sum > 1e-6 {
+                        w.map(|x| x / sum)
+                    } else {
+                        [1.0, 0.0, 0.0, 0.0]
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let raw: Vec<u32> = match reader.read_indices() {
         Some(i) => i.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
@@ -421,6 +686,7 @@ fn read_primitive(
     if uvs.len() != n && !uvs.is_empty() {
         return Err("TEXCOORD_0 length mismatch".into());
     }
+    let skinned = joints.len() == n && weights.len() == n;
     let mut out = MeshPrimitive {
         name,
         positions,
@@ -429,6 +695,9 @@ fn read_primitive(
         tangents: tangents.filter(|t| t.len() == n),
         indices,
         material: prim.material().index(),
+        joints: if skinned { joints } else { Vec::new() },
+        weights: if skinned { weights } else { Vec::new() },
+        skin: None,
     };
     if normals.len() != n {
         flatten_with_normals(&mut out);
@@ -457,6 +726,10 @@ fn flatten_with_normals(p: &mut MeshPrimitive) {
     }
     if let Some(t) = &mut p.tangents {
         *t = idx.iter().map(|&i| t[i as usize]).collect();
+    }
+    if !p.joints.is_empty() {
+        p.joints = idx.iter().map(|&i| p.joints[i as usize]).collect();
+        p.weights = idx.iter().map(|&i| p.weights[i as usize]).collect();
     }
     p.indices = (0..positions.len() as u32).collect();
     p.positions = positions;
@@ -514,6 +787,17 @@ pub fn model_to_entities(
         e.position = node.translation;
         e.rotation = node.rotation_euler_deg;
         e.scale = node.scale;
+        if let Some(cam) = node.camera.and_then(|c| model.cameras.get(c))
+            && let CameraProjection::Perspective {
+                yfov, near, far, ..
+            } = cam.projection
+        {
+            e.camera = Some(CameraDesc {
+                fov_deg: yfov.to_degrees(),
+                near,
+                far: far.unwrap_or(1000.0),
+            });
+        }
         if let Some(prim) = node.mesh.and_then(|m| model.meshes.get(m)) {
             let (poly, uvs) = prim.to_poly();
             let color = prim
@@ -555,6 +839,109 @@ pub fn write_materials(model: &ModelData, dir: impl AsRef<Path>) -> Result<Vec<P
         out.push(path);
     }
     Ok(out)
+}
+
+/// `KHR_texture_transform`: `offset + R(rotation) * (scale * uv)`.
+#[derive(Clone, Copy)]
+struct UvTransform {
+    scale: Vec2,
+    rotation: f32,
+    offset: Vec2,
+}
+
+impl UvTransform {
+    fn apply(&self, uv: Vec2) -> Vec2 {
+        let (s, c) = self.rotation.sin_cos();
+        let p = uv * self.scale;
+        self.offset + Vec2::new(c * p.x + s * p.y, -s * p.x + c * p.y)
+    }
+}
+
+/// Writes an ORM texture (R occlusion, G roughness, B metallic) from a
+/// separate occlusion image and the metallic-roughness image, if any.
+fn merge_orm(occlusion: &Path, mr: Option<&Path>, out: &Path) -> Result<(), String> {
+    let load = |p: &Path| {
+        image::open(p)
+            .map(|i| i.to_rgba8())
+            .map_err(|e| format!("{}: {e}", p.display()))
+    };
+    let occ = load(occlusion)?;
+    let mr = mr.map(load).transpose()?;
+    let (w, h) = mr.as_ref().map_or(occ.dimensions(), |m| m.dimensions());
+    let occ = if occ.dimensions() == (w, h) {
+        occ
+    } else {
+        image::imageops::resize(&occ, w, h, image::imageops::FilterType::Triangle)
+    };
+    let merged = image::RgbaImage::from_fn(w, h, |x, y| {
+        let [_, g, b, _] = mr
+            .as_ref()
+            .map_or([0, 255, 255, 255], |m| m.get_pixel(x, y).0);
+        image::Rgba([occ.get_pixel(x, y)[0], g, b, 255])
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    merged
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    write_if_changed(out, &png.into_inner())
+}
+
+/// Joints in the skin's order; see [`ModelData::skeletons`] for the space.
+fn build_skeleton(
+    skin: &gltf::Skin,
+    buffers: &[gltf::buffer::Data],
+    node_map: &HashMap<usize, usize>,
+    parent_of: &HashMap<usize, usize>,
+    world_of: &dyn Fn(usize) -> Mat4,
+    model: &ModelData,
+    scale: f32,
+) -> Result<Skeleton, String> {
+    let nodes: Vec<gltf::Node> = skin.joints().collect();
+    let joint_of: HashMap<usize, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(j, n)| (n.index(), j))
+        .collect();
+    let reader = skin.reader(|b| buffers.get(b.index()).map(|d| &d[..]));
+    let ibm: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
+        Some(m) => m
+            .map(|m| {
+                let mut m = Mat4::from_cols_array_2d(&m);
+                m.w_axis *= Vec4::new(scale, scale, scale, 1.0);
+                m
+            })
+            .collect(),
+        None => vec![Mat4::IDENTITY; nodes.len()],
+    };
+    if ibm.len() != nodes.len() {
+        return Err("inverse bind matrices do not match the joints".into());
+    }
+    let mut joints = Vec::new();
+    for (j, node) in nodes.iter().enumerate() {
+        let &target = node_map
+            .get(&node.index())
+            .ok_or("joint outside the scene")?;
+        let parent = parent_of.get(&node.index()).and_then(|p| joint_of.get(p));
+        let rest = match parent {
+            Some(_) => {
+                let (t, r, s) = node.transform().decomposed();
+                JointPose {
+                    translation: Vec3::from_array(t) * scale,
+                    rotation: Quat::from_array(r).normalize(),
+                    scale: Vec3::from_array(s),
+                }
+            }
+            None => JointPose::from(world_of(node.index())),
+        };
+        joints.push(Joint {
+            name: model.nodes[target].name.clone(),
+            parent: parent.copied(),
+            target,
+            rest,
+            inverse_bind: ibm[j],
+        });
+    }
+    Skeleton::new(joints)
 }
 
 fn file_stem(path: &Path) -> String {

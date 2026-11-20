@@ -1,0 +1,16 @@
+[package]
+name = "vertical_slice"
+description = "Olvin vertical slice: a small first-person game (physics, trigger door, sound, animated glTF robot, pause, save slots)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+olvin = { path = "../../crates/olvin", features = ["scene", "physics", "script", "lua", "input", "audio", "game"] }
+# Not reachable through the `olvin` facade (see GAPS.md): glTF import and the Animator.
+olvin_assets = { path = "../../crates/olvin_assets" }
+olvin_anim = { path = "../../crates/olvin_anim" }
+serde.workspace = true
+log.workspace = true

@@ -1,0 +1,98 @@
+// Vertical slice level. Hand-written in the editor's format (olvin_scene::file).
+// Player starts in the south hall; a pressure plate opens the door in the
+// dividing wall; the robot waits in the north room (spawned by the game at
+// "RobotSpawn": scene files cannot reference glTF models yet).
+(
+    version: 1,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+
+        // Level geometry: floor, outer walls, dividing wall with a doorway.
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (24.0, 1.0, 24.0),
+            mesh: Some((shape: Cube, color: (0.32, 0.34, 0.36, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 11, name: "Wall North", position: (0.0, 2.0, -12.25), rotation: (0.0, 0.0, 0.0), scale: (24.0, 4.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.55, 0.52, 0.48, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 12, name: "Wall South", position: (0.0, 2.0, 12.25), rotation: (0.0, 0.0, 0.0), scale: (24.0, 4.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.55, 0.52, 0.48, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 13, name: "Wall East", position: (12.25, 2.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.5, 4.0, 25.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.48, 0.45, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 14, name: "Wall West", position: (-12.25, 2.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.5, 4.0, 25.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.48, 0.45, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 15, name: "Divider West", position: (-6.625, 2.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (10.75, 4.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.42, 0.45, 0.5, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 16, name: "Divider East", position: (6.625, 2.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (10.75, 4.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.42, 0.45, 0.5, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 17, name: "Lintel", position: (0.0, 3.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (2.5, 1.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.42, 0.45, 0.5, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+
+        // The door: a kinematic body that follows its Transform (the game slides it up).
+        (id: 20, name: "Door", position: (0.0, 1.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (2.4, 3.0, 0.3),
+            mesh: Some((shape: Cube, color: (0.75, 0.2, 0.15, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0)),
+            rigidbody: Some((kind: Kinematic, mass: 1.0, drag: 0.0, angular_drag: 0.05, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false))),
+
+        // Pressure plate: a flat marker plus an invisible trigger volume above it.
+        (id: 30, name: "Plate", position: (4.0, 0.03, 6.0), rotation: (0.0, 0.0, 0.0), scale: (2.0, 0.06, 2.0),
+            mesh: Some((shape: Cube, color: (0.9, 0.75, 0.1, 1.0)))),
+        (id: 31, name: "Plate Trigger", position: (4.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (2.0, 2.0, 2.0),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: true, friction: 0.6, restitution: 0.0)),
+            scripts: [(name: "DoorSwitch", params: {"door": "Door", "message": "Дверь открыта: зайди к роботу"})]),
+
+        // Things to push around.
+        (id: 40, name: "Crate 1", position: (-4.0, 0.5, 5.0), rotation: (0.0, 10.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.6, 0.42, 0.22, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 2.0, drag: 0.1, angular_drag: 0.1, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            scripts: [(name: "Thud")]),
+        (id: 41, name: "Crate 2", position: (-5.3, 0.5, 5.2), rotation: (0.0, -5.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.6, 0.42, 0.22, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 2.0, drag: 0.1, angular_drag: 0.1, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            scripts: [(name: "Thud")]),
+        (id: 42, name: "Crate 3", position: (-4.6, 1.6, 5.1), rotation: (0.0, 25.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.66, 0.48, 0.26, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 2.0, drag: 0.1, angular_drag: 0.1, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            scripts: [(name: "Thud")]),
+        (id: 43, name: "Crate 4", position: (-2.0, 0.5, 8.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.6, 0.42, 0.22, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 2.0, drag: 0.1, angular_drag: 0.1, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            scripts: [(name: "Thud")]),
+        (id: 44, name: "Ball", position: (2.0, 0.5, 8.5), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Sphere, color: (0.2, 0.5, 0.9, 1.0))),
+            collider: Some((shape: Sphere(radius: 0.5), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.4, restitution: 0.4)),
+            rigidbody: Some((kind: Dynamic, mass: 1.0, drag: 0.2, angular_drag: 0.3, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false))),
+
+        // Humming beacon: positional looping sound, spun by a Lua behaviour,
+        // which also notices the player in its trigger sphere.
+        (id: 50, name: "Beacon", position: (-8.0, 1.0, 8.0), rotation: (0.0, 0.0, 0.0), scale: (0.4, 1.0, 0.4),
+            mesh: Some((shape: Cylinder, color: (0.2, 0.9, 0.6, 1.0))),
+            collider: Some((shape: Sphere(radius: 2.0), center: (0.0, 0.0, 0.0), is_trigger: true, friction: 0.6, restitution: 0.0)),
+            audio_source: Some((clip: "sfx/hum.wav", volume: 0.7, pitch: 1.0, looping: true, play_on_awake: true, spatial: true, min_distance: 1.0, max_distance: 14.0)),
+            scripts: [(name: "beacon", params: {"speed": "90"})]),
+        (id: 51, name: "Beacon Light", position: (-8.0, 2.6, 8.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Point, color: (0.3, 1.0, 0.7), intensity: 4.0, range: 7.0, spot_angle: 30.0, shadows: false))),
+
+        // North room: the robot and its light.
+        (id: 60, name: "RobotSpawn", position: (0.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 61, name: "Room Light", position: (0.0, 3.2, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Point, color: (1.0, 0.8, 0.55), intensity: 6.0, range: 10.0, spot_angle: 30.0, shadows: false))),
+
+        // Player: character controller; the camera (and the ears) are a child at eye height.
+        (id: 100, name: "Player", position: (0.0, 1.0, 10.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0))),
+        (id: 101, name: "Player Camera", parent: Some(100), position: (0.0, 0.7, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            camera: Some((fov_deg: 75.0, near: 0.05, far: 200.0)),
+            audio_listener: true),
+    ],
+)

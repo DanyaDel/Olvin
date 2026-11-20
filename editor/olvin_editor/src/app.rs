@@ -227,14 +227,16 @@ impl EditorApp {
             if ui
                 .add_enabled(sel.is_some(), egui::Button::new("Duplicate     Ctrl+D"))
                 .clicked()
+                && let Some(id) = sel
             {
-                self.state.duplicate(sel.unwrap());
+                self.state.duplicate(id);
             }
             if ui
                 .add_enabled(sel.is_some(), egui::Button::new("Delete           Del"))
                 .clicked()
+                && let Some(id) = sel
             {
-                self.state.delete(sel.unwrap());
+                self.state.delete(id);
             }
         });
         menu(ui, theme::menu_title("GameObject"), |ui| {
@@ -592,8 +594,9 @@ impl EditorApp {
                     }
                 });
             });
-            if let Some(choice) = choice {
-                let action = self.confirm.take().unwrap();
+            if let Some(choice) = choice
+                && let Some(action) = self.confirm.take()
+            {
                 let proceed = match choice {
                     1 => self.state.save(),
                     2 => true,

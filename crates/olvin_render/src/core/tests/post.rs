@@ -1,0 +1,167 @@
+//! Post-processing.
+
+use super::*;
+
+/// An emissive 8.0 square in the middle of a black frame, through the
+/// HDR target and the post chain; returns the output's RGB at (x, y).
+fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] + use<>> {
+    let (device, queue) = device()?;
+    let mut core = RenderCore::new(
+        device.clone(),
+        queue,
+        crate::HDR_FORMAT,
+        1,
+        wgpu::TextureFormat::Depth24Plus,
+    );
+    core.set_hdr_output(true);
+    let mut post = crate::PostProcess::new(&device, FORMAT);
+    post.resize(&device, (SIZE, SIZE));
+    let (mut gpu, mut meshes, mut materials) = (
+        GpuMeshes::default(),
+        Meshes::default(),
+        Materials::default(),
+    );
+    let (mut textures, mut shaders) = (Textures::default(), Shaders::default());
+    let quad = meshes.add(MeshData::plane(1.0));
+    let glow = materials.add(Material {
+        base_color: Color::BLACK,
+        emissive: [8.0; 3],
+        unlit: true,
+        ..Default::default()
+    });
+    let mut world = World::new();
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(quad, Color::WHITE).with_material(glow),
+    ));
+    world.spawn(top_down_camera(8.0));
+    core.upload(&mut gpu, &mut meshes);
+    core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
+    let mut view = core.create_view();
+    core.prepare(
+        &mut view,
+        &gpu,
+        &world,
+        camera_view_proj(&world, 1.0).unwrap(),
+        settings,
+    );
+    let texture = |format, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let out = texture(
+        FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let depth = texture(
+        wgpu::TextureFormat::Depth24Plus,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    )
+    .create_view(&Default::default());
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (SIZE * SIZE * 4) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let hdr = post.hdr_view().unwrap();
+        let mut pass = begin_pass(&mut encoder, hdr, &depth, settings);
+        core.draw(&view, &gpu, &mut pass);
+    }
+    post.run(
+        &core.queue,
+        &mut encoder,
+        &out.create_view(&Default::default()),
+        settings,
+    );
+    encoder.copy_texture_to_buffer(
+        out.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE * 4),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    core.queue.submit([encoder.finish()]);
+    readback
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
+    Some(move |x: u32, y: u32| {
+        let i = ((y * SIZE + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    })
+}
+
+#[test]
+fn post_chain_tonemaps_the_hdr_frame_and_blooms() {
+    let settings = RenderSettings {
+        clear_color: Color::BLACK,
+        tonemapping: Tonemapping::None,
+        ..Default::default()
+    };
+    let Some(plain) = post_frame(&settings) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    // 8.0 is brighter than white (clamped); away from the square it's black.
+    assert_eq!(plain(SIZE / 2, SIZE / 2), [255, 255, 255]);
+    let near = (SIZE / 2 + 10, SIZE / 2);
+    assert!(
+        luma(plain(near.0, near.1)) < 6,
+        "{:?}",
+        plain(near.0, near.1)
+    );
+
+    // ACES compresses the highlight below pure white only for dimmer
+    // values: exposure 0.05 puts the square at 0.4.
+    let dim = RenderSettings {
+        exposure: 0.05,
+        tonemapping: Tonemapping::Aces,
+        ..settings.clone()
+    };
+    let Some(dim_frame) = post_frame(&dim) else {
+        return;
+    };
+    let c = dim_frame(SIZE / 2, SIZE / 2);
+    assert!(c[0] > 150 && c[0] < 250 && c[0] == c[1], "{c:?}");
+
+    // Bloom lights up the pixels around the square.
+    let bloom = RenderSettings {
+        bloom: Some(crate::Bloom {
+            threshold: 1.0,
+            intensity: 2.0,
+        }),
+        ..settings
+    };
+    let Some(bloomed) = post_frame(&bloom) else {
+        return;
+    };
+    let glow = bloomed(near.0, near.1);
+    assert!(luma(glow) > 60, "{glow:?}");
+    // Far from it, still dark.
+    assert!(luma(bloomed(2, 2)) < luma(glow), "{:?}", bloomed(2, 2));
+}

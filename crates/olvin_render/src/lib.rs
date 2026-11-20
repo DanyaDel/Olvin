@@ -8,6 +8,7 @@ mod light;
 mod material;
 mod mesh;
 mod particles;
+mod pipelines;
 mod post;
 mod quad;
 mod renderer;

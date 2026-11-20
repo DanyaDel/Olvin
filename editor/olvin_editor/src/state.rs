@@ -638,7 +638,9 @@ impl EditorState {
             (parent_world.inverse() * world).to_scale_rotation_translation();
         let (y, x, z) = rotation.to_euler(EulerRot::YXZ);
 
-        let e = self.scene.get_mut(id).unwrap();
+        let Some(e) = self.scene.get_mut(id) else {
+            return false;
+        };
         e.parent = parent;
         e.position = translation;
         e.rotation = Vec3::new(x, y, z).map(f32::to_degrees);

@@ -66,7 +66,8 @@ impl Layout {
 
     pub fn save(&self) -> Result<(), String> {
         let path = Self::path().ok_or("no config directory")?;
-        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+        let dir = path.parent().ok_or("config path has no parent")?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let text =
             ron::ser::to_string_pretty(self, Default::default()).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| e.to_string())

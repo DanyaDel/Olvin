@@ -124,7 +124,7 @@ impl HubConfig {
 
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
-        fs::create_dir_all(path.parent().unwrap())?;
+        fs::create_dir_all(path.parent().context("config path has no parent")?)?;
         fs::write(&path, toml::to_string_pretty(self)?)
             .with_context(|| format!("could not write {}", path.display()))
     }

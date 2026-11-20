@@ -29,3 +29,10 @@ log.workspace = true
 serde.workspace = true
 ron.workspace = true
 mlua = { version = "0.12", features = ["lua54", "vendored"], optional = true }
+
+# 5 000 `update` calls per frame, Lua vs Rust behaviours (std::time, no criterion):
+# cargo bench -p olvin_script --features lua --bench lua_vs_rust
+[[bench]]
+name = "lua_vs_rust"
+harness = false
+required-features = ["lua", "input"]

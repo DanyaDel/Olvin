@@ -214,7 +214,9 @@ impl Ui {
             };
             let p = self.preferred(c, m);
             let main = match main_dim {
-                Dim::Fill(w) => free * w.max(0.0) / weights,
+                // Fill(0) alone has no weight to share by (0 / 0 was NaN).
+                Dim::Fill(w) if weights > 0.0 => free * w.max(0.0) / weights,
+                Dim::Fill(_) => 0.0,
                 _ => axis(p, a),
             };
             let cross = match cross_dim {

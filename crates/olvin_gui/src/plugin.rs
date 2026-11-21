@@ -178,7 +178,11 @@ fn gui_input(res: &mut Resources) {
         input.accept_released = a.just_released(&n.accept);
         input.cancel = a.just_pressed(&n.cancel);
     }
-    if let Some(i) = res.get::<Input>() {
+    // A press that is being captured as a new binding is not a click.
+    let rebinding = res
+        .get::<olvin_input::Rebind>()
+        .is_some_and(|r| r.took_input());
+    if !rebinding && let Some(i) = res.get::<Input>() {
         input.pointer_pressed = i.mouse_just_pressed(MouseButton::Left);
         input.pointer_released = i.mouse_just_released(MouseButton::Left);
     }

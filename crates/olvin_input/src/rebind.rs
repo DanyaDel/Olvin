@@ -44,6 +44,8 @@ pub struct Rebind {
     pub autosave: Option<PathBuf>,
     /// Outcome of the last poll that finished a rebind; take it with [`Rebind::take_event`].
     event: Option<RebindEvent>,
+    /// This frame's input went to the rebind (set by `update_actions`).
+    took_input: bool,
 }
 
 impl Rebind {
@@ -57,6 +59,17 @@ impl Rebind {
         if self.target.take().is_some() {
             self.event = Some(RebindEvent::Cancelled);
         }
+    }
+
+    /// This frame's raw input was taken by the rebind (it was listening when
+    /// the frame began, so the press that finished it is not a click either).
+    /// Readers of raw `Input` outside `ActionState` (the UI) should ignore the frame.
+    pub fn took_input(&self) -> bool {
+        self.took_input
+    }
+
+    pub(crate) fn set_took_input(&mut self, took: bool) {
+        self.took_input = took;
     }
 
     pub fn is_listening(&self) -> bool {

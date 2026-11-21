@@ -795,16 +795,46 @@ impl SceneFile {
     /// Entity indices in hierarchy (depth-first) order: the order the
     /// hierarchy panel shows and CSG operations apply in.
     pub fn hierarchy_order(&self) -> Vec<usize> {
-        fn visit(scene: &SceneFile, parent: Option<u64>, out: &mut Vec<usize>) {
+        // `seen` cuts hand-edited files whose ids repeat into a loop: each entity is listed once.
+        fn visit(scene: &SceneFile, parent: Option<u64>, out: &mut Vec<usize>, seen: &mut [bool]) {
             for (i, e) in scene.entities.iter().enumerate() {
-                if e.parent == parent {
+                if e.parent == parent && !seen[i] {
+                    seen[i] = true;
                     out.push(i);
-                    visit(scene, Some(e.id), out);
+                    visit(scene, Some(e.id), out, seen);
                 }
             }
         }
         let mut out = Vec::with_capacity(self.entities.len());
-        visit(self, None, &mut out);
+        visit(self, None, &mut out, &mut vec![false; self.entities.len()]);
+        out
+    }
+
+    /// Entity indices in file order, except that a child never comes before
+    /// its parent (what spawning needs to link `Parent`). Entities in a
+    /// parent cycle come last in file order; a missing parent counts as none.
+    pub fn parents_first(&self) -> Vec<usize> {
+        let ids: std::collections::HashSet<u64> = self.entities.iter().map(|e| e.id).collect();
+        let mut placed = vec![false; self.entities.len()];
+        let mut done: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(self.entities.len());
+        loop {
+            let before = out.len();
+            for (i, e) in self.entities.iter().enumerate() {
+                let ready = e
+                    .parent
+                    .is_none_or(|p| done.contains(&p) || !ids.contains(&p));
+                if !placed[i] && ready {
+                    placed[i] = true;
+                    done.insert(e.id);
+                    out.push(i);
+                }
+            }
+            if out.len() == before {
+                break;
+            }
+        }
+        out.extend((0..self.entities.len()).filter(|&i| !placed[i]));
         out
     }
 
@@ -823,7 +853,9 @@ impl SceneFile {
     /// Whether an entity and all its ancestors are active.
     pub fn active_in_hierarchy(&self, id: u64) -> bool {
         let mut current = self.get(id);
-        while let Some(e) = current {
+        // A parent cycle (a damaged file) ends after at most one lap.
+        for _ in 0..=self.entities.len() {
+            let Some(e) = current else { return true };
             if !e.active {
                 return false;
             }
@@ -862,9 +894,15 @@ impl SceneFile {
         local: impl Fn(&EntityDesc) -> Transform,
     ) -> HashMap<u64, Mat4> {
         let mut out = HashMap::with_capacity(self.entities.len());
-        // Parents precede children, but tolerate hand-edited files with one extra pass.
-        for _ in 0..2 {
+        // Parents usually precede children; a hand-edited file may not. Repeat
+        // until a pass resolves nothing new (parent cycles and missing parents
+        // stay unresolved, each pass costs one level of nesting).
+        loop {
+            let before = out.len();
             for e in &self.entities {
+                if out.contains_key(&e.id) {
+                    continue;
+                }
                 let parent = match e.parent {
                     None => Mat4::IDENTITY,
                     Some(p) => match out.get(&p) {
@@ -874,6 +912,9 @@ impl SceneFile {
                 };
                 out.insert(e.id, parent * local(e).matrix());
             }
+            if out.len() == before {
+                break;
+            }
         }
         out
     }
@@ -882,6 +923,45 @@ impl SceneFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_hierarchies_do_not_hang_or_drop_children() {
+        let mut scene = SceneFile::default();
+        let mut a = EntityDesc::new(1, "a");
+        let mut b = EntityDesc::new(2, "b");
+        a.parent = Some(2);
+        b.parent = Some(1);
+        scene.entities = vec![a, b];
+        assert!(scene.active_in_hierarchy(1), "a cycle ends");
+        assert!(scene.hierarchy_order().is_empty());
+        assert!(scene.world_matrices().is_empty());
+
+        // an id used twice must not loop the traversal
+        let x = EntityDesc::new(1, "x");
+        let mut y = EntityDesc::new(2, "y");
+        y.parent = Some(1);
+        let mut z = EntityDesc::new(1, "z");
+        z.parent = Some(2);
+        scene.entities = vec![x, y, z];
+        assert_eq!(scene.hierarchy_order().len(), 3);
+
+        // children listed before their parents still get world matrices
+        let mut chain = Vec::new();
+        for id in (1..=5u64).rev() {
+            let mut e = EntityDesc::new(id, "n");
+            e.position = Vec3::X;
+            e.parent = (id > 1).then_some(id - 1);
+            chain.push(e);
+        }
+        scene.entities = chain;
+        let worlds = scene.world_matrices();
+        assert_eq!(worlds.len(), 5);
+        assert!(
+            worlds[&5]
+                .transform_point3(Vec3::ZERO)
+                .abs_diff_eq(Vec3::new(5.0, 0.0, 0.0), 1e-5)
+        );
+    }
 
     #[test]
     fn roundtrip_and_parenting() {

@@ -79,6 +79,7 @@ pub fn update_actions(res: &mut Resources) {
         *path = paths.resolve(&*path);
     }
     let was_listening = rebind.is_listening();
+    rebind.set_took_input(was_listening);
     rebind.poll(&mut map, &input, &pads);
     let mut actions = res.fetch_mut::<ActionState>();
     if was_listening {

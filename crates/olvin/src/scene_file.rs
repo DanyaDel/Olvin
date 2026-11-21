@@ -122,10 +122,12 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
     let mut shapes: HashMap<Shape, MeshHandle> = HashMap::new();
     let mut entities: HashMap<u64, Entity> = HashMap::new();
 
-    // Parents come before children in scene files, so parent entities exist already.
+    // Parents are spawned before their children (file order otherwise), so `Parent` links
+    // even when a hand-edited file lists a child first.
     for e in scene
-        .entities
-        .iter()
+        .parents_first()
+        .into_iter()
+        .map(|i| &scene.entities[i])
         .filter(|e| scene.active_in_hierarchy(e.id))
     {
         let matrix = worlds
@@ -474,6 +476,30 @@ mod tests {
         player.frame = 25.0;
         let t = player.transform(3).unwrap();
         assert_eq!(t.translation, Vec3::new(6.0, 4.0, 0.0));
+    }
+
+    #[test]
+    fn a_child_listed_before_its_parent_is_still_parented() {
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        let mut child = EntityDesc::new(2, "child");
+        child.parent = Some(1);
+        child.position = Vec3::X;
+        let mut parent = EntityDesc::new(1, "parent");
+        parent.position = Vec3::Y;
+        let mut orphan = EntityDesc::new(3, "orphan");
+        orphan.parent = Some(99); // no such object: a root
+        let scene = SceneFile {
+            entities: vec![child, parent, orphan],
+            ..Default::default()
+        };
+        assert_eq!(scene.parents_first(), [1, 2, 0]);
+        let ids = spawn_ids(&res, &scene);
+        let world = res.fetch::<World>();
+        assert_eq!(world.get::<&Parent>(ids[&2]).unwrap().0, ids[&1]);
+        assert!(world.get::<&Parent>(ids[&3]).is_err());
     }
 
     #[derive(Clone, Debug, PartialEq, serde::Deserialize)]

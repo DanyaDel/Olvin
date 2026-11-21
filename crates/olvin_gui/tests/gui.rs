@@ -582,3 +582,54 @@ fn consumed_actions_keep_real_edges() {
     state.update(&map, &input, &pads);
     assert!(state.pressed("Fire") && !state.just_pressed("Fire"));
 }
+
+#[test]
+fn zero_weight_fill_collapses_instead_of_nan() {
+    let mut ui = Ui::new();
+    let row = ui.add(ui.root(), Node::panel().row().px(300.0, 40.0));
+    let a = ui.add(row, Node::panel().size(Dim::Fill(0.0), Dim::Fixed(10.0)));
+    let b = ui.add(row, Node::panel().size(Dim::Fill(-2.0), Dim::Fixed(10.0)));
+    laid(&mut ui);
+    for id in [a, b] {
+        let r = ui.rect(id);
+        assert!(r.size().is_finite(), "{r:?}");
+        assert_eq!(r.size().x, 0.0);
+    }
+    // a real weight next to a zero one still takes everything
+    let c = ui.add(row, Node::panel().size(Dim::Fill(1.0), Dim::Fixed(10.0)));
+    laid(&mut ui);
+    assert_eq!(ui.rect(c).size().x, 300.0);
+    assert_eq!(ui.rect(a).size().x, 0.0);
+}
+
+#[test]
+fn a_click_that_becomes_a_binding_is_not_a_ui_click() {
+    let mut app = captured_app();
+    let play = app.resources.fetch::<Gui>().ui.find("play").unwrap();
+    let at = app.resources.fetch::<Gui>().ui.rect(play).center();
+    app.resources.fetch_mut::<Input>().cursor = at;
+    app.resources
+        .fetch_mut::<olvin_input::Rebind>()
+        .listen("Fire", olvin_input::Slot::Replace(0));
+    let mut cursor = EventsReader::default();
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, true);
+    app.update();
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, false);
+    app.update();
+    app.update();
+    assert!(
+        !cursor
+            .take(&app)
+            .iter()
+            .any(|e| matches!(e, UiEvent::Click { .. })),
+        "the press was the rebind's"
+    );
+    assert_eq!(
+        app.resources.fetch::<InputMap>().actions["Fire"][0],
+        olvin_input::Binding::Mouse(MouseButton::Left)
+    );
+}

@@ -20,6 +20,12 @@
 //! when they win a voice back), one-shots are dropped. Streamed files are
 //! limited separately by [`Audio::max_streams`].
 //!
+//! Pause: while `Time` is paused (`Time::pause`, e.g. a pause menu), sounds
+//! on pausable buses (all but `music` by default, see
+//! [`Audio::set_bus_pausable`]) hold where they are and continue on resume.
+//! Sounds started during the pause (menu clicks) play normally. Single sounds
+//! can be held with [`Audio::pause_sound`].
+//!
 //! Without an audio device (CI, servers, headless tests) the plugin logs once
 //! and every call becomes a no-op; the bookkeeping (ids, which sources started)
 //! still works so gameplay code doesn't have to care.
@@ -43,7 +49,7 @@ use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState, SoundData};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Capacities, Decibels, Mix, Tween};
-use olvin_core::{App, Plugin, Resources, Stage};
+use olvin_core::{App, Plugin, ProjectPaths, Resources, Stage, Time};
 use olvin_ecs::{EcsPlugin, Entity, World};
 use olvin_scene::Transform;
 use olvin_transform::GlobalTransform;
@@ -141,9 +147,11 @@ pub const DEFAULT_MAX_VOICES: usize = 64;
 /// Default for [`Audio::max_streams`].
 pub const DEFAULT_MAX_STREAMS: usize = 8;
 
+#[derive(Clone, Debug)]
 pub struct AudioPlugin {
-    /// Clip paths are relative to this folder.
-    pub assets_dir: PathBuf,
+    /// Clip paths are relative to this folder. `None`: the project's assets
+    /// (`ProjectPaths::assets`); a relative path is inside the project folder.
+    pub assets_dir: Option<PathBuf>,
     /// `false` never opens a device (tools, tests); same as having none.
     pub enabled: bool,
 }
@@ -151,7 +159,7 @@ pub struct AudioPlugin {
 impl Default for AudioPlugin {
     fn default() -> Self {
         Self {
-            assets_dir: PathBuf::from("assets"),
+            assets_dir: None,
             enabled: true,
         }
     }
@@ -159,10 +167,17 @@ impl Default for AudioPlugin {
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
+        let dir = {
+            let paths = app.resources.fetch::<ProjectPaths>();
+            match &self.assets_dir {
+                Some(dir) => paths.resolve(dir),
+                None => paths.assets.clone(),
+            }
+        };
         let audio = if self.enabled {
-            Audio::open(&self.assets_dir)
+            Audio::open(dir)
         } else {
-            Audio::disabled(&self.assets_dir)
+            Audio::disabled(dir)
         };
         // After transforms are propagated (PostUpdate), before the next frame.
         app.add_plugin(EcsPlugin)
@@ -214,6 +229,20 @@ impl Handle {
         }
     }
 
+    fn pause(&mut self, tween: Tween) {
+        match self {
+            Self::Static(h) => h.pause(tween),
+            Self::Streaming(h) => h.pause(tween),
+        }
+    }
+
+    fn resume(&mut self, tween: Tween) {
+        match self {
+            Self::Static(h) => h.resume(tween),
+            Self::Streaming(h) => h.resume(tween),
+        }
+    }
+
     fn stop(&mut self, tween: Tween) {
         match self {
             Self::Static(h) => h.stop(tween),
@@ -255,6 +284,12 @@ struct Playing {
     entity: Option<Entity>,
     occlusion: Occlusion,
     occ_track: Option<OcclusionTrack>,
+    /// Held by [`Audio::pause_sound`].
+    user_paused: bool,
+    /// Started while the game was paused: plays through that pause.
+    pause_exempt: bool,
+    /// The voice is paused right now (by the user or the game pause).
+    held: bool,
 }
 
 type Occluder = Box<dyn FnMut(Vec3, Vec3) -> f32>;
@@ -281,6 +316,9 @@ pub struct Audio {
     last_update: Option<Instant>,
     /// Fade-in of the sound being started (music crossfades).
     fade_in: Duration,
+    /// Game pause (see [`Audio::set_paused`]).
+    paused: bool,
+    follow_time: bool,
 }
 
 fn amplitude_to_db(amplitude: f32) -> Decibels {
@@ -352,6 +390,8 @@ impl Audio {
             stream_threshold: STREAM_THRESHOLD_BYTES,
             last_update: None,
             fade_in: Duration::ZERO,
+            paused: false,
+            follow_time: true,
         }
     }
 
@@ -579,6 +619,91 @@ impl Audio {
         self.clips.clear();
     }
 
+    // Pause.
+
+    /// Holds one sound where it is (until [`resume_sound`](Self::resume_sound)),
+    /// whatever the game pause does.
+    pub fn pause_sound(&mut self, id: SoundId) {
+        if let Some(p) = self.playing.get_mut(&id) {
+            p.user_paused = true;
+            self.apply_holds();
+        }
+    }
+
+    pub fn resume_sound(&mut self, id: SoundId) {
+        if let Some(p) = self.playing.get_mut(&id) {
+            p.user_paused = false;
+            self.apply_holds();
+        }
+    }
+
+    /// Whether the sound is held, by [`pause_sound`](Self::pause_sound) or the game pause.
+    pub fn is_sound_paused(&self, id: SoundId) -> bool {
+        self.playing.get(&id).is_some_and(|p| p.held)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Game pause: holds every sound on a pausable bus, `false` continues
+    /// them. Sounds started while paused are not held (menu sounds). The
+    /// plugin calls this when `Time` is paused or resumed, unless
+    /// [`set_follow_time_pause(false)`](Self::set_follow_time_pause).
+    pub fn set_paused(&mut self, paused: bool) {
+        if self.paused == paused {
+            return;
+        }
+        self.paused = paused;
+        if !paused {
+            for p in self.playing.values_mut() {
+                p.pause_exempt = false;
+            }
+        }
+        self.apply_holds();
+    }
+
+    pub fn follows_time_pause(&self) -> bool {
+        self.follow_time
+    }
+
+    /// Whether the plugin pauses audio together with `Time` (on by default).
+    pub fn set_follow_time_pause(&mut self, follow: bool) {
+        self.follow_time = follow;
+    }
+
+    pub fn is_bus_pausable(&self, bus: BusId) -> bool {
+        self.buses.get(bus.0).is_some_and(|b| b.pausable)
+    }
+
+    /// Whether the game pause holds the bus's sounds. On for every bus but
+    /// `music`, so the soundtrack keeps playing under a pause menu.
+    pub fn set_bus_pausable(&mut self, bus: BusId, pausable: bool) {
+        if let Some(b) = self.buses.get_mut(bus.0) {
+            b.pausable = pausable;
+            self.apply_holds();
+        }
+    }
+
+    /// Pauses or resumes voices whose held state changed.
+    fn apply_holds(&mut self) {
+        let last = self.buses.len() - 1;
+        for p in self.playing.values_mut() {
+            let bus = &self.buses[p.params.bus.0.min(last)];
+            let hold = p.user_paused || (self.paused && bus.pausable && !p.pause_exempt);
+            if hold != p.held {
+                p.held = hold;
+                if let Some(h) = &mut p.handle {
+                    if hold {
+                        h.pause(SMOOTH);
+                    } else {
+                        h.resume(SMOOTH);
+                    }
+                }
+            }
+        }
+    }
+
     // Mixer.
 
     /// A bus by name (`sfx`, `music`, `ambient`, `voice`, or one you added).
@@ -752,6 +877,9 @@ impl Audio {
                 entity,
                 occlusion: Occlusion::default(),
                 occ_track: None,
+                user_paused: false,
+                pause_exempt: self.paused,
+                held: false,
             },
         );
         // Takes a voice if there is one (or steals it from a worse sound).
@@ -774,7 +902,11 @@ impl Audio {
         };
         if let Some(p) = self.playing.get_mut(&id) {
             p.virtualized = false;
-            if let Some((handle, track)) = started {
+            if let Some((mut handle, track)) = started {
+                // Won a voice back while held: it waits paused, like the rest.
+                if p.held {
+                    handle.pause(Tween::default());
+                }
                 p.handle = Some(handle);
                 p.occ_track = track;
             }
@@ -1145,9 +1277,14 @@ fn world_position(world: &World, e: Entity) -> Option<Vec3> {
         .or_else(|| world.get::<&Transform>(e).map(|t| t.translation).ok())
 }
 
-/// The plugin's per-frame system.
+/// The plugin's per-frame system: follows the `Time` pause, then [`Audio::update`].
 pub fn update(res: &mut Resources) {
     let mut audio = res.fetch_mut::<Audio>();
+    if audio.follow_time
+        && let Some(time) = res.get::<Time>()
+    {
+        audio.set_paused(time.paused());
+    }
     let mut world = res.fetch_mut::<World>();
     audio.update(&mut world);
 }

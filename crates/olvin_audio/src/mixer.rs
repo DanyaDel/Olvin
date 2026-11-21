@@ -98,6 +98,8 @@ pub(crate) struct Bus {
     pub eq: EqSettings,
     /// Amount sent to the reverb, 0..1.
     pub reverb_send: f32,
+    /// Held by the game pause (all but music by default).
+    pub pausable: bool,
     pub hw: Option<BusHw>,
 }
 
@@ -109,6 +111,7 @@ impl Bus {
             muted: false,
             eq: EqSettings::default(),
             reverb_send: 0.0,
+            pausable: name != DEFAULT_BUSES[BusId::MUSIC.0],
             hw: None,
         }
     }

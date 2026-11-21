@@ -3,8 +3,11 @@
 //! states and save slots, Lua and Rust behaviours). What it had to work
 //! around is listed in `GAPS.md` next to this crate.
 //!
-//! The game is a plugin ([`GamePlugin`]) so tests can run it headless: the
-//! binary adds `DefaultPlugins` (window + renderer) in front of it.
+//! The game is a plugin ([`GamePlugin`]) on top of the engine's plugin set:
+//! the binary puts `DefaultPlugins` (window + renderer) in front of it, the
+//! tests `HeadlessPlugins`. Files are found through the engine's
+//! `ProjectPaths` (this crate's folder under cargo, the exe's folder after
+//! `olvin-hub build`).
 
 pub mod door;
 pub mod hud;
@@ -13,9 +16,8 @@ pub mod player;
 pub mod robot;
 pub mod save;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use olvin::audio::BusId;
 use olvin::game::{SavePlugin, SceneLoaderPlugin, State, StateAppExt};
 use olvin::prelude::*;
 use olvin::script::lua::{LuaLimits, LuaPlugin};
@@ -36,53 +38,19 @@ pub enum GameState {
 
 #[derive(Clone, Debug)]
 pub struct SliceConfig {
-    /// The game's `assets/` folder (scene, scripts, model, sounds).
-    pub assets: PathBuf,
-    /// Where save slots go.
-    pub saves: PathBuf,
-    /// Open an audio device (off in tests).
-    pub audio: bool,
+    /// Where save slots go (`None`: `saves/` in the project folder).
+    pub saves: Option<PathBuf>,
     /// Re-read changed `*.lua` files while running.
     pub lua_hot_reload: bool,
 }
 
-impl SliceConfig {
-    /// Assets found by [`find_assets`], saves in `saves/` next to them.
-    pub fn detect() -> Self {
-        let assets = find_assets();
-        let root = assets.parent().unwrap_or(Path::new(".")).to_path_buf();
+impl Default for SliceConfig {
+    fn default() -> Self {
         Self {
-            saves: root.join("saves"),
-            assets,
-            audio: true,
+            saves: None,
             lua_hot_reload: cfg!(debug_assertions),
         }
     }
-
-    /// Folder that holds `assets/`, `saves/` and `logs/`.
-    pub fn root(&self) -> PathBuf {
-        self.assets.parent().unwrap_or(Path::new(".")).to_path_buf()
-    }
-}
-
-/// The engine resolves every asset path against the current directory, so the
-/// game looks for its `assets/` itself (see GAPS.md): next to the executable
-/// (the `olvin-hub build` layout), then in this crate's folder (`cargo run -p
-/// vertical_slice` from anywhere in the workspace), then `./assets`.
-pub fn find_assets() -> PathBuf {
-    let marker = |dir: &Path| dir.join(SCENE).is_file();
-    if let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("assets")))
-        .filter(|d| marker(d))
-    {
-        return dir;
-    }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    if marker(&dev) {
-        return dev;
-    }
-    PathBuf::from("assets")
 }
 
 /// The default action map plus the slice's own actions.
@@ -94,14 +62,12 @@ pub fn input_map() -> InputMap {
     map
 }
 
-/// Where the game's files live, as a resource for systems.
-#[derive(Clone, Debug)]
-pub struct Paths {
-    pub assets: PathBuf,
-}
+/// Where the game's files live: the engine's resource (`assets`, `root`).
+pub type Paths = ProjectPaths;
 
-/// The whole game. Adds the engine plugins it needs (each is skipped if
-/// `DefaultPlugins` added it before), behaviours, save types, states, systems.
+/// The whole game: behaviours, save types, states, systems, and the plugins
+/// only this game configures (Lua, scene loader, saves). The engine plugins
+/// come first, from `DefaultPlugins` or `HeadlessPlugins`.
 pub struct GamePlugin {
     pub config: SliceConfig,
 }
@@ -109,40 +75,22 @@ pub struct GamePlugin {
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         let c = &self.config;
-        app.add_plugin(olvin::ecs::EcsPlugin)
-            .add_plugin(olvin::transform::TransformPlugin)
-            // Scene spawning needs the mesh registry even without a renderer.
-            .init_resource::<Meshes>()
-            // RenderPlugin adds it; headless runs need it too.
-            .add_plugin(olvin::anim::AnimPlugin)
-            // Models in the scene (the robot): built once the asset manager
-            // has imported them. Headless runs have no RenderAssets root.
-            .insert_resource(olvin::assets::AssetManager::new(c.assets.clone()))
-            .add_plugin(olvin::models::ModelPlugin)
-            .add_plugin(PhysicsPlugin::default())
-            .add_plugin(InputPlugin {
-                map: Some(input_map()),
-            })
-            .add_plugin(AudioPlugin {
-                assets_dir: c.assets.clone(),
-                enabled: c.audio,
-            })
-            .add_plugin(LuaPlugin {
-                dir: c.assets.join("scripts"),
-                hot_reload: c.lua_hot_reload,
-                limits: LuaLimits::default(),
-            })
-            // The HUD's tree; `DefaultPlugins` with a renderer added `GuiRenderPlugin`
-            // (which includes this) to draw it, headless runs only lay it out.
-            .add_plugin(olvin::gui::GuiPlugin)
-            .init_resource::<olvin::scene_file::SceneComponents>()
-            .add_plugin(SceneLoaderPlugin)
-            .add_plugin(SavePlugin::new(c.saves.clone()))
-            .insert_resource(Paths {
-                assets: c.assets.clone(),
-            })
-            .init_resource::<hud::Hud>()
-            .init_resource::<save::Progress>();
+        let paths = app.resources.fetch::<ProjectPaths>().clone();
+        // Keeps a saved map, adds the slice's actions if they are missing.
+        app.resources
+            .fetch_mut::<InputMap>()
+            .fill_missing(&input_map());
+        app.add_plugin(LuaPlugin {
+            dir: paths.asset("scripts"),
+            hot_reload: c.lua_hot_reload,
+            limits: LuaLimits::default(),
+        })
+        .add_plugin(SceneLoaderPlugin)
+        .add_plugin(SavePlugin::new(
+            c.saves.clone().unwrap_or_else(|| paths.resolve("saves")),
+        ))
+        .init_resource::<hud::Hud>()
+        .init_resource::<save::Progress>();
         {
             let mut scripts = app.resources.fetch_mut::<ScriptRegistry>();
             scripts.register::<door::DoorSwitch>("DoorSwitch");
@@ -168,20 +116,10 @@ impl Plugin for GamePlugin {
                 res.fetch_mut::<ActionState>().lock_cursor(true);
             })
             .on_enter(GameState::Paused, |res| {
+                // Also holds sfx and ambient sounds; music plays on.
                 res.fetch_mut::<Time>().pause();
                 res.fetch_mut::<ActionState>().lock_cursor(false);
-                // No way to pause sounds: mute the effect buses instead (GAPS.md).
-                let mut audio = res.fetch_mut::<Audio>();
-                for bus in [BusId::SFX, BusId::AMBIENT] {
-                    audio.set_bus_muted(bus, true);
-                }
                 log::info!("paused (Esc: resume, Q: quit)");
-            })
-            .on_exit(GameState::Paused, |res| {
-                let mut audio = res.fetch_mut::<Audio>();
-                for bus in [BusId::SFX, BusId::AMBIENT] {
-                    audio.set_bus_muted(bus, false);
-                }
             })
             .add_system(Stage::Update, pause_toggle)
             .add_system_in_state(Stage::Update, GameState::Playing, player::control)

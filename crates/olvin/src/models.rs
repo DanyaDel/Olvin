@@ -11,7 +11,7 @@ use std::path::Path;
 use glam::Mat4;
 use olvin_anim::Animator;
 use olvin_assets::{AssetManager, Handle, LoadState, MeshPrimitive, ModelData};
-use olvin_core::{App, Plugin, Resources, Stage};
+use olvin_core::{App, Plugin, ProjectPaths, Resources, Stage};
 use olvin_ecs::{EcsPlugin, Entity, World};
 use olvin_render::{Color, MeshData, MeshHandle, MeshRenderer, Meshes, SkinnedMesh};
 use olvin_scene::file::{AnimGraphDesc, AnimationDesc, ColliderDesc, ModelDesc};
@@ -43,7 +43,8 @@ pub struct ModelMeshes(HashMap<(String, usize), MeshHandle>);
 
 /// Builds pending models in `PreUpdate` once their files are loaded. Needs an
 /// [`AssetManager`]; without one it makes its own for the `assets/` folder
-/// that [`RenderAssets`] points at (set by `scene_file::load`).
+/// that [`RenderAssets`] points at (set by `scene_file::load`), else the
+/// project's ([`ProjectPaths`]).
 pub struct ModelPlugin;
 
 impl Plugin for ModelPlugin {
@@ -94,7 +95,8 @@ fn ensure_manager(res: &mut Resources) -> bool {
     }
     let root = res
         .get::<RenderAssets>()
-        .and_then(|r| r.root().map(Path::to_path_buf));
+        .and_then(|r| r.root().map(Path::to_path_buf))
+        .or_else(|| res.get::<ProjectPaths>().map(|p| p.assets.clone()));
     match root {
         Some(root) => {
             res.insert(AssetManager::new(root));

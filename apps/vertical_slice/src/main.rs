@@ -9,12 +9,11 @@
 //! (Q quits while paused), F5 quick save, F9 quick load.
 
 use olvin::prelude::*;
-use vertical_slice::{GamePlugin, SliceConfig, input_map};
+use vertical_slice::{GamePlugin, SliceConfig};
 
 fn main() {
-    let mut config = SliceConfig::detect();
     let args: Vec<String> = std::env::args().collect();
-    config.audio = !args.iter().any(|a| a == "--no-audio");
+    let audio = !args.iter().any(|a| a == "--no-audio");
     let frames: Option<u64> = args
         .iter()
         .position(|a| a == "--frames")
@@ -23,10 +22,12 @@ fn main() {
         .or_else(|| std::env::var("OLVIN_SLICE_AUTOQUIT").ok())
         .and_then(|n| n.parse().ok());
 
+    // Relative to the project folder (`ProjectPaths`), not the working directory.
     olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
-        .file(config.root().join("logs/vertical_slice.log"))
+        .file("logs/vertical_slice.log")
         .init();
-    log::info!("assets: {}", config.assets.display());
+    let paths = ProjectPaths::detect();
+    log::info!("assets: {} ({:?})", paths.assets.display(), paths.source);
 
     let mut app = App::new();
     app.add_plugin(DefaultPlugins {
@@ -34,16 +35,15 @@ fn main() {
             title: "Olvin — vertical slice".into(),
             ..Default::default()
         },
-        input: InputPlugin {
-            map: Some(input_map()),
-        },
         audio: AudioPlugin {
-            assets_dir: config.assets.clone(),
-            enabled: config.audio,
+            enabled: audio,
+            ..Default::default()
         },
         ..Default::default()
     })
-    .add_plugin(GamePlugin { config })
+    .add_plugin(GamePlugin {
+        config: SliceConfig::default(),
+    })
     .add_system(Stage::Last, frame_counter(frames));
     app.run();
 }

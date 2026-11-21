@@ -3,7 +3,8 @@
 //! Disable features (`window`, `render`) for servers, tools or custom platforms;
 //! `scene` adds loading of scenes saved by olvin-editor, `anim` (animation,
 //! no renderer needed) and `assets` (glTF import, asset manager) the crates
-//! behind it, `gui` the in-game UI.
+//! behind it, `gui` the in-game UI. [`HeadlessPlugins`] runs the same game
+//! without a window or GPU (tests, servers).
 
 pub use glam as math;
 #[cfg(feature = "anim")]
@@ -91,10 +92,7 @@ impl Plugin for DefaultPlugins {
             builtins: self.script.builtins,
         });
         #[cfg(feature = "audio")]
-        app.add_plugin(olvin_audio::AudioPlugin {
-            assets_dir: self.audio.assets_dir.clone(),
-            enabled: self.audio.enabled,
-        });
+        app.add_plugin(self.audio.clone());
         // After input: the UI adds its actions to the map.
         #[cfg(all(feature = "gui", feature = "render"))]
         app.add_plugin(olvin_gui::GuiRenderPlugin::default());
@@ -103,14 +101,81 @@ impl Plugin for DefaultPlugins {
     }
 }
 
+/// [`DefaultPlugins`] without a window and GPU, for tests, servers and
+/// tools: the same game logic, scenes, physics, scripts, input (fed through
+/// `Input` by hand) and audio (off by default). With the `render` feature the
+/// renderer's CPU half comes along (`RenderDataPlugin`: mesh and material
+/// registries, CPU skinning, particles), so `scene_file::spawn` and skinned
+/// meshes work. Don't combine with `DefaultPlugins` in one app.
+pub struct HeadlessPlugins {
+    #[cfg(feature = "physics")]
+    pub physics: olvin_physics::PhysicsPlugin,
+    #[cfg(feature = "input")]
+    pub input: olvin_input::InputPlugin,
+    #[cfg(feature = "script")]
+    pub script: olvin_script::ScriptPlugin,
+    #[cfg(feature = "audio")]
+    pub audio: olvin_audio::AudioPlugin,
+}
+
+impl Default for HeadlessPlugins {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "physics")]
+            physics: Default::default(),
+            #[cfg(feature = "input")]
+            input: Default::default(),
+            #[cfg(feature = "script")]
+            script: Default::default(),
+            #[cfg(feature = "audio")]
+            audio: olvin_audio::AudioPlugin {
+                enabled: false,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl Plugin for HeadlessPlugins {
+    fn build(&self, app: &mut App) {
+        app.add_plugin(olvin_ecs::EcsPlugin)
+            .add_plugin(olvin_transform::TransformPlugin);
+        #[cfg(feature = "anim")]
+        app.add_plugin(olvin_anim::AnimPlugin);
+        #[cfg(feature = "render")]
+        app.add_plugin(olvin_render::RenderDataPlugin);
+        #[cfg(feature = "scene")]
+        app.add_plugin(render_assets::RenderAssetsPlugin)
+            .add_plugin(models::ModelPlugin)
+            .init_resource::<scene_file::SceneComponents>();
+        #[cfg(feature = "physics")]
+        app.add_plugin(olvin_physics::PhysicsPlugin {
+            gravity: self.physics.gravity,
+        });
+        #[cfg(feature = "input")]
+        app.add_plugin(olvin_input::InputPlugin {
+            map: self.input.map.clone(),
+        });
+        #[cfg(feature = "script")]
+        app.add_plugin(olvin_script::ScriptPlugin {
+            builtins: self.script.builtins,
+        });
+        #[cfg(feature = "audio")]
+        app.add_plugin(self.audio.clone());
+        // Headless: the UI is laid out, never drawn.
+        #[cfg(feature = "gui")]
+        app.add_plugin(olvin_gui::GuiPlugin);
+    }
+}
+
 pub mod prelude {
-    pub use crate::DefaultPlugins;
+    pub use crate::{DefaultPlugins, HeadlessPlugins};
     pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
     #[cfg(feature = "anim")]
     pub use olvin_anim::{AnimGraph, AnimPlugin, Animator};
     #[cfg(feature = "audio")]
     pub use olvin_audio::{Audio, AudioListener, AudioPlugin, PlayParams};
-    pub use olvin_core::{App, AppExit, Plugin, Resources, Stage, Time};
+    pub use olvin_core::{App, AppExit, Plugin, ProjectPaths, Resources, Stage, Time};
     pub use olvin_ecs::{Entity, World};
     #[cfg(all(feature = "gui", feature = "render"))]
     pub use olvin_gui::GuiRenderPlugin;
@@ -136,4 +201,29 @@ pub mod prelude {
     pub use olvin_transform::{GlobalTransform, Parent};
     #[cfg(feature = "window")]
     pub use olvin_window::{Input, KeyCode, MouseButton, WindowPlugin};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headless_plugins_run_without_window_or_gpu() {
+        let mut app = App::new();
+        app.add_plugin(HeadlessPlugins::default());
+        for _ in 0..3 {
+            app.update();
+        }
+        #[cfg(feature = "anim")]
+        assert!(app.has_plugin::<olvin_anim::AnimPlugin>());
+        #[cfg(feature = "window")]
+        assert!(!app.has_plugin::<olvin_window::WindowPlugin>());
+        #[cfg(feature = "render")]
+        {
+            assert!(!app.has_plugin::<olvin_render::RenderPlugin>());
+            assert!(app.resources.contains::<olvin_render::Meshes>());
+        }
+        #[cfg(feature = "audio")]
+        assert!(!app.resources.fetch::<olvin_audio::Audio>().is_available());
+    }
 }

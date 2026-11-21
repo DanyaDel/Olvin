@@ -98,8 +98,9 @@ impl SkinnedMesh {
     }
 }
 
-/// Re-poses every skinned mesh whose animator changed since last time.
-pub(crate) fn skin_meshes(res: &mut Resources) {
+/// Re-poses every skinned mesh whose animator changed since last time
+/// (`RenderDataPlugin` runs it in `PostUpdate`).
+pub fn skin_meshes(res: &mut Resources) {
     let world = res.fetch::<World>();
     let mut meshes = res.fetch_mut::<Meshes>();
     let jobs: Vec<(Entity, crate::MeshHandle, Entity)> = world

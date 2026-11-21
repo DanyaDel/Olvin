@@ -1,7 +1,7 @@
 //! Never opens a device: everything runs on the no-device fallback.
 
 use glam::{Quat, Vec3};
-use olvin_core::App;
+use olvin_core::{App, ProjectPaths, Time};
 use olvin_scene::Transform;
 
 use super::*;
@@ -553,5 +553,104 @@ fn mixer_runs_on_the_mock_backend() {
     assert_eq!(audio.active_count(), 0);
     assert!(audio.unload_clip("tone.wav"));
     assert_eq!(audio.cached_clips(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `Time::pause` holds sfx and ambient voices where they are, music plays on,
+/// a sound started during the pause is not held, resume continues the rest.
+#[test]
+fn time_pause_holds_pausable_buses() {
+    let dir = std::env::temp_dir().join(format!("olvin_audio_pause_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("assets/loop.wav"), wav(1.0)).unwrap();
+
+    let mut app = App::new();
+    app.insert_resource(ProjectPaths::new(&dir))
+        .add_plugin(AudioPlugin::default());
+    let looping = |bus| PlayParams {
+        looping: true,
+        bus,
+        ..Default::default()
+    };
+    let (sfx, ambient, music) = {
+        let mut audio = app.resources.fetch_mut::<Audio>();
+        assert_eq!(audio.assets_dir(), dir.join("assets"), "project assets");
+        assert!(audio.is_available(), "mock backend");
+        assert!(!audio.is_bus_pausable(BusId::MUSIC) && audio.is_bus_pausable(BusId::SFX));
+        (
+            audio.play_with("loop.wav", looping(BusId::SFX)),
+            audio.play_with("loop.wav", looping(BusId::AMBIENT)),
+            audio.play_music("loop.wav", 1.0, true),
+        )
+    };
+    let frames = |app: &mut App, n: usize| {
+        for _ in 0..n {
+            {
+                let mut audio = app.resources.fetch_mut::<Audio>();
+                let backend = audio.manager.as_mut().unwrap().backend_mut();
+                backend.on_start_processing();
+                backend.process();
+            }
+            app.update();
+        }
+    };
+    let state = |app: &App, id| {
+        let audio = app.resources.fetch::<Audio>();
+        audio.playing[&id].handle.as_ref().unwrap().state()
+    };
+    frames(&mut app, 3);
+    assert_eq!(state(&app, sfx), PlaybackState::Playing);
+
+    app.resources.fetch_mut::<Time>().pause();
+    frames(&mut app, 20);
+    let menu = app
+        .resources
+        .fetch_mut::<Audio>()
+        .play_with("loop.wav", looping(BusId::SFX));
+    frames(&mut app, 3);
+    {
+        let audio = app.resources.fetch::<Audio>();
+        assert!(audio.is_paused());
+        assert!(audio.is_sound_paused(sfx) && audio.is_sound_paused(ambient));
+        assert!(!audio.is_sound_paused(music), "music is not pausable");
+        assert!(!audio.is_sound_paused(menu), "started during the pause");
+    }
+    assert_eq!(state(&app, sfx), PlaybackState::Paused);
+    assert_eq!(state(&app, ambient), PlaybackState::Paused);
+    assert_eq!(state(&app, music), PlaybackState::Playing);
+    let held_at = app.resources.fetch::<Audio>().position(sfx).unwrap();
+    frames(&mut app, 3);
+    assert_eq!(app.resources.fetch::<Audio>().position(sfx), Some(held_at));
+
+    // Music can be made pausable while paused; a single sound held by hand
+    // stays held through resume.
+    app.resources
+        .fetch_mut::<Audio>()
+        .set_bus_pausable(BusId::MUSIC, true);
+    app.resources.fetch_mut::<Audio>().pause_sound(ambient);
+    frames(&mut app, 20);
+    assert_eq!(state(&app, music), PlaybackState::Paused);
+
+    app.resources.fetch_mut::<Time>().resume();
+    frames(&mut app, 3);
+    {
+        let audio = app.resources.fetch::<Audio>();
+        assert!(!audio.is_paused() && !audio.is_sound_paused(sfx));
+        assert!(audio.is_sound_paused(ambient), "held by pause_sound");
+    }
+    let going = |s| matches!(s, PlaybackState::Playing | PlaybackState::Resuming);
+    assert!(going(state(&app, sfx)));
+    assert!(app.resources.fetch::<Audio>().position(sfx).unwrap() > held_at);
+    app.resources.fetch_mut::<Audio>().resume_sound(ambient);
+    frames(&mut app, 3);
+    assert!(going(state(&app, ambient)));
+
+    // Opting out: the game pause no longer reaches audio.
+    app.resources
+        .fetch_mut::<Audio>()
+        .set_follow_time_pause(false);
+    app.resources.fetch_mut::<Time>().pause();
+    frames(&mut app, 2);
+    assert!(!app.resources.fetch::<Audio>().is_sound_paused(sfx));
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,5 +1,6 @@
-//! The slice played headless: the real `GamePlugin` and level, no window,
-//! no audio device, fixed 1/60 s frames. Input is fed into the in-process
+//! The slice played headless: `HeadlessPlugins` + the real `GamePlugin` and
+//! level, no window, no audio device, fixed 1/60 s frames. The level is found
+//! through `ProjectPaths` (`cargo test` sets this crate's folder). Input is fed into the in-process
 //! `Input` resource, the same way the window would.
 
 use std::path::{Path, PathBuf};
@@ -27,14 +28,13 @@ fn saves_dir(tag: &str) -> PathBuf {
 fn game(tag: &str) -> App {
     let mut app = App::new();
     app.insert_resource(Time::with_fixed_delta(DT));
-    app.add_plugin(GamePlugin {
-        config: SliceConfig {
-            assets: Path::new(env!("CARGO_MANIFEST_DIR")).join("assets"),
-            saves: saves_dir(tag),
-            audio: false,
-            lua_hot_reload: false,
-        },
-    });
+    app.add_plugin(HeadlessPlugins::default())
+        .add_plugin(GamePlugin {
+            config: SliceConfig {
+                saves: Some(saves_dir(tag)),
+                lua_hot_reload: false,
+            },
+        });
     for _ in 0..500 {
         app.update();
         if app
@@ -245,6 +245,10 @@ fn pause_freezes_the_world() {
             .fetch::<State<GameState>>()
             .is(GameState::Paused)
     );
+    assert!(
+        app.resources.fetch::<Audio>().is_paused(),
+        "sounds hold too"
+    );
     let paused_at = rotation(&app);
     let ball = entity(&app, "Ball");
     let ball_at = pos(&app, ball);
@@ -268,6 +272,7 @@ fn pause_freezes_the_world() {
             .is(GameState::Playing)
     );
     assert!(rotation(&app).angle_between(paused_at) > 0.01);
+    assert!(!app.resources.fetch::<Audio>().is_paused());
 }
 
 #[test]

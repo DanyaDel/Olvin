@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Binding, GamepadButton, Stick};
 
+/// From the working directory, as before `ProjectPaths`; `InputPlugin` uses [`FILE_NAME`].
 pub const DEFAULT_PATH: &str = "assets/input.ron";
+/// The map's file inside the assets folder (`ProjectPaths::asset(FILE_NAME)`).
+pub const FILE_NAME: &str = "input.ron";
 
 fn default_deadzone() -> f32 {
     0.15

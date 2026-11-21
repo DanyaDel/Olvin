@@ -4,7 +4,8 @@
 //! Переменная окружения `OLVIN_LOG` (или `RUST_LOG`) переопределяет фильтр по умолчанию.
 //! Строки идут в stderr и, если задан файл, туда же. При панике рядом с логом
 //! пишется отчёт `crash-<unix-время>.txt`: сообщение, место, поток, backtrace
-//! и последние строки лога.
+//! и последние строки лога. Относительные пути считаются от папки проекта
+//! ([`ProjectPaths::detect`](crate::ProjectPaths::detect)), а не от рабочей папки.
 //!
 //! ```no_run
 //! olvin_core::logging::Logging::new("info,wgpu_core=warn")
@@ -49,13 +50,14 @@ impl Logging {
     }
 
     /// Дублировать лог в файл (перезаписывается при запуске, папки создаются).
-    /// Отчёты о паниках по умолчанию кладутся в ту же папку.
+    /// Отчёты о паниках по умолчанию кладутся в ту же папку. Относительный
+    /// путь — от папки проекта (`ProjectPaths`).
     pub fn file(mut self, path: impl Into<PathBuf>) -> Self {
         self.file = Some(path.into());
         self
     }
 
-    /// Папка для отчётов о паниках. Без неё и без `file` — текущая папка.
+    /// Папка для отчётов о паниках. Без неё и без `file` — папка проекта.
     pub fn crash_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.crash_dir = Some(dir.into());
         self
@@ -69,8 +71,11 @@ impl Logging {
 
     /// Ставит логгер и перехват паник. `false`, если логгер уже был установлен
     /// (тогда ничего не меняется).
-    pub fn init(self) -> bool {
+    pub fn init(mut self) -> bool {
         let filter = Filter::parse(&self.filter);
+        let paths = crate::ProjectPaths::detect();
+        self.file = self.file.map(|f| paths.resolve(f));
+        self.crash_dir = self.crash_dir.map(|d| paths.resolve(d));
         let file = self.file.as_deref().and_then(|path| {
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 let _ = fs::create_dir_all(dir);
@@ -92,7 +97,7 @@ impl Logging {
                     .and_then(Path::parent)
                     .map(Path::to_path_buf)
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| paths.root.clone());
 
         let max = filter.max_level();
         let logger = LOGGER.get_or_init(|| Logger {

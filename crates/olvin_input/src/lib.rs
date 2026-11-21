@@ -15,16 +15,17 @@ mod state;
 pub use binding::{Binding, GamepadAxis, GamepadButton, Raw, Stick};
 pub use gamepad::{GamepadState, Haptics, Rumble};
 pub use hints::{Device, PadStyle, key_label, mouse_label};
-pub use map::{DEFAULT_PATH, InputMap};
+pub use map::{DEFAULT_PATH, FILE_NAME, InputMap};
 pub use olvin_window::{CursorOptions, Input, KeyCode, MouseButton};
 pub use rebind::{Rebind, RebindEvent, Slot};
 pub use state::{ActionState, ActionValue};
 
-use olvin_core::{App, Plugin, Resources, Stage};
+use olvin_core::{App, Plugin, ProjectPaths, Resources, Stage};
 
-/// Inserts [`InputMap`] (from `map`, else `assets/input.ron`, else the
-/// default map), [`ActionState`] and [`GamepadState`]; updates actions in
-/// `Stage::First`, so `PreUpdate` (physics fixed steps) already sees them.
+/// Inserts [`InputMap`] (from `map`, else `input.ron` in the project's
+/// assets, else the default map), [`ActionState`] and [`GamepadState`];
+/// updates actions in `Stage::First`, so `PreUpdate` (physics fixed steps)
+/// already sees them. A relative [`Rebind::autosave`] is inside the project folder.
 #[derive(Default)]
 pub struct InputPlugin {
     pub map: Option<InputMap>,
@@ -32,10 +33,10 @@ pub struct InputPlugin {
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
-        let map = self
-            .map
-            .clone()
-            .unwrap_or_else(|| InputMap::load_or_default(DEFAULT_PATH));
+        let map = self.map.clone().unwrap_or_else(|| {
+            let paths = app.resources.fetch::<ProjectPaths>();
+            InputMap::load_or_default(paths.asset(map::FILE_NAME))
+        });
         app.insert_resource(map)
             .init_resource::<Input>()
             .init_resource::<ActionState>()
@@ -72,6 +73,11 @@ pub fn update_actions(res: &mut Resources) {
     let input = res.fetch::<Input>();
     let pads = res.fetch::<GamepadState>();
     let mut rebind = res.fetch_mut::<Rebind>();
+    if let Some(path) = rebind.autosave.as_mut().filter(|p| p.is_relative())
+        && let Some(paths) = res.get::<ProjectPaths>()
+    {
+        *path = paths.resolve(&*path);
+    }
     let was_listening = rebind.is_listening();
     rebind.poll(&mut map, &input, &pads);
     let mut actions = res.fetch_mut::<ActionState>();

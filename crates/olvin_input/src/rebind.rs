@@ -39,7 +39,8 @@ pub struct Rebind {
     target: Option<(String, Slot)>,
     /// Pad buttons held last poll, to see new presses (`GamepadState` has no edges).
     pads_down: HashSet<GamepadButton>,
-    /// Written after every successful rebind when set.
+    /// Written after every successful rebind when set. `InputPlugin` turns a
+    /// relative path into one inside the project folder (`ProjectPaths::resolve`).
     pub autosave: Option<PathBuf>,
     /// Outcome of the last poll that finished a rebind; take it with [`Rebind::take_event`].
     event: Option<RebindEvent>,

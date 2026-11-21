@@ -1,7 +1,7 @@
 //! Driven by synthetic `Input` state only: no device, no window.
 
 use glam::Vec2;
-use olvin_core::App;
+use olvin_core::{App, ProjectPaths};
 
 use super::*;
 
@@ -291,6 +291,33 @@ fn rebind_survives_save_and_autosaves() {
     input.set_key(KeyCode::KeyJ, true);
     rebind_frame(&mut rebind, &mut map, &mut input, &pads);
     assert_eq!(InputMap::load(&path).unwrap(), map);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Without a map the plugin reads `input.ron` from the project's assets, and
+/// a relative autosave lands in the project folder, not the working directory.
+#[test]
+fn plugin_uses_project_paths() {
+    let dir = std::env::temp_dir().join(format!("olvin-input-project-{}", std::process::id()));
+    let mut saved = InputMap::empty();
+    saved.bind("Dash", [Binding::Key(KeyCode::KeyQ)]);
+    saved.save(dir.join("assets").join(FILE_NAME)).unwrap();
+
+    let mut app = App::new();
+    app.insert_resource(ProjectPaths::new(&dir))
+        .add_plugin(InputPlugin::default());
+    assert_eq!(*app.resources.fetch::<InputMap>(), saved);
+    {
+        let mut rebind = app.resources.fetch_mut::<Rebind>();
+        rebind.autosave = Some("config/input.ron".into());
+        rebind.listen("Dash", Slot::Replace(0));
+    }
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::KeyR, true);
+    app.update();
+    let written = InputMap::load(dir.join("config/input.ron")).unwrap();
+    assert_eq!(written.actions["Dash"], [Binding::Key(KeyCode::KeyR)]);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

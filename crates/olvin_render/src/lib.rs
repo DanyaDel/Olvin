@@ -32,7 +32,7 @@ pub use post::{HDR_FORMAT, PostProcess};
 pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
 pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
-pub use skinning::SkinnedMesh;
+pub use skinning::{SkinnedMesh, skin_meshes};
 pub use sprite::{
     AtlasRegion, Camera2d, Space2d, Sprite, SpriteAtlas, SpriteRenderer, TileSet, Tilemap,
     screen_view_proj,
@@ -233,20 +233,32 @@ pub struct RenderPlugin {
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugin(RenderDataPlugin)
+            .insert_resource(self.settings.clone())
+            .init_resource::<RenderStats>()
+            .add_system(Stage::Startup, renderer::init)
+            .add_system(Stage::Render, renderer::render);
+    }
+}
+
+/// The part of the renderer that needs no GPU: the asset registries
+/// (`Meshes`, `Textures`, `Materials`, `Shaders`), `AnimPlugin` with CPU
+/// skinning and the particle simulation. `RenderPlugin` adds it; headless
+/// games and tests add it alone, so scenes spawn and skinned meshes pose.
+pub struct RenderDataPlugin;
+
+impl Plugin for RenderDataPlugin {
+    fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
             .add_plugin(olvin_transform::TransformPlugin)
             .add_plugin(olvin_anim::AnimPlugin)
-            .insert_resource(self.settings.clone())
             .init_resource::<Meshes>()
             .init_resource::<Textures>()
             .init_resource::<Materials>()
             .init_resource::<Shaders>()
-            .init_resource::<RenderStats>()
             .init_resource::<Overlay>()
-            .add_system(Stage::Startup, renderer::init)
             .add_system(Stage::First, overlay::clear)
             .add_system(Stage::PostUpdate, particles::update)
-            .add_system(Stage::PostUpdate, skinning::skin_meshes)
-            .add_system(Stage::Render, renderer::render);
+            .add_system(Stage::PostUpdate, skinning::skin_meshes);
     }
 }

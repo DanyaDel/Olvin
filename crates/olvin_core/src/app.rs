@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use crate::{Events, Plugin, Resources, Schedule, Stage, Time, events, time};
+use crate::{Events, Plugin, ProjectPaths, Resources, Schedule, Stage, Time, events, time};
 
 /// Set `requested` to stop the main loop after the current frame.
 #[derive(Debug, Default)]
@@ -40,6 +40,7 @@ impl App {
         };
         app.insert_resource(Time::default());
         app.insert_resource(AppExit::default());
+        app.insert_resource(ProjectPaths::detect().clone());
         app.add_system(Stage::First, time::update_time);
         app
     }

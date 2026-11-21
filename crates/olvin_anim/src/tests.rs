@@ -337,8 +337,11 @@ fn action_player_animates_scene_objects_and_loops() {
     use olvin_scene::action::{Action, Prop};
     use olvin_scene::{SceneId, Transform};
 
-    let mut action = Action::default();
-    action.frame_end = 25; // 24 frames = one second at 24 fps
+    // 24 frames = one second at 24 fps.
+    let mut action = Action {
+        frame_end: 25,
+        ..Default::default()
+    };
     action.insert_key(5, Prop::Location, 0, 1.0, 0.0);
     action.insert_key(5, Prop::Location, 0, 25.0, 10.0);
     action.insert_key(5, Prop::Rotation, 1, 1.0, 0.0);

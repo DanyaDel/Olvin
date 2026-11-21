@@ -141,11 +141,7 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
                 color,
             );
             let dirty = !e.is_dir && ide.docs.iter().any(|d| d.dirty && d.path == e.path);
-            let name_color = if is_active {
-                theme::palette(ui.ctx()).text
-            } else {
-                theme::palette(ui.ctx()).text
-            };
+            let name_color = theme::palette(ui.ctx()).text;
             let text_rect = p.text(
                 egui::pos2(x + 31.0, y),
                 Align2::LEFT_CENTER,

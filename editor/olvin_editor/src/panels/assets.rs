@@ -178,14 +178,16 @@ impl Panel for Assets {
                 rest.context_menu(|ui| create_menu(ui, &mut self.creating));
             });
 
-        if hovered && self.renaming.is_none() && !ui.ctx().egui_wants_keyboard_input() {
-            if let Some(sel) = self.selected.clone() {
-                if ui.input(|i| i.key_pressed(egui::Key::F2)) {
-                    self.renaming = Some((sel.clone(), file_name(&sel)));
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-                    self.deleting = Some(sel);
-                }
+        if hovered
+            && self.renaming.is_none()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && let Some(sel) = self.selected.clone()
+        {
+            if ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                self.renaming = Some((sel.clone(), file_name(&sel)));
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                self.deleting = Some(sel);
             }
         }
         if let Some((from, name)) = rename_to {
@@ -842,7 +844,7 @@ mod tests {
 
     #[test]
     fn delete_takes_the_meta_along() {
-        let (root, mut state, cube) = project("delete");
+        let (root, mut state, _) = project("delete");
         let assets = root.join("assets");
         olvin_assets::AssetRoot::new(&assets).scan();
         let mat = assets.join("materials/red.mat.ron");

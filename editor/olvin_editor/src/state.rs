@@ -890,7 +890,7 @@ mod tests {
         let mut s = EditorState::new(Some(root.clone()));
         s.materials.refresh(Some(&root.join("assets")));
         let rel = s.materials.create("m", Default::default()).unwrap();
-        let metallic = |s: &EditorState| {
+        let metallic = || {
             olvin_scene::material::MaterialDesc::load(root.join("assets").join(&rel))
                 .unwrap()
                 .metallic
@@ -901,20 +901,16 @@ mod tests {
             s.materials.save(&rel).unwrap();
             s.end_frame(false);
         }
-        assert_eq!(metallic(&s), 1.0);
+        assert_eq!(metallic(), 1.0);
         s.undo();
-        assert_eq!(metallic(&s), 0.5, "the file follows undo");
+        assert_eq!(metallic(), 0.5, "the file follows undo");
         s.undo();
-        assert_eq!(
-            metallic(&s),
-            0.0,
-            "back to the content before the first edit"
-        );
+        assert_eq!(metallic(), 0.0, "back to the content before the first edit");
         s.end_frame(false);
         assert!(!s.can_undo() || s.undo.len() <= 1, "no phantom steps");
         s.redo();
         s.redo();
-        assert_eq!(metallic(&s), 1.0);
+        assert_eq!(metallic(), 1.0);
         assert_eq!(s.materials.get(&rel).unwrap().metallic, 1.0);
         std::fs::remove_dir_all(&root).unwrap();
     }

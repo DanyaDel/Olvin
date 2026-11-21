@@ -139,7 +139,7 @@ impl EditorInstall {
 
     /// `cargo build --release` of the installation. The caller decides how to run it.
     pub fn build_command(&self) -> Command {
-        let mut cmd = Command::new("cargo");
+        let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         cmd.args(["build", "--release", "--manifest-path"])
             .arg(self.root.join("Cargo.toml"));
         cmd

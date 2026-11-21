@@ -204,7 +204,8 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
             continue;
         }
         let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        // `is_dir` follows symlinks: a linked folder is copied, not read as a file.
+        if entry.path().is_dir() {
             count += copy_tree(&entry.path(), &target)?;
         } else {
             fs::copy(entry.path(), &target)
@@ -224,7 +225,7 @@ fn files_of(dir: &Path, prefix: &Path, out: &mut Vec<(PathBuf, PathBuf)>) -> io:
             continue;
         }
         let inner = prefix.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        if entry.path().is_dir() {
             files_of(&entry.path(), &inner, out)?;
         } else {
             out.push((entry.path(), inner));
@@ -238,9 +239,11 @@ fn files_of(dir: &Path, prefix: &Path, out: &mut Vec<(PathBuf, PathBuf)>) -> io:
 fn pack(dir: &Path, name: &str, format: ArchiveFormat) -> Result<PathBuf> {
     let mut files = Vec::new();
     files_of(dir, Path::new(name), &mut files)?;
-    let mut path = dir.as_os_str().to_owned();
-    path.push(format!(".{}", format.extension()));
-    let path = PathBuf::from(path);
+    // Built from the folder's name: `--out dist/game/` must not give `dist/game/.zip`.
+    let folder = dir.file_name().context("the output folder has no name")?;
+    let mut file_name = folder.to_owned();
+    file_name.push(format!(".{}", format.extension()));
+    let path = dir.with_file_name(file_name);
     let file =
         File::create(&path).with_context(|| format!("could not create {}", path.display()))?;
     match format {
@@ -413,6 +416,32 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("not made by"), "{err}");
         assert!(mine.join("precious.txt").is_file());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn trailing_slash_out_and_linked_assets() {
+        let dir = temp_dir("slash");
+        let game = tiny_game(&dir);
+        #[cfg(unix)]
+        {
+            fs::create_dir_all(dir.join("shared")).unwrap();
+            fs::write(dir.join("shared/a.txt"), "a").unwrap();
+            std::os::unix::fs::symlink(dir.join("shared"), game.root().join("assets/linked"))
+                .unwrap();
+        }
+        let mut out = dir.join("out/tiny-win").into_os_string();
+        out.push("/");
+        let report = game
+            .build(&BuildOptions {
+                out: Some(PathBuf::from(out)),
+                archive: Some(ArchiveFormat::Zip),
+                ..options(&dir)
+            })
+            .unwrap();
+        assert_eq!(report.archive.unwrap(), dir.join("out/tiny-win.zip"));
+        #[cfg(unix)]
+        assert!(report.out_dir.join("assets/linked/a.txt").is_file());
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -65,8 +65,14 @@ impl Project {
         catalog: &Catalog,
         modules: &[&str],
     ) -> Result<Self> {
+        // Requirements count: `scenes` alone brings `render` and `window`.
+        let mut wanted: Vec<&str> = Vec::new();
         for id in modules {
-            catalog.resolve(id)?;
+            for m in catalog.resolve(id)? {
+                if !wanted.contains(&m.id.as_str()) {
+                    wanted.push(&m.id);
+                }
+            }
         }
         validate_name(name)?;
         engine.validate()?;
@@ -74,20 +80,38 @@ impl Project {
         if root.exists() {
             bail!("{} already exists. Pick another name", root.display());
         }
-        fs::create_dir_all(root.join("src"))?;
         let graphical = ["window", "render", "scenes"]
             .iter()
-            .all(|m| modules.contains(m));
+            .all(|m| wanted.contains(m));
+        let made = Self::write_new(&root, name, engine, catalog, modules, graphical);
+        if made.is_err() {
+            // No half-made project left behind (the folder did not exist before).
+            let _ = fs::remove_dir_all(&root);
+        }
+        made
+    }
+
+    fn write_new(
+        root: &Path,
+        name: &str,
+        engine: &EngineSource,
+        catalog: &Catalog,
+        modules: &[&str],
+        graphical: bool,
+    ) -> Result<Self> {
+        fs::create_dir_all(root.join("src"))?;
         for (file, content) in template::files(name, graphical) {
             fs::write(root.join(file), content)?;
         }
-
         let mut doc: DocumentMut = template::cargo_toml(name).parse()?;
         doc["dependencies"].as_table_like_mut().unwrap().insert(
             "olvin",
             Item::Value(Value::InlineTable(engine.dependency())),
         );
-        let mut project = Self { root, doc };
+        let mut project = Self {
+            root: root.to_path_buf(),
+            doc,
+        };
         for id in modules {
             project.add(catalog, id)?;
         }
@@ -148,6 +172,47 @@ impl Project {
 
     /// Uninstalls a module. Refuses if installed modules require it, unless `force`.
     pub fn remove(&mut self, catalog: &Catalog, id: &str, force: bool) -> Result<bool> {
+        self.remove_among(catalog, id, force, &[])
+    }
+
+    /// Uninstalls several modules at once: one that another module of the
+    /// same list requires may come in any order (`remove serde saves`).
+    /// Returns the ids that were installed and are gone now. All or nothing:
+    /// on an error the project is left as it was.
+    pub fn remove_many(
+        &mut self,
+        catalog: &Catalog,
+        ids: &[String],
+        force: bool,
+    ) -> Result<Vec<String>> {
+        for id in ids {
+            if catalog.get(id).is_none() {
+                bail!("no module `{id}`. See the list: olvin-hub list");
+            }
+        }
+        let before = self.doc.clone();
+        let mut removed = Vec::new();
+        for id in ids {
+            match self.remove_among(catalog, id, force, ids) {
+                Ok(true) => removed.push(id.clone()),
+                Ok(false) => {}
+                Err(e) => {
+                    self.doc = before;
+                    return Err(e);
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    /// `remove`, not counting the modules in `also_removed` as dependents.
+    fn remove_among(
+        &mut self,
+        catalog: &Catalog,
+        id: &str,
+        force: bool,
+        also_removed: &[String],
+    ) -> Result<bool> {
         let Some(module) = catalog.get(id) else {
             bail!("no module `{id}`. See the list: olvin-hub list")
         };
@@ -158,6 +223,7 @@ impl Project {
             .installed(catalog)
             .into_iter()
             .filter(|m| m.requires.iter().any(|r| r == id))
+            .filter(|m| !also_removed.contains(&m.id))
             .map(|m| m.id.as_str())
             .collect();
         if !dependents.is_empty() && !force {
@@ -267,6 +333,53 @@ impl Project {
     }
 }
 
+const RESERVED: &[&str] = &[
+    "olvin",
+    "log",
+    "test",
+    "core",
+    "std",
+    "alloc",
+    "proc_macro",
+    "as",
+    "break",
+    "const",
+    "continue",
+    "crate",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "fn",
+    "for",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "pub",
+    "ref",
+    "return",
+    "self",
+    "static",
+    "struct",
+    "super",
+    "trait",
+    "true",
+    "type",
+    "unsafe",
+    "use",
+    "where",
+    "while",
+    "async",
+    "await",
+    "dyn",
+];
+
 fn validate_name(name: &str) -> Result<()> {
     let ok = name
         .chars()
@@ -277,6 +390,13 @@ fn validate_name(name: &str) -> Result<()> {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if !ok {
         bail!("`{name}`: use Latin letters, digits, `_` and `-`, starting with a letter");
+    }
+    // Cargo refuses these as package names, or the project would depend on itself.
+    let crate_name = name.replace('-', "_");
+    if RESERVED.contains(&crate_name.as_str()) {
+        bail!(
+            "`{name}` is reserved (a Rust keyword, a std crate or a dependency of the project). Pick another name"
+        );
     }
     Ok(())
 }
@@ -330,6 +450,55 @@ mod tests {
 
         assert!(Project::create(&dir, "my_game", &engine, &catalog).is_err());
         assert!(Project::create(&dir, "1bad name", &engine, &catalog).is_err());
+        // A project named like its own dependencies or a keyword would not build.
+        for bad in ["olvin", "log", "fn", "Test", "std", "my-fn"] {
+            let expect_err = !matches!(bad, "Test" | "my-fn");
+            assert_eq!(
+                Project::create(&dir, bad, &engine, &catalog).is_err(),
+                expect_err,
+                "{bad}"
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `scenes` alone pulls in `render` and `window`: the graphical template, not the headless one.
+    #[test]
+    fn requirements_count_for_the_graphical_template() {
+        let dir = temp_dir("graphical");
+        let catalog = Catalog::builtin();
+        let engine = EngineSource::default();
+        let p = Project::create_with(&dir, "g", &engine, &catalog, &["scenes"]).unwrap();
+        let main = fs::read_to_string(p.root().join("src/main.rs")).unwrap();
+        assert!(main.contains("DefaultPlugins"), "{main}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A failed create leaves no folder behind, and removal of a module together
+    /// with its dependent works in any order and is all or nothing.
+    #[test]
+    fn failed_create_cleans_up_and_remove_many_is_atomic() {
+        let dir = temp_dir("atomic");
+        let catalog = Catalog::builtin();
+        let engine = EngineSource::default();
+        assert!(Project::create_with(&dir, "g", &engine, &catalog, &["nope"]).is_err());
+        assert!(!dir.join("g").exists());
+
+        let mut p = Project::create_with(&dir, "g", &engine, &catalog, &["saves"]).unwrap();
+        let ids = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let before = p.doc.to_string();
+        assert!(
+            p.remove_many(&catalog, &ids(&["serde", "nope"]), false)
+                .is_err()
+        );
+        assert_eq!(p.doc.to_string(), before);
+        assert!(p.remove_many(&catalog, &ids(&["serde"]), false).is_err());
+        assert_eq!(p.doc.to_string(), before);
+        assert_eq!(
+            p.remove_many(&catalog, &ids(&["serde", "saves", "rand"]), false)
+                .unwrap(),
+            ["serde", "saves"]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

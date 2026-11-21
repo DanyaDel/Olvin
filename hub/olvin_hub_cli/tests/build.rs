@@ -113,3 +113,51 @@ fn build_reports_errors() {
     assert!(!result.status.success());
     fs::remove_dir_all(dir).unwrap();
 }
+
+fn broken_config(dir: &Path) {
+    let cfg = dir.join("config/olvin-hub");
+    fs::create_dir_all(&cfg).unwrap();
+    fs::write(cfg.join("config.toml"), "engine = [oops").unwrap();
+}
+
+#[test]
+fn module_commands_are_all_or_nothing_and_ignore_a_broken_config() {
+    let dir = temp_dir("modules");
+    let game = tiny_game(&dir);
+    let game_arg = game.to_str().unwrap();
+    broken_config(&dir);
+    let manifest = || fs::read_to_string(game.join("Cargo.toml")).unwrap();
+    let before = manifest();
+
+    // an unknown module after a valid one: nothing printed as added, nothing saved
+    let result = hub(&dir, &["add", "rand", "nope", "-p", game_arg]);
+    assert!(!result.status.success());
+    assert!(!String::from_utf8_lossy(&result.stdout).contains("+ rand"));
+    assert_eq!(manifest(), before);
+
+    // a broken hub config does not block project commands
+    let result = hub(&dir, &["add", "saves", "-p", game_arg]);
+    assert!(result.status.success(), "{result:?}");
+    assert!(manifest().contains("ron"));
+
+    // `serde` and the `saves` that needs it go together, in either order
+    let result = hub(&dir, &["remove", "serde", "saves", "-p", game_arg]);
+    assert!(result.status.success(), "{result:?}");
+    let text = manifest();
+    assert!(!text.contains("ron") && !text.contains("serde"), "{text}");
+
+    // commands that do need the config say what is wrong with it
+    let result = hub(&dir, &["projects"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("config.toml"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn editor_remove_rejects_unknown_elements() {
+    let dir = temp_dir("editor-remove");
+    let result = hub(&dir, &["editor", "remove", "nope"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("no editor element `nope`"));
+    fs::remove_dir_all(dir).unwrap();
+}

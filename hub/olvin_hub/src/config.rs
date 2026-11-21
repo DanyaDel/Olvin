@@ -140,7 +140,11 @@ impl HubConfig {
     }
 
     pub fn forget(&mut self, root: &Path) -> bool {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        // A folder that is already gone cannot be canonicalized; its stored path was.
+        let root = root
+            .canonicalize()
+            .or_else(|_| std::path::absolute(root))
+            .unwrap_or_else(|_| root.to_path_buf());
         let before = self.projects.len();
         self.projects.retain(|p| *p != root);
         self.projects.len() != before

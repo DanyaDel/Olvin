@@ -137,10 +137,11 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let catalog = Catalog::builtin();
-    let mut config = HubConfig::load()?;
+    // Read only where it is needed: a damaged config must not block `build` or `add`.
 
     match cli.command {
         Cmd::New { name, dir } => {
+            let mut config = HubConfig::load()?;
             let parent = match dir {
                 Some(dir) => dir,
                 None => std::env::current_dir()?,
@@ -184,15 +185,20 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Add { modules, project } => {
             let mut project = open(project.as_deref())?;
+            // Nothing is saved or printed if one of them fails.
+            let mut lines = Vec::new();
             for id in &modules {
                 let added = project.add(&catalog, id)?;
-                if added.is_empty() {
-                    println!("{id}: already installed");
+                lines.push(if added.is_empty() {
+                    format!("{id}: already installed")
                 } else {
-                    println!("+ {}", added.join(", "));
-                }
+                    format!("+ {}", added.join(", "))
+                });
             }
             project.save()?;
+            for line in lines {
+                println!("{line}");
+            }
         }
         Cmd::Remove {
             modules,
@@ -200,18 +206,19 @@ fn run(cli: Cli) -> Result<()> {
             force,
         } => {
             let mut project = open(project.as_deref())?;
+            let removed = project.remove_many(&catalog, &modules, force)?;
+            project.save()?;
             for id in &modules {
-                if project.remove(&catalog, id, force)? {
+                if removed.contains(id) {
                     println!("- {id}");
                 } else {
                     println!("{id}: was not installed");
                 }
             }
-            project.save()?;
         }
         Cmd::Run { project, release } => {
             let project = open(project.as_deref())?;
-            let mut cmd = Command::new("cargo");
+            let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
             cmd.arg("run").current_dir(project.root());
             if release {
                 cmd.arg("--release");
@@ -254,6 +261,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Projects => {
+            let config = HubConfig::load()?;
             if config.projects.is_empty() {
                 println!("No projects yet. Create one: olvin-hub new <name>");
             }
@@ -265,6 +273,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Register { path } => {
+            let mut config = HubConfig::load()?;
             let project = Project::open(&path)?;
             if config.register(project.root())? {
                 config.save()?;
@@ -274,6 +283,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Forget { path } => {
+            let mut config = HubConfig::load()?;
             if config.forget(&path) {
                 config.save()?;
                 println!("removed {} from the list", path.display());
@@ -281,8 +291,9 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{} was not in the list", path.display());
             }
         }
-        Cmd::Editor { command } => editor(command, &catalog, &config)?,
+        Cmd::Editor { command } => editor(command, &catalog, &HubConfig::load()?)?,
         Cmd::Engine { path, git } => {
+            let mut config = HubConfig::load()?;
             let new = match (path, git) {
                 (Some(path), _) => Some(EngineSource::Path(path.canonicalize()?)),
                 (_, Some(url)) => Some(EngineSource::Git(url)),
@@ -336,7 +347,14 @@ fn editor(command: EditorCmd, catalog: &Catalog, config: &HubConfig) -> Result<(
                 }
             }
         }
-        EditorCmd::Remove { elements } => selection.retain(|id| !elements.contains(id)),
+        EditorCmd::Remove { elements } => {
+            for id in &elements {
+                if catalog.editor_module(id).is_none() {
+                    bail!("no editor element `{id}`. See the list: olvin-hub editor list");
+                }
+            }
+            selection.retain(|id| !elements.contains(id));
+        }
         EditorCmd::Open { project } => {
             let project = match project {
                 Some(path) => Some(Project::open(&path)?),

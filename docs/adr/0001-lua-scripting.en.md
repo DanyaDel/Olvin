@@ -117,3 +117,21 @@ Open questions (items in [ROADMAP.en.md](../../ROADMAP.en.md)):
 - **The web is not decided.** The C interpreter doesn't build for `wasm32-unknown-unknown` on its own: it needs libc stubs or a different wasm target. What to do with scripts in the browser is not chosen. This doesn't block the native build.
 - **The editor and the hub don't use Lua yet.** The runtime is ready, but the editor doesn't load `*.lua`, Lua script parameters aren't visible in the inspector, and there is no `lua` module in the hub catalogue.
 - **No `require` between files.** Shared code between scripts can't be factored out yet.
+
+## Update (a fast path across the Rust↔Lua boundary)
+
+The conclusion about the boundary cost held up. Vector tables moved into a Lua prelude, and Rust keeps number-only primitives: `ctx:position_xyz()`, `ctx:translate_xyz(x, y, z)`, `ctx:axis2d_xy("Move")` (multiple return values instead of tables). The old API (`vec3`, tables) works as before and is built on top of them. At the same time `ctx` gained sound, other entities, messages and shared variables (closes item 6 of `apps/vertical_slice/GAPS.md`).
+
+Measured (`cargo bench -p olvin_script --features lua --bench lua_vs_rust`, i5-11400F, 5,000 entities, release; the machine was busy with other builds, the Rust walker measured 37 ns/update, same as before):
+
+| case | before, ns/update | after, ns/update |
+|---|---|---|
+| Rust, walker | 38 | 37 |
+| Lua, walker (old table API) | 2,300 | 1,125 |
+| Lua, walker (fast path `*_xy/_xyz`) | n/a | 419 |
+| Lua, walker (fast path, no instruction limit) | n/a | 363 |
+| `ctx:axis2d("Move")` / `axis2d_xy` | n/a | 360 / 207 |
+| `ctx:translate(vec3())` / `translate_xyz` | n/a | 680 / 177 |
+| `ctx:position()` / `position_xyz` | n/a | 494 / 161 |
+
+The ≤ 0.5 µs target holds on the fast path (0.42 µs; 5,000 walkers ≈ 2.1 ms a frame instead of 11.7 ms). Script errors still go to the log and never fail the frame.

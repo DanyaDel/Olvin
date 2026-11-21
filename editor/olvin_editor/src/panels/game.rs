@@ -34,6 +34,7 @@ impl Panel for GameView {
         // The game gets the keyboard and mouse while the pointer is over this view.
         if let Some(play) = &mut state.play {
             let focused = response.hovered() && !ui.ctx().egui_wants_keyboard_input();
+            state.panel_owns_edit_keys = response.hovered();
             ui.input(|i| play.feed_input(i, focused));
         }
         let painter = ui.painter_at(rect);

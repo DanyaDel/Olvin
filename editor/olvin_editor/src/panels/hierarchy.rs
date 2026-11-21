@@ -1,6 +1,7 @@
 use egui::{Id, Sense, TextEdit};
 
 use crate::ext::CreateItem;
+use crate::panels::assets::{AssetDrag, DropTarget, drop_asset, dropped};
 use crate::{EditorState, NewEntity, Panel, theme};
 
 /// What a create menu produced.
@@ -82,6 +83,7 @@ enum Action {
     Reparent(u64, Option<u64>),
     StartRename(u64),
     Rename(u64, String),
+    AssetDrop(std::path::PathBuf, Option<u64>),
 }
 
 #[derive(Default)]
@@ -125,10 +127,16 @@ impl Panel for Hierarchy {
             // The empty area below the tree: drop to un-parent, click to deselect.
             let size = ui.available_size().max(egui::vec2(0.0, 24.0));
             let (rect, rest) = ui.allocate_exact_size(size, Sense::click());
+            // Assets first: the object check below discards other payloads.
+            if let Some(asset) = dropped(&rest) {
+                actions.push(Action::AssetDrop(asset.0.clone(), None));
+            }
             if let Some(dragged) = rest.dnd_release_payload::<u64>() {
                 actions.push(Action::Reparent(*dragged, None));
             }
-            if rest.dnd_hover_payload::<u64>().is_some() {
+            if rest.dnd_hover_payload::<u64>().is_some()
+                || rest.dnd_hover_payload::<AssetDrag>().is_some()
+            {
                 ui.painter().rect_stroke(
                     rect.shrink(1.0),
                     3.0,
@@ -167,6 +175,9 @@ impl Panel for Hierarchy {
                 Action::Delete(id) => state.delete(id),
                 Action::Reparent(id, parent) => {
                     state.reparent(id, parent);
+                }
+                Action::AssetDrop(path, row) => {
+                    drop_asset(state, &path, DropTarget::Hierarchy(row));
                 }
                 Action::Rename(id, name) => {
                     if let Some(e) = state.scene.get_mut(id) {
@@ -308,6 +319,9 @@ impl Hierarchy {
         });
 
         let response = label;
+        if let Some(asset) = dropped(&response) {
+            actions.push(Action::AssetDrop(asset.0.clone(), Some(id)));
+        }
         if let Some(dragged) = response.dnd_release_payload::<u64>()
             && *dragged != id
         {
@@ -316,6 +330,7 @@ impl Hierarchy {
         if response
             .dnd_hover_payload::<u64>()
             .is_some_and(|d| *d != id)
+            || response.dnd_hover_payload::<AssetDrag>().is_some()
         {
             ui.painter().rect_stroke(
                 response.rect,

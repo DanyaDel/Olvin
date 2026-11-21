@@ -202,6 +202,20 @@ fn drag(h: &mut Ed, from: egui::Pos2, to: egui::Pos2) {
     h.run_steps(3);
 }
 
+/// A drag in 1 px steps: the drag starts right at `from`, over the handle.
+fn drag_slow(h: &mut Ed, from: egui::Pos2, dx: f32) {
+    mouse_move(h, from);
+    h.run_steps(2);
+    mouse_button(h, from, true);
+    h.run_steps(2);
+    for i in 1..=dx as i32 {
+        mouse_move(h, from + egui::vec2(i as f32, 0.0));
+        h.run_steps(1);
+    }
+    mouse_button(h, from + egui::vec2(dx, 0.0), false);
+    h.run_steps(3);
+}
+
 fn row_center(h: &Ed, label: &str) -> egui::Pos2 {
     h.get_by_label(label).rect().center()
 }
@@ -448,4 +462,337 @@ fn edit_mode_operations_undo_and_redo() {
         "back to the plain cube"
     );
     h.run_steps(5);
+}
+
+// Fixed geometry of the default Layout workspace at `SIZE` (dock tabs are
+// painted, not exposed to accessibility).
+/// Middle of the scene view's area.
+const SCENE_VIEW: egui::Pos2 = egui::pos2(761.0, 640.0);
+/// The right end of the Scene/Game tab bar: it used to hold a "close all" ×
+/// (now the "+" is there).
+const GROUP_CLOSE: egui::Pos2 = egui::pos2(1232.0, 59.0);
+/// The × inside the Game tab.
+const GAME_TAB_CLOSE: egui::Pos2 = egui::pos2(457.6, 60.0);
+const GAME_TAB: egui::Pos2 = egui::pos2(410.0, 60.0);
+/// The first tile of the Assets panel.
+const FIRST_TILE: egui::Pos2 = egui::pos2(327.0, 1293.0);
+
+fn click_at(h: &mut Ed, at: egui::Pos2) {
+    mouse_move(h, at);
+    h.run_steps(2);
+    mouse_button(h, at, true);
+    h.run_steps(2);
+    mouse_button(h, at, false);
+    h.run_steps(3);
+}
+
+fn set_modifiers(h: &Ed, modifiers: egui::Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+}
+
+#[test]
+fn alt_drag_orbits_even_over_a_gizmo_handle() {
+    let p = project("alt-orbit");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(3));
+    h.run_steps(5);
+    // Find a spot on the Move gizmo: a plain drag there moves the object.
+    let mut spot = None;
+    'scan: for dy in (-150..=150).step_by(10) {
+        for dx in (-150..=150).step_by(10) {
+            let at = SCENE_VIEW + egui::vec2(dx as f32, dy as f32);
+            drag_slow(&mut h, at, 40.0);
+            let moved = state(&mut h).scene.get(3).unwrap().position != Vec3::Y;
+            state(&mut h).scene.get_mut(3).unwrap().position = Vec3::Y;
+            h.run_steps(3);
+            if moved {
+                spot = Some(at);
+                break 'scan;
+            }
+        }
+    }
+    let at = spot.expect("a gizmo handle near the middle of the scene view");
+    set_modifiers(&h, egui::Modifiers::ALT);
+    h.run_steps(2);
+    drag_slow(&mut h, at, 40.0);
+    set_modifiers(&h, egui::Modifiers::NONE);
+    h.run_steps(3);
+    assert_eq!(
+        state(&mut h).scene.get(3).unwrap().position,
+        Vec3::Y,
+        "Alt+LMB orbits, it must not drag the handle"
+    );
+}
+
+#[test]
+fn frame_with_nothing_selected_does_not_jump_on_the_next_selection() {
+    let p = project("frame-none");
+    let mut h = editor(&p);
+    state(&mut h).select(None);
+    h.run_steps(3);
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(2);
+    h.key_press(egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        !state(&mut h).frame_selection,
+        "F with no selection is dropped, not remembered"
+    );
+}
+
+/// Opens File > Save As….
+fn open_save_as(h: &mut Ed) {
+    h.get_by_label("FILE").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Save As").click();
+    h.run_steps(3);
+}
+
+/// Types `path` into the open Save As dialog and presses Save.
+fn save_as_dialog(h: &mut Ed, path: &str) {
+    let current = h
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.accesskit_node().value())
+        .find(|v| v.ends_with(".scene.ron"))
+        .expect("the path field");
+    field(h, &current).focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    field(h, &current).type_text(path);
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+}
+
+#[test]
+fn save_as_asks_before_replacing_a_scene() {
+    let p = project("save-as");
+    let mut h = editor(&p);
+    let other = p.join("assets/scenes/other.scene.ron");
+    let mut scene = SceneFile::default();
+    scene.entities.push(cube(7, "Other", Vec3::ZERO));
+    scene.save(&other).unwrap();
+    let before = fs::read_to_string(&other).unwrap();
+
+    open_save_as(&mut h);
+    save_as_dialog(&mut h, "scenes/other.scene.ron");
+    assert!(h.query_by_label("Replace Scene?").is_some());
+    assert_eq!(fs::read_to_string(&other).unwrap(), before, "not yet");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(fs::read_to_string(&other).unwrap(), before);
+    assert!(h.query_by_label("Replace Scene?").is_none());
+    assert!(
+        h.query_by_label("Save Scene As").is_some(),
+        "back to the path"
+    );
+
+    // A new name needs no question.
+    save_as_dialog(&mut h, "scenes/fresh.scene.ron");
+    assert!(p.join("assets/scenes/fresh.scene.ron").exists());
+    assert!(h.query_by_label("Replace Scene?").is_none());
+
+    // Confirmed: replaced.
+    open_save_as(&mut h);
+    save_as_dialog(&mut h, "scenes/other.scene.ron");
+    h.get_by_label("Replace").click();
+    h.run_steps(3);
+    assert_ne!(fs::read_to_string(&other).unwrap(), before);
+    assert!(h.query_by_label("Replace Scene?").is_none());
+}
+
+#[test]
+fn delete_and_duplicate_belong_to_the_game_view_while_playing() {
+    let p = project("play-keys");
+    let mut h = editor(&p);
+    click_at(&mut h, GAME_TAB);
+    state(&mut h).select(Some(3));
+    state(&mut h).start_play();
+    h.run_steps(5);
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(3);
+    h.key_press(egui::Key::Delete);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 3, "{:?}", names(&mut h));
+    // Back in the editor the same keys work again.
+    state(&mut h).stop_play();
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(3);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 2);
+}
+
+/// Is a widget's top-left corner at `at` (a dock tab's, say)?
+fn node_at(h: &Ed, at: egui::Pos2) -> bool {
+    h.root()
+        .children_recursive()
+        .any(|n| n.accesskit_node().bounding_box().is_some() && (n.rect().min - at).length() < 2.0)
+}
+
+#[test]
+fn closing_a_tab_does_not_take_its_group_along() {
+    let p = project("tab-close");
+    let mut h = editor(&p);
+    let (scene_tab, game_tab) = (egui::pos2(279.0, 45.0), egui::pos2(376.6, 45.0));
+    assert!(node_at(&h, scene_tab) && node_at(&h, game_tab));
+    click_at(&mut h, GROUP_CLOSE);
+    assert!(
+        node_at(&h, scene_tab) && node_at(&h, game_tab),
+        "no group ×"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    // Each tab closes through its own × (shown on the front tab).
+    click_at(&mut h, GAME_TAB);
+    click_at(&mut h, GAME_TAB_CLOSE);
+    assert!(!node_at(&h, game_tab), "its own × closes it");
+    assert!(node_at(&h, scene_tab), "the neighbour stays");
+}
+
+const ROBOT: &str = include_str!("../../vertical_slice/assets/models/robot.gltf");
+
+/// The tile `n` of the Assets panel's first row.
+fn tile_at(n: usize) -> egui::Pos2 {
+    FIRST_TILE + egui::vec2(92.0 * n as f32, 0.0)
+}
+
+/// `project` plus assets: folder `a_dest` (tile 0), `scenes` (1), then the
+/// files `b.mat.ron` (2), `robot.gltf` (3) and `z.scene.ron` (4).
+fn assets_project(name: &str) -> PathBuf {
+    let p = project(name);
+    let assets = p.join("assets");
+    fs::create_dir_all(assets.join("a_dest")).unwrap();
+    olvin_editor::olvin_scene::material::MaterialDesc::default()
+        .save(assets.join("b.mat.ron"))
+        .unwrap();
+    fs::write(assets.join("robot.gltf"), ROBOT).unwrap();
+    let mut other = SceneFile::default();
+    other.entities.push(cube(7, "Other", Vec3::ZERO));
+    other.save(assets.join("z.scene.ron")).unwrap();
+    p
+}
+
+#[test]
+fn assets_drag_into_a_folder_rename_and_delete() {
+    let p = assets_project("assets-files");
+    let assets = p.join("assets");
+    let mut h = editor(&p);
+    // Drag b.mat.ron onto the folder: moved with its .meta.
+    drag(&mut h, tile_at(2), tile_at(0));
+    assert!(assets.join("a_dest/b.mat.ron").exists());
+    assert!(assets.join("a_dest/b.mat.ron.meta").exists());
+    assert!(!assets.join("b.mat.ron").exists());
+    // The rest shifts left: robot.gltf is tile 2 now. F2 renames it.
+    click_at(&mut h, tile_at(2));
+    h.key_press(egui::Key::F2);
+    h.run_steps(3);
+    field(&h, "robot.gltf").focus();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    field(&h, "robot.gltf").type_text("bot.gltf");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(5);
+    assert!(assets.join("bot.gltf").exists());
+    assert!(!assets.join("robot.gltf").exists());
+    // Delete asks first and leaves scene objects alone.
+    state(&mut h).select(Some(3));
+    click_at(&mut h, tile_at(2));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(h.query_by_label("Delete Asset?").is_some());
+    assert!(assets.join("bot.gltf").exists(), "not before the answer");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(assets.join("bot.gltf").exists());
+    h.hover_at(tile_at(2));
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(!assets.join("bot.gltf").exists());
+    assert!(!assets.join("bot.gltf.meta").exists(), "the .meta goes too");
+    assert_eq!(
+        names(&mut h).len(),
+        3,
+        "Del over Assets is not Delete Object"
+    );
+}
+
+#[test]
+fn assets_drop_on_scene_view_and_hierarchy_and_open_by_double_click() {
+    let p = assets_project("assets-drop");
+    let mut h = editor(&p);
+    // A material onto an object in the scene view.
+    drag(&mut h, tile_at(2), SCENE_VIEW);
+    let assigned = |h: &mut Ed| {
+        state(h)
+            .scene
+            .entities
+            .iter()
+            .any(|e| e.material.as_deref() == Some("b.mat.ron"))
+    };
+    assert!(assigned(&mut h), "dropped on the middle of the scene");
+    // A model onto the scene view adds objects.
+    let before = names(&mut h).len();
+    drag(&mut h, tile_at(3), SCENE_VIEW + egui::vec2(300.0, 200.0));
+    assert!(names(&mut h).len() > before, "model spawned");
+    // A model onto a hierarchy row becomes its child.
+    let before = names(&mut h).len();
+    let cube_row = row_center(&h, "◼ Cube");
+    drag(&mut h, tile_at(3), cube_row);
+    assert!(names(&mut h).len() > before);
+    assert!(
+        state(&mut h)
+            .scene
+            .entities
+            .iter()
+            .any(|e| e.parent == Some(3)),
+        "child of Cube"
+    );
+    // Double-click opens a scene.
+    click_at(&mut h, tile_at(4));
+    mouse_button(&h, tile_at(4), true);
+    h.run_steps(1);
+    mouse_button(&h, tile_at(4), false);
+    h.run_steps(3);
+    if h.query_by_label("Unsaved Changes").is_some() {
+        h.get_by_label("Don't Save").click();
+        h.run_steps(3);
+    }
+    assert_eq!(names(&mut h), vec!["Other"]);
+}
+
+#[test]
+fn material_edits_from_the_inspector_are_undoable() {
+    use olvin_editor::olvin_scene::material::MaterialDesc;
+    let p = project("mat-undo");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(3));
+    h.run_steps(5);
+    h.get_by_label("New").click();
+    h.run_steps(3);
+    let rel = state(&mut h)
+        .scene
+        .get(3)
+        .unwrap()
+        .material
+        .clone()
+        .expect("a material was created and assigned");
+    let metallic = |p: &Path| {
+        MaterialDesc::load(p.join("assets").join(&rel))
+            .unwrap()
+            .metallic
+    };
+    assert_eq!(metallic(&p), 0.0);
+    h.get_by_label("Metal").click();
+    h.run_steps(3);
+    assert_eq!(metallic(&p), 1.0, "edits are written as they are made");
+    undo(&mut h);
+    assert_eq!(metallic(&p), 0.0, "undo rewrites the material file");
+    redo(&mut h);
+    assert_eq!(metallic(&p), 1.0);
 }

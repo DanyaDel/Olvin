@@ -193,14 +193,17 @@ impl Viewport {
             self.zoom(-scroll * 0.0015 * self.prefs.zoom_speed);
         }
 
-        if state.frame_selection
-            && let Some(sel) = state.selection
-            && let Some(m) = worlds.get(&sel)
-        {
-            let (scale, _, translation) = m.to_scale_rotation_translation();
-            self.orbit.target = translation;
-            self.orbit.distance = (scale.max_element() * 2.5).clamp(2.0, 800.0);
+        if state.frame_selection {
+            // The request is consumed even with nothing to frame, so it does
+            // not fire on the next selection.
             state.frame_selection = false;
+            if let Some(sel) = state.selection
+                && let Some(m) = worlds.get(&sel)
+            {
+                let (scale, _, translation) = m.to_scale_rotation_translation();
+                self.orbit.target = translation;
+                self.orbit.distance = (scale.max_element() * 2.5).clamp(2.0, 800.0);
+            }
         }
     }
 

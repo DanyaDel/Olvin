@@ -17,6 +17,7 @@ use olvin_scene::file::{EntityDesc, Shape};
 use olvin_scene::primitives::Primitive;
 
 use crate::ext::{Geometry, Snap, ViewportCtx};
+use crate::panels::assets::{AssetDrag, DropTarget, drop_asset, dropped};
 use crate::render::{Frame, Uniforms};
 use crate::state::tools;
 use crate::{EditorState, Panel, theme};
@@ -190,6 +191,7 @@ impl Panel for Viewport {
         if !consumed
             && !gizmo_hot
             && response.clicked_by(PointerButton::Primary)
+            && !ui.input(|i| i.modifiers.alt)
             && let Some(pointer) = response.interact_pointer_pos()
         {
             let hit = self.pick(pointer, &camera, state, &worlds);
@@ -197,6 +199,30 @@ impl Panel for Viewport {
                 (Some(id), true) => state.toggle_selected(id),
                 (hit, _) => state.select(hit),
             }
+        }
+
+        // An asset dragged out of the Assets panel and released here.
+        if response.dnd_hover_payload::<AssetDrag>().is_some() {
+            painter.rect_stroke(
+                rect.shrink(2.0),
+                0.0,
+                (2.0, theme::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(asset) = dropped(&response)
+            && let Some(pointer) = ui.ctx().pointer_latest_pos()
+        {
+            let ray = camera.ray(pointer);
+            // Models land on the ground plane (the view's target when the
+            // ray points at the sky).
+            let at = ray
+                .plane(Vec3::ZERO, Vec3::Y)
+                .filter(|t| *t > 0.0)
+                .map(|t| ray.at(t))
+                .unwrap_or(self.orbit.target);
+            let pick = self.pick(pointer, &camera, state, &worlds);
+            drop_asset(state, &asset.0, DropTarget::Viewport { pick, at: Some(at) });
         }
 
         // The engine draws meshes (the edited scene, or the game while playing).

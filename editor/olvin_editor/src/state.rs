@@ -11,6 +11,7 @@ use olvin_scene::file::{
 
 use crate::engine::{PlaySession, ScenePreview};
 use crate::ext::Extensions;
+use crate::materials::MaterialEdits;
 
 const UNDO_LIMIT: usize = 200;
 
@@ -131,6 +132,9 @@ pub struct EditorState {
     pub scene_generation: u64,
     /// Viewports frame the selection when set; the first viewport to see it clears it.
     pub frame_selection: bool,
+    /// The pointer was over a panel that owns Delete and Ctrl+D (the Game view
+    /// while playing, Assets); set by the panel, read by next frame's shortcuts.
+    pub panel_owns_edit_keys: bool,
     pub(crate) open_request: Option<PathBuf>,
     /// Active viewport tool, see [`tools`].
     pub tool: String,
@@ -166,9 +170,11 @@ pub struct EditorState {
     /// The running game in Play Mode.
     pub play: Option<PlaySession>,
     committed: SceneFile,
+    /// The edited materials (already on disk) at the last undo step.
+    committed_materials: MaterialEdits,
     saved: SceneFile,
-    undo: Vec<SceneFile>,
-    redo: Vec<SceneFile>,
+    undo: Vec<(SceneFile, MaterialEdits)>,
+    redo: Vec<(SceneFile, MaterialEdits)>,
     started: Instant,
 }
 
@@ -185,6 +191,7 @@ impl EditorState {
             log: Vec::new(),
             scene_generation: 0,
             frame_selection: false,
+            panel_owns_edit_keys: false,
             open_request: None,
             tool: tools::MOVE.to_owned(),
             local_space: false,
@@ -202,6 +209,7 @@ impl EditorState {
             engine_scene: ScenePreview::default(),
             play: None,
             committed: SceneFile::default(),
+            committed_materials: MaterialEdits::new(),
             saved: SceneFile::default(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -326,6 +334,7 @@ impl EditorState {
             SceneFile::default()
         };
         self.committed = scene.clone();
+        self.committed_materials = self.materials.edits().clone();
         self.scene = scene;
         self.scene_path = path;
         // A running game belongs to the scene that was replaced.
@@ -347,6 +356,31 @@ impl EditorState {
         self.committed.apply_action(&action, frame);
         if clean {
             self.saved.apply_action(&action, frame);
+        }
+    }
+
+    /// Applies `f` to the open scene, its saved and committed copies and the
+    /// whole history (an asset moved: every copy must name the new path).
+    pub(crate) fn map_scenes(&mut self, f: impl Fn(&mut SceneFile)) {
+        let all = [&mut self.scene, &mut self.committed, &mut self.saved]
+            .into_iter()
+            .chain(
+                self.undo
+                    .iter_mut()
+                    .chain(self.redo.iter_mut())
+                    .map(|(s, _)| s),
+            );
+        all.for_each(f);
+    }
+
+    /// Drops the material edits under `prefix` (an asset moved or deleted)
+    /// from the library and from every undo step.
+    pub(crate) fn forget_materials(&mut self, prefix: &str) {
+        let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
+        self.materials.forget(&under);
+        self.committed_materials.retain(|k, _| !under(k));
+        for (_, m) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            m.retain(|k, _| !under(k));
         }
     }
 
@@ -443,9 +477,12 @@ impl EditorState {
     }
 
     fn commit(&mut self) {
-        if self.scene != self.committed {
-            self.undo
-                .push(std::mem::replace(&mut self.committed, self.scene.clone()));
+        if self.scene != self.committed || self.materials.edits() != &self.committed_materials {
+            let materials = self.materials.edits().clone();
+            self.undo.push((
+                std::mem::replace(&mut self.committed, self.scene.clone()),
+                std::mem::replace(&mut self.committed_materials, materials),
+            ));
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
             }
@@ -455,7 +492,10 @@ impl EditorState {
 
     /// History is frozen while playing: everything done then is discarded by Stop.
     pub fn can_undo(&self) -> bool {
-        self.play.is_none() && (!self.undo.is_empty() || self.scene != self.committed)
+        self.play.is_none()
+            && (!self.undo.is_empty()
+                || self.scene != self.committed
+                || self.materials.edits() != &self.committed_materials)
     }
 
     pub fn can_redo(&self) -> bool {
@@ -467,8 +507,11 @@ impl EditorState {
             return;
         }
         self.commit();
-        if let Some(prev) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.committed, prev));
+        if let Some((scene, materials)) = self.undo.pop() {
+            self.redo.push((
+                std::mem::replace(&mut self.committed, scene),
+                std::mem::replace(&mut self.committed_materials, materials),
+            ));
             self.scene = self.committed.clone();
             self.after_history_jump();
         }
@@ -478,14 +521,21 @@ impl EditorState {
         if self.play.is_some() {
             return;
         }
-        if let Some(next) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.committed, next));
+        if let Some((scene, materials)) = self.redo.pop() {
+            self.undo.push((
+                std::mem::replace(&mut self.committed, scene),
+                std::mem::replace(&mut self.committed_materials, materials),
+            ));
             self.scene = self.committed.clone();
             self.after_history_jump();
         }
     }
 
     fn after_history_jump(&mut self) {
+        // Material files follow the step: they are rewritten to its content.
+        if let Err(err) = self.materials.restore(&self.committed_materials) {
+            self.error(format!("material undo: {err}"));
+        }
         if self
             .selection
             .is_some_and(|id| self.scene.get(id).is_none())
@@ -824,6 +874,43 @@ mod tests {
         s.redo();
         s.redo();
         assert_eq!(s.scene.get(id).unwrap().position.x, 9.0);
+    }
+
+    #[test]
+    fn material_edits_join_the_undo_history() {
+        let root = std::env::temp_dir().join(format!("olvin-mat-undo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let mut s = EditorState::new(Some(root.clone()));
+        s.materials.refresh(Some(&root.join("assets")));
+        let rel = s.materials.create("m", Default::default()).unwrap();
+        let metallic = |s: &EditorState| {
+            olvin_scene::material::MaterialDesc::load(root.join("assets").join(&rel))
+                .unwrap()
+                .metallic
+        };
+        s.end_frame(false);
+        for value in [0.5, 1.0] {
+            s.materials.get(&rel).unwrap().metallic = value;
+            s.materials.save(&rel).unwrap();
+            s.end_frame(false);
+        }
+        assert_eq!(metallic(&s), 1.0);
+        s.undo();
+        assert_eq!(metallic(&s), 0.5, "the file follows undo");
+        s.undo();
+        assert_eq!(
+            metallic(&s),
+            0.0,
+            "back to the content before the first edit"
+        );
+        s.end_frame(false);
+        assert!(!s.can_undo() || s.undo.len() <= 1, "no phantom steps");
+        s.redo();
+        s.redo();
+        assert_eq!(metallic(&s), 1.0);
+        assert_eq!(s.materials.get(&rel).unwrap().metallic, 1.0);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

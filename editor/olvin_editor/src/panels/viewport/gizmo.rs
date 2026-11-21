@@ -75,8 +75,12 @@ impl Viewport {
             std::array::from_fn(|i| camera.project(origin + axes[i] * len));
         let to_eye = (camera.eye - origin).normalize();
 
+        // Alt+LMB orbits (navigation), so Alt hides the handles instead of
+        // letting them grab the drag.
+        let alt = ui.input(|i| i.modifiers.alt);
         let hovered = match &self.drag {
             Some(d) => Some(d.handle),
+            None if alt => None,
             None => response
                 .hover_pos()
                 .and_then(|p| hit_handle(tool, p, camera, origin, axes, len, o, &tips)),

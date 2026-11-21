@@ -1,7 +1,7 @@
 //! Material assets in the editor: finding `*.mat.ron`, textures and shaders
 //! under `assets/`, and the material editor shown in the inspector.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -13,6 +13,10 @@ use crate::panels::inspector::{grid, row};
 const RESCAN: Duration = Duration::from_secs(2);
 const IMAGE_EXT: [&str; 8] = ["png", "jpg", "jpeg", "tga", "bmp", "webp", "hdr", "exr"];
 
+/// Content of the materials edited in the editor, by path: what an undo step
+/// remembers (the files on disk always hold the current content).
+pub type MaterialEdits = BTreeMap<String, MaterialDesc>;
+
 /// What the project's `assets/` offers, rescanned every few seconds, plus the
 /// loaded material files (reloaded when changed on disk).
 #[derive(Default)]
@@ -23,6 +27,10 @@ pub struct MaterialLibrary {
     pub textures: Vec<String>,
     pub shaders: Vec<String>,
     loaded: HashMap<String, (MaterialDesc, Option<SystemTime>)>,
+    /// Current content of every material saved by the editor this session.
+    edits: MaterialEdits,
+    /// Content of those materials before their first edit (undo past it).
+    originals: MaterialEdits,
 }
 
 impl MaterialLibrary {
@@ -62,6 +70,9 @@ impl MaterialLibrary {
         let stale = self.loaded.get(rel).is_none_or(|(_, t)| *t != mtime);
         if stale {
             let desc = MaterialDesc::load(&path).ok()?;
+            if !self.edits.contains_key(rel) {
+                self.originals.insert(rel.to_owned(), desc.clone());
+            }
             self.loaded.insert(rel.to_owned(), (desc, mtime));
         }
         self.loaded.get_mut(rel).map(|(d, _)| d)
@@ -74,7 +85,55 @@ impl MaterialLibrary {
         let (desc, mtime) = self.loaded.get_mut(rel).ok_or("not loaded")?;
         desc.save(&path)?;
         *mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        self.edits.insert(rel.to_owned(), desc.clone());
         Ok(())
+    }
+
+    /// Forgets cached content and edits of the materials `gone` matches.
+    pub fn forget(&mut self, gone: &dyn Fn(&String) -> bool) {
+        self.loaded.retain(|k, _| !gone(k));
+        self.edits.retain(|k, _| !gone(k));
+        self.originals.retain(|k, _| !gone(k));
+        self.scanned = None;
+    }
+
+    /// The edited materials, for the undo history.
+    pub fn edits(&self) -> &MaterialEdits {
+        &self.edits
+    }
+
+    /// Rewrites the materials that differ from `target` (an undo step's
+    /// edits); one that was not edited yet goes back to its original content.
+    pub fn restore(&mut self, target: &MaterialEdits) -> Result<(), String> {
+        let root = self.root.clone().ok_or("no project")?;
+        let keys: Vec<String> = self.edits.keys().chain(target.keys()).cloned().collect();
+        let mut result = Ok(());
+        for rel in keys {
+            let Some(want) = target.get(&rel).or_else(|| self.originals.get(&rel)) else {
+                continue;
+            };
+            let current = self.edits.get(&rel).or_else(|| self.originals.get(&rel));
+            if current != Some(want) {
+                let path = root.join(&rel);
+                match want.save(&path) {
+                    Ok(()) => {
+                        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                        self.loaded.insert(rel.clone(), (want.clone(), mtime));
+                    }
+                    Err(e) => {
+                        result = Err(e);
+                        continue;
+                    }
+                }
+            }
+            // The edit set mirrors the step: an unedited material is not in it.
+            if target.contains_key(&rel) {
+                self.edits.insert(rel, want.clone());
+            } else {
+                self.edits.remove(&rel);
+            }
+        }
+        result
     }
 
     /// Creates `materials/<name>.mat.ron` (unique name) and returns its path.

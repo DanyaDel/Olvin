@@ -45,6 +45,8 @@ pub struct EditorApp {
     state: EditorState,
     renaming: Option<(usize, String)>,
     save_as: Option<String>,
+    /// Save As target that already exists, waiting for "Replace".
+    overwrite: Option<PathBuf>,
     confirm: Option<Confirm>,
     allow_close: bool,
     title: String,
@@ -75,6 +77,7 @@ impl EditorApp {
             state,
             renaming: None,
             save_as: None,
+            overwrite: None,
             confirm: None,
             allow_close: false,
             title: String::new(),
@@ -107,6 +110,7 @@ impl EditorApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
+        let panel_keys = std::mem::take(&mut self.state.panel_owns_edit_keys);
         let shortcut = |m, k| KeyboardShortcut::new(m, k);
         let (save, new) = ctx.input_mut(|i| {
             (
@@ -139,7 +143,7 @@ impl EditorApp {
         if undo {
             self.state.undo();
         }
-        if self.state.tool_owns_keys {
+        if self.state.tool_owns_keys || panel_keys {
             return;
         }
         if duplicate {
@@ -536,7 +540,36 @@ impl EditorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(path) = &mut self.save_as {
+        if let Some(target) = self.overwrite.clone() {
+            let mut choice = None;
+            egui::Modal::new(Id::new("overwrite")).show(ctx, |ui| {
+                ui.heading("Replace Scene?");
+                let name = target.file_name().map_or_else(
+                    || target.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                ui.label(format!("{name} already exists. Replace it?"));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Replace").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(false);
+                    }
+                });
+            });
+            match choice {
+                Some(true) => {
+                    self.overwrite = None;
+                    if self.state.save_as(&target) {
+                        self.save_as = None;
+                    }
+                }
+                Some(false) => self.overwrite = None,
+                None => {}
+            }
+        } else if let Some(path) = &mut self.save_as {
             let mut close = false;
             let mut target = None;
             egui::Modal::new(Id::new("save-as")).show(ctx, |ui| {
@@ -563,7 +596,13 @@ impl EditorApp {
                 if !path.to_string_lossy().ends_with(".scene.ron") {
                     path.set_extension("scene.ron");
                 }
-                close = self.state.save_as(&path);
+                // Saving over the open scene is a plain Save; anything else
+                // that exists must be confirmed.
+                if path.exists() && self.state.scene_path.as_deref() != Some(path.as_path()) {
+                    self.overwrite = Some(path);
+                } else {
+                    close = self.state.save_as(&path);
+                }
             }
             if close {
                 self.save_as = None;
@@ -850,6 +889,9 @@ impl EditorApp {
                     .show_add_buttons(true)
                     .show_add_popup(true)
                     .show_leaf_collapse_buttons(false)
+                    // Only a tab's own × closes it; the group-wide × took every tab
+                    // with it (Unity and Blender have no such button).
+                    .show_leaf_close_all_buttons(false)
                     .show_inside(ui, &mut viewer);
                 added = viewer.added;
             });

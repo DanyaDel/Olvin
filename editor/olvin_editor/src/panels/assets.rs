@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Align, Layout, RichText, Sense, TextEdit};
+use glam::Vec3;
 
 use crate::{EditorState, Panel, theme};
 
@@ -14,6 +15,30 @@ struct Entry {
     is_dir: bool,
 }
 
+/// Drag and drop payload: an asset (absolute path) dragged out of the panel.
+/// The Scene view and the Hierarchy accept it.
+pub(crate) struct AssetDrag(pub PathBuf);
+
+/// The asset released over `response` this frame. egui's own
+/// `dnd_release_payload` takes whatever payload there is and throws it away
+/// when the type differs, so a Hierarchy row checking for an object drag
+/// would eat an asset drag: this one only looks.
+pub(crate) fn dropped(response: &egui::Response) -> Option<std::sync::Arc<AssetDrag>> {
+    if response.contains_pointer() && response.ctx.input(|i| i.pointer.any_released()) {
+        egui::DragAndDrop::payload::<AssetDrag>(&response.ctx)
+    } else {
+        None
+    }
+}
+
+/// Where an asset was dropped.
+pub(crate) enum DropTarget {
+    /// On the Scene view: the object under the pointer and the ground point.
+    Viewport { pick: Option<u64>, at: Option<Vec3> },
+    /// On a Hierarchy row (or the empty area: no parent).
+    Hierarchy(Option<u64>),
+}
+
 #[derive(Default)]
 pub struct Assets {
     /// Relative to the project's `assets/`.
@@ -23,6 +48,10 @@ pub struct Assets {
     selected: Option<PathBuf>,
     filter: String,
     creating: Option<(bool, String)>,
+    /// A tile being renamed (F2 / context menu) and its edit buffer.
+    renaming: Option<(PathBuf, String)>,
+    /// Waiting for the user to confirm a delete.
+    deleting: Option<PathBuf>,
     /// Image previews: decoded by olvin_assets, uploaded to egui once.
     thumbs: olvin_assets::ThumbnailCache,
     textures: std::collections::HashMap<
@@ -50,11 +79,16 @@ impl Panel for Assets {
             self.rescan(&dir);
         }
 
-        self.toolbar(ui, state, &dir);
+        let hovered = ui.ui_contains_pointer();
+        // Delete and Ctrl+D act on files here, not on scene objects.
+        state.panel_owns_edit_keys |= hovered;
+        let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+        self.toolbar(ui, state, &dir, &root, &mut moves);
         ui.separator();
 
         let filter = self.filter.trim().to_lowercase();
         let mut open = None;
+        let mut rename_to = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -67,14 +101,42 @@ impl Panel for Assets {
                         .iter()
                         .filter(|e| filter.is_empty() || e.name.to_lowercase().contains(&filter))
                     {
+                        if let Some((path, name)) = &mut self.renaming
+                            && *path == entry.path
+                        {
+                            if let Some(new) = rename_field(ui, name) {
+                                rename_to = Some((entry.path.clone(), new));
+                            }
+                            continue;
+                        }
                         let selected = self.selected.as_ref() == Some(&entry.path);
                         let thumb = self.thumbnail(ui.ctx(), &entry.path);
                         let response = tile(ui, entry, selected, thumb.as_ref());
-                        if response.clicked() {
+                        if response.clicked() || response.drag_started() {
                             self.selected = Some(entry.path.clone());
                         }
                         if response.double_clicked() {
                             open = Some((entry.path.clone(), entry.is_dir));
+                        }
+                        if response.dragged() {
+                            response.dnd_set_drag_payload(AssetDrag(entry.path.clone()));
+                            drag_label(ui, &entry.name);
+                        }
+                        if entry.is_dir {
+                            if let Some(d) = dropped(&response) {
+                                moves.push((d.0.clone(), entry.path.join(file_name(&d.0))));
+                            }
+                            if response
+                                .dnd_hover_payload::<AssetDrag>()
+                                .is_some_and(|d| d.0 != entry.path)
+                            {
+                                ui.painter().rect_stroke(
+                                    response.rect,
+                                    4.0,
+                                    (1.5, theme::ACCENT),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
                         }
                         response.context_menu(|ui| {
                             if is_scene(&entry.path) && ui.button("Open scene").clicked() {
@@ -86,6 +148,15 @@ impl Panel for Assets {
                             if is_image(&entry.path) && ui.button("Create material").clicked() {
                                 material_from_texture(state, &root, &entry.path);
                             }
+                            if ui.button("Rename  F2").clicked() {
+                                self.renaming = Some((entry.path.clone(), entry.name.clone()));
+                                ui.close();
+                            }
+                            if ui.button("Delete  Del").clicked() {
+                                self.deleting = Some(entry.path.clone());
+                                ui.close();
+                            }
+                            ui.separator();
                             if ui.button("Show in file manager").clicked() {
                                 reveal(entry.path.parent().unwrap_or(&entry.path));
                             }
@@ -97,8 +168,51 @@ impl Panel for Assets {
                     ui.available_size().max(egui::vec2(0.0, 30.0)),
                     Sense::click(),
                 );
+                if rest.clicked() {
+                    self.selected = None;
+                }
+                // Dropping on the empty area moves into the folder being shown.
+                if let Some(d) = dropped(&rest) {
+                    moves.push((d.0.clone(), dir.join(file_name(&d.0))));
+                }
                 rest.context_menu(|ui| create_menu(ui, &mut self.creating));
             });
+
+        if hovered && self.renaming.is_none() && !ui.ctx().egui_wants_keyboard_input() {
+            if let Some(sel) = self.selected.clone() {
+                if ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                    self.renaming = Some((sel.clone(), file_name(&sel)));
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                    self.deleting = Some(sel);
+                }
+            }
+        }
+        if let Some((from, name)) = rename_to {
+            self.renaming = None;
+            let name = name.trim().to_owned();
+            if name.is_empty() || name == file_name(&from) {
+            } else if !valid_name(&name) {
+                state.error(format!("\"{name}\" is not a valid name"));
+            } else {
+                moves.push((from.clone(), from.with_file_name(name)));
+            }
+        }
+        for (from, to) in moves {
+            if from == to {
+                continue;
+            }
+            match move_asset(state, &root, &from, &to) {
+                Ok(()) => {
+                    if self.selected.as_ref() == Some(&from) {
+                        self.selected = Some(to);
+                    }
+                }
+                Err(e) => state.error(format!("move: {e}")),
+            }
+            self.scanned = None;
+        }
+        self.confirm_delete(ui.ctx(), state, &root);
 
         if let Some((path, is_dir)) = open {
             if is_dir {
@@ -161,18 +275,73 @@ impl Assets {
         self.scanned = Some((dir.to_path_buf(), Instant::now()));
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui, state: &mut EditorState, dir: &Path) {
+    fn confirm_delete(&mut self, ctx: &egui::Context, state: &mut EditorState, root: &Path) {
+        let Some(path) = self.deleting.clone() else {
+            return;
+        };
+        let mut choice = None;
+        egui::Modal::new(egui::Id::new("assets-delete")).show(ctx, |ui| {
+            ui.heading("Delete Asset?");
+            ui.label(format!(
+                "Delete {} together with its .meta file? This cannot be undone.",
+                file_name(&path)
+            ));
+            if path.is_dir() {
+                ui.weak("Everything inside the folder goes too.");
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    choice = Some(true);
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    choice = Some(false);
+                }
+            });
+        });
+        if let Some(delete) = choice {
+            self.deleting = None;
+            if delete {
+                match delete_asset(state, root, &path) {
+                    Ok(()) => {
+                        self.selected = None;
+                        self.scanned = None;
+                    }
+                    Err(e) => state.error(format!("delete: {e}")),
+                }
+            }
+        }
+    }
+
+    fn toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut EditorState,
+        dir: &Path,
+        root: &Path,
+        moves: &mut Vec<(PathBuf, PathBuf)>,
+    ) {
         ui.horizontal(|ui| {
-            if ui
+            let up = ui
                 .add_enabled(!self.current.as_os_str().is_empty(), egui::Button::new("⬆"))
-                .on_hover_text("Up")
-                .clicked()
-            {
+                .on_hover_text("Up (drop a file here to move it up)");
+            if up.clicked() {
                 self.current.pop();
             }
-            // Breadcrumbs: assets / a / b
-            if ui.link("assets").clicked() {
+            if let (Some(d), Some(parent)) = (
+                dropped(&up),
+                dir.parent()
+                    .filter(|_| !self.current.as_os_str().is_empty()),
+            ) {
+                moves.push((d.0.clone(), parent.join(file_name(&d.0))));
+            }
+            // Breadcrumbs: assets / a / b; each one takes dropped files.
+            let home = ui.link("assets");
+            if home.clicked() {
                 self.current = PathBuf::new();
+            }
+            if let Some(d) = dropped(&home) {
+                moves.push((d.0.clone(), root.join(file_name(&d.0))));
             }
             let parts: Vec<std::ffi::OsString> = self
                 .current
@@ -181,8 +350,13 @@ impl Assets {
                 .collect();
             for (i, part) in parts.iter().enumerate() {
                 ui.weak("/");
-                if ui.link(part.to_string_lossy()).clicked() {
-                    self.current = parts[..=i].iter().collect();
+                let crumb = ui.link(part.to_string_lossy());
+                let target: PathBuf = parts[..=i].iter().collect();
+                if crumb.clicked() {
+                    self.current = target.clone();
+                }
+                if let Some(d) = dropped(&crumb) {
+                    moves.push((d.0.clone(), root.join(&target).join(file_name(&d.0))));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -274,7 +448,7 @@ fn tile(
     selected: bool,
     thumb: Option<&egui::TextureHandle>,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
+    let (rect, response) = ui.allocate_exact_size(TILE, Sense::click_and_drag());
     let visuals = ui.style().interact_selectable(&response, selected);
     if selected || response.hovered() {
         let fill = if selected {
@@ -397,4 +571,342 @@ fn reveal(path: &Path) {
         "xdg-open"
     };
     let _ = std::process::Command::new(opener).arg(path).spawn();
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The inline rename box of a tile; `Some(name)` when Enter or a click
+/// elsewhere ends the edit, `Some("")` when Escape cancels it.
+fn rename_field(ui: &mut egui::Ui, name: &mut String) -> Option<String> {
+    let edit = ui.add_sized(egui::vec2(TILE.x + 40.0, 22.0), TextEdit::singleline(name));
+    // Ask before focusing: request_focus() undoes "lost focus" in a frame.
+    let done = edit.lost_focus();
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        return Some(String::new());
+    }
+    if done {
+        return Some(name.clone());
+    }
+    edit.request_focus();
+    None
+}
+
+/// The dragged asset's name next to the pointer.
+fn drag_label(ui: &egui::Ui, name: &str) {
+    if let Some(p) = ui.ctx().pointer_interact_pos() {
+        ui.ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new("asset-drag"),
+            ))
+            .text(
+                p + egui::vec2(12.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                egui::FontId::proportional(13.0),
+                theme::SELECTED,
+            );
+    }
+}
+
+/// Renames or moves a file or folder (its `.meta` and GUID go with it) and
+/// rewrites every reference to it: scenes and materials on disk, and the open
+/// scene with its history.
+fn move_asset(state: &mut EditorState, root: &Path, from: &Path, to: &Path) -> Result<(), String> {
+    let mut assets = olvin_assets::AssetRoot::new(root);
+    let (Some(from_rel), Some(to_rel)) = (assets.relative(from), assets.relative(to)) else {
+        return Err("outside assets/".into());
+    };
+    if to_rel == from_rel || to_rel.starts_with(&format!("{from_rel}/")) {
+        return Err("cannot move a folder into itself".into());
+    }
+    assets.move_asset(&from_rel, &to_rel)?;
+    if let Some(open) = state.scene_path.clone()
+        && let Ok(rest) = open.strip_prefix(from)
+    {
+        state.scene_path = Some(to.join(rest));
+    }
+    rewrite_references(root, &from_rel, &to_rel);
+    state.map_scenes(|scene| {
+        if let Ok(text) = ron::to_string(scene)
+            && let Some(new) = replace_path(&text, &from_rel, &to_rel)
+            && let Ok(fixed) = ron::from_str(&new)
+        {
+            *scene = fixed;
+        }
+    });
+    state.forget_materials(&from_rel);
+    state.info(format!("moved {from_rel} to {to_rel}"));
+    Ok(())
+}
+
+fn delete_asset(state: &mut EditorState, root: &Path, path: &Path) -> Result<(), String> {
+    let mut assets = olvin_assets::AssetRoot::new(root);
+    let rel = assets.relative(path).ok_or("outside assets/")?;
+    assets.delete_asset(&rel)?;
+    state.forget_materials(&rel);
+    state.info(format!("deleted {rel}"));
+    Ok(())
+}
+
+/// `text` with the quoted path `from` (or anything under it) renamed to `to`;
+/// `None` when it does not occur.
+fn replace_path(text: &str, from: &str, to: &str) -> Option<String> {
+    let new = text
+        .replace(&format!("\"{from}\""), &format!("\"{to}\""))
+        .replace(&format!("\"{from}/"), &format!("\"{to}/"));
+    (new != text).then_some(new)
+}
+
+/// Scene and material files name assets by path: follow a move.
+fn rewrite_references(root: &Path, from: &str, to: &str) {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if (is_scene(&path) || path.to_string_lossy().ends_with(".mat.ron"))
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && let Some(new) = replace_path(&text, from, to)
+            {
+                let _ = std::fs::write(&path, new);
+            }
+        }
+    }
+}
+
+/// An asset dropped on the Scene view or the Hierarchy: scenes open, models
+/// are imported (placed under the pointer or under a row), materials go to
+/// the object under the pointer or on the row.
+pub(crate) fn drop_asset(state: &mut EditorState, path: &Path, target: DropTarget) {
+    let Some(root) = state.assets_dir() else {
+        return;
+    };
+    if is_scene(path) {
+        state.request_open(path.to_path_buf());
+    } else if is_model(path) {
+        let before = state.scene.entities.len();
+        if let Err(e) = state.import_model(path) {
+            state.warn(format!("import: {e}"));
+            return;
+        }
+        let roots: Vec<u64> = state.scene.entities[before..]
+            .iter()
+            .filter(|e| e.parent.is_none())
+            .map(|e| e.id)
+            .collect();
+        for id in roots {
+            match &target {
+                DropTarget::Hierarchy(Some(parent)) => {
+                    state.reparent(id, Some(*parent));
+                }
+                DropTarget::Viewport { at: Some(at), .. } => {
+                    if let Some(e) = state.scene.get_mut(id) {
+                        e.position += *at;
+                    }
+                }
+                _ => {}
+            }
+        }
+    } else if path.to_string_lossy().ends_with(".mat.ron") {
+        let id = match target {
+            DropTarget::Viewport { pick, .. } => pick,
+            DropTarget::Hierarchy(id) => id,
+        };
+        let rel = olvin_assets::AssetRoot::new(&root).relative(path);
+        match (id.and_then(|i| state.scene.get_mut(i)), rel) {
+            (Some(e), Some(rel))
+                if e.mesh.is_some()
+                    || e.brush.is_some()
+                    || e.poly.is_some()
+                    || e.model.is_some() =>
+            {
+                e.material = Some(rel);
+                let id = e.id;
+                state.select(Some(id));
+            }
+            _ => state.warn("drop a material on an object with a mesh"),
+        }
+    } else {
+        state.warn(format!(
+            "{} cannot be dropped into the scene",
+            file_name(path)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NewEntity;
+    use olvin_scene::file::Shape;
+
+    const ROBOT: &str = include_str!("../../../../apps/vertical_slice/assets/models/robot.gltf");
+
+    /// A project with a material, a scene using it and a model.
+    fn project(name: &str) -> (PathBuf, EditorState, u64) {
+        let root = std::env::temp_dir().join(format!("olvin-assets-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let assets = root.join("assets");
+        std::fs::create_dir_all(assets.join("materials")).unwrap();
+        std::fs::create_dir_all(assets.join("models")).unwrap();
+        std::fs::write(assets.join("models/robot.gltf"), ROBOT).unwrap();
+        olvin_scene::material::MaterialDesc::default()
+            .save(assets.join("materials/red.mat.ron"))
+            .unwrap();
+        let mut state = EditorState::new(Some(root.clone()));
+        let id = state.create(NewEntity::Primitive(Shape::Cube), None);
+        state.scene.get_mut(id).unwrap().material = Some("materials/red.mat.ron".into());
+        state.scene_path = Some(assets.join("scenes/a.scene.ron"));
+        assert!(state.save());
+        state.end_frame(false);
+        (root, state, id)
+    }
+
+    #[test]
+    fn moving_a_material_keeps_its_guid_and_fixes_references() {
+        let (root, mut state, cube) = project("move");
+        let assets = root.join("assets");
+        let mut index = olvin_assets::AssetRoot::new(&assets);
+        index.scan();
+        let guid = index.guid_of("materials/red.mat.ron").unwrap();
+        std::fs::create_dir_all(assets.join("shared")).unwrap();
+
+        move_asset(
+            &mut state,
+            &assets,
+            &assets.join("materials/red.mat.ron"),
+            &assets.join("shared/red.mat.ron"),
+        )
+        .unwrap();
+
+        assert!(assets.join("shared/red.mat.ron.meta").exists());
+        assert!(!assets.join("materials/red.mat.ron.meta").exists());
+        let mut index = olvin_assets::AssetRoot::new(&assets);
+        index.scan();
+        assert_eq!(index.guid_of("shared/red.mat.ron"), Some(guid));
+        let id = cube;
+        assert_eq!(
+            state.scene.get(id).unwrap().material.as_deref(),
+            Some("shared/red.mat.ron"),
+            "the open scene follows"
+        );
+        let on_disk = olvin_scene::file::SceneFile::load(assets.join("scenes/a.scene.ron"));
+        assert_eq!(
+            on_disk.unwrap().get(cube).unwrap().material.as_deref(),
+            Some("shared/red.mat.ron"),
+            "other scene files follow"
+        );
+        assert!(!state.is_dirty(), "a rename is not an unsaved change");
+        // A folder takes everything under it.
+        move_asset(
+            &mut state,
+            &assets,
+            &assets.join("shared"),
+            &assets.join("materials/shared"),
+        )
+        .unwrap();
+        assert_eq!(
+            state.scene.get(id).unwrap().material.as_deref(),
+            Some("materials/shared/red.mat.ron")
+        );
+        // Into itself, or onto an existing file: refused, nothing changes.
+        assert!(
+            move_asset(
+                &mut state,
+                &assets,
+                &assets.join("materials"),
+                &assets.join("materials/shared/inner"),
+            )
+            .is_err()
+        );
+        assert!(
+            move_asset(
+                &mut state,
+                &assets,
+                &assets.join("materials/shared/red.mat.ron"),
+                &assets.join("models/robot.gltf"),
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_takes_the_meta_along() {
+        let (root, mut state, cube) = project("delete");
+        let assets = root.join("assets");
+        olvin_assets::AssetRoot::new(&assets).scan();
+        let mat = assets.join("materials/red.mat.ron");
+        assert!(assets.join("materials/red.mat.ron.meta").exists());
+        delete_asset(&mut state, &assets, &mat).unwrap();
+        assert!(!mat.exists());
+        assert!(!assets.join("materials/red.mat.ron.meta").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dropping_assets_assigns_materials_and_places_models() {
+        let (root, mut state, cube) = project("drop");
+        let assets = root.join("assets");
+        state.scene.get_mut(cube).unwrap().material = None;
+        drop_asset(
+            &mut state,
+            &assets.join("materials/red.mat.ron"),
+            DropTarget::Viewport {
+                pick: Some(cube),
+                at: None,
+            },
+        );
+        assert_eq!(
+            state.scene.get(cube).unwrap().material.as_deref(),
+            Some("materials/red.mat.ron")
+        );
+        // On empty space nothing is assigned.
+        let n = state.scene.entities.len();
+        drop_asset(
+            &mut state,
+            &assets.join("materials/red.mat.ron"),
+            DropTarget::Viewport {
+                pick: None,
+                at: None,
+            },
+        );
+        assert_eq!(state.scene.entities.len(), n);
+        // A model lands where it was dropped; on a row it becomes a child.
+        drop_asset(
+            &mut state,
+            &assets.join("models/robot.gltf"),
+            DropTarget::Viewport {
+                pick: None,
+                at: Some(Vec3::new(5.0, 0.0, 3.0)),
+            },
+        );
+        let imported: Vec<_> = state.scene.entities[n..]
+            .iter()
+            .filter(|e| e.parent.is_none())
+            .collect();
+        assert!(!imported.is_empty());
+        assert!(imported.iter().all(|e| e.position.x >= 4.9));
+        let n = state.scene.entities.len();
+        drop_asset(
+            &mut state,
+            &assets.join("models/robot.gltf"),
+            DropTarget::Hierarchy(Some(cube)),
+        );
+        assert!(
+            state.scene.entities[n..]
+                .iter()
+                .any(|e| e.parent == Some(cube))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

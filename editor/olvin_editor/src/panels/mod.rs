@@ -1,6 +1,6 @@
 //! Built-in panels: the base every editor installation has.
 
-mod assets;
+pub(crate) mod assets;
 mod game;
 pub(crate) mod hierarchy;
 pub(crate) mod inspector;

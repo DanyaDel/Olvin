@@ -11,15 +11,15 @@ default = ["window", "render"]
 window = ["dep:olvin_window"]
 render = ["dep:olvin_render", "olvin_gui?/render"]
 # Load .scene.ron files saved by olvin-editor (with their glTF models and animators).
-scene = ["render", "anim", "assets", "olvin_scene/serde", "dep:olvin_csg"]
+scene = ["render", "anim", "assets", "olvin_scene/serde", "dep:olvin_csg", "dep:serde", "dep:ron"]
 # Skeletal animation without the renderer: Animator, AnimGraph, AnimPlugin.
 anim = ["dep:olvin_anim"]
 # Asset pipeline: .meta GUIDs, images, glTF import, AssetManager.
 assets = ["dep:olvin_assets"]
 # Colliders and rigidbodies simulated with Rapier.
-physics = ["dep:olvin_physics", "olvin_script?/physics"]
+physics = ["dep:olvin_physics", "olvin_script?/physics", "olvin_game?/physics"]
 # Unity-style behaviours in Rust (Scripts from scenes → instances).
-script = ["dep:olvin_script"]
+script = ["dep:olvin_script", "olvin_game?/script"]
 # Lua 5.4 behaviours with hot reload (`olvin::script::lua`, vendored Lua, no system library).
 lua = ["script", "olvin_script/lua"]
 # Action maps over keyboard, mouse and gamepads (gilrs).
@@ -51,3 +51,5 @@ olvin_gui = { workspace = true, optional = true }
 olvin_text = { workspace = true, optional = true }
 glam.workspace = true
 log.workspace = true
+serde = { workspace = true, optional = true }
+ron = { workspace = true, optional = true }

@@ -3248,6 +3248,8 @@ dependencies = [
  "olvin_text",
  "olvin_transform",
  "olvin_window",
+ "ron",
+ "serde",
 ]
 
 [[package]]
@@ -3385,10 +3387,13 @@ dependencies = [
 name = "olvin_game"
 version = "0.1.0"
 dependencies = [
+ "glam 0.34.3",
  "log",
  "olvin_core",
  "olvin_ecs",
+ "olvin_physics",
  "olvin_scene",
+ "olvin_script",
  "ron",
  "serde",
 ]
@@ -3475,6 +3480,7 @@ dependencies = [
  "olvin_scene",
  "olvin_transform",
  "rapier3d",
+ "serde",
 ]
 
 [[package]]

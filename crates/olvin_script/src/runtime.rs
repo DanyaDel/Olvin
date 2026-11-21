@@ -28,6 +28,10 @@ struct Entry {
     slots: Vec<Slot>,
 }
 
+/// Saved states of one entity's scripts: `(script name, state)` in attach
+/// order, only for scripts whose [`Behaviour::save_state`] returned something.
+pub type ScriptState = Vec<(String, String)>;
+
 /// Live script instances, by entity. A resource (instances are not ECS
 /// components because hecs needs `Send + Sync` and scripts don't).
 #[derive(Default)]
@@ -35,6 +39,8 @@ pub struct ScriptRuntime {
     entries: Vec<Entry>,
     index: HashMap<Entity, usize>,
     pending: Vec<(Entity, String, Box<dyn Behaviour>)>,
+    /// States restored before the entity's scripts were attached.
+    pending_states: HashMap<Entity, ScriptState>,
     warned: HashSet<String>,
 }
 
@@ -86,6 +92,35 @@ impl ScriptRuntime {
         self.entries.len()
     }
 
+    /// What the entity's scripts want saved ([`Behaviour::save_state`]). A
+    /// state handed to [`ScriptRuntime::load_states`] and not applied yet is
+    /// returned as is.
+    pub fn save_states(&self, entity: Entity) -> ScriptState {
+        if let Some(states) = self.pending_states.get(&entity) {
+            return states.clone();
+        }
+        let Some(&i) = self.index.get(&entity) else {
+            return Vec::new();
+        };
+        self.entries[i]
+            .slots
+            .iter()
+            .filter_map(|s| Some((s.name.clone(), s.behaviour.save_state()?)))
+            .collect()
+    }
+
+    /// Gives saved states back to the entity's scripts: the k-th state saved
+    /// for a script name goes to the k-th script of that name. Scripts not
+    /// attached yet get it right after they are created, before `start`.
+    pub fn load_states(&mut self, entity: Entity, states: ScriptState) {
+        match self.index.get(&entity) {
+            Some(&i) => apply_states(entity, &mut self.entries[i].slots, &states),
+            None => {
+                self.pending_states.insert(entity, states);
+            }
+        }
+    }
+
     fn add(&mut self, entity: Entity, name: String, behaviour: Box<dyn Behaviour>) {
         let slot = Slot {
             name,
@@ -112,6 +147,19 @@ impl ScriptRuntime {
             self.index.insert(e.entity, j);
         }
         Some(entry)
+    }
+}
+
+fn apply_states(entity: Entity, slots: &mut [Slot], states: &ScriptState) {
+    for (k, (name, state)) in states.iter().enumerate() {
+        let nth = states[..k].iter().filter(|(n, _)| n == name).count();
+        let Some(slot) = slots.iter_mut().filter(|s| &s.name == name).nth(nth) else {
+            log::warn!("saved state for missing script `{name}` on {entity:?} skipped");
+            continue;
+        };
+        if let Err(e) = slot.behaviour.load_state(state) {
+            log::warn!("script `{name}` on {entity:?}: state not loaded: {e}");
+        }
     }
 }
 
@@ -225,6 +273,20 @@ fn attach_new(rt: &mut ScriptRuntime, res: &Resources, world: &mut World) {
     for (e, name, b) in std::mem::take(&mut rt.pending) {
         if world.contains(e) {
             rt.add(e, name, b);
+        }
+    }
+    if !rt.pending_states.is_empty() {
+        let ready: Vec<Entity> = rt
+            .pending_states
+            .keys()
+            .copied()
+            .filter(|e| rt.index.contains_key(e) || !world.contains(*e))
+            .collect();
+        for e in ready {
+            let states = rt.pending_states.remove(&e).unwrap_or_default();
+            if let Some(&i) = rt.index.get(&e) {
+                apply_states(e, &mut rt.entries[i].slots, &states);
+            }
         }
     }
 }

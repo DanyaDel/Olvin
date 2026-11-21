@@ -8,6 +8,8 @@ mod save;
 mod state;
 
 pub use loader::{LoadHandle, LoadStatus, SceneLoader, SceneLoaderPlugin};
+#[cfg(feature = "physics")]
+pub use save::BodyVelocity;
 pub use save::{
     SAVE_VERSION, SaveData, SaveError, SaveId, SaveMeta, SavePlugin, SaveRegistry, SaveSlots,
     SavedEntity, SlotInfo,

@@ -3,8 +3,15 @@
 //! and resources are serialized through a registry of types (`name` → serde functions),
 //! and files live in slots (`<dir>/<slot>.save.ron`).
 //!
-//! Only entities that carry [`SaveId`] are saved. References between entities inside
-//! components (e.g. `Parent`) are not remapped: store `SaveId`s instead of `Entity`.
+//! Saved entities are the ones with a [`SaveId`] and the level objects spawned from a
+//! scene (keyed by their `SceneId`, a separate id space; see
+//! [`SaveRegistry::scene_objects`]). References between entities inside components
+//! (e.g. `Parent`) are not remapped: store `SaveId`s instead of `Entity`.
+//!
+//! Engine state comes with [`SaveRegistry::register_engine`] (on in [`SavePlugin`]):
+//! `Transform`, and with the `physics` / `script` features body velocities, the
+//! character motor and behaviour states. A restored `Transform` is enough for
+//! physics: it teleports bodies whose `Transform` was changed at its next step.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -13,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use olvin_core::{App, Plugin, Resources};
 use olvin_ecs::{Component, Entity, World};
+use olvin_scene::{SceneId, Transform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -46,9 +54,15 @@ pub struct SaveMeta {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SavedEntity {
     pub id: u64,
+    /// `id` is a `SceneId` (a level object), not a [`SaveId`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scene: bool,
     /// Registered component name → RON text of its value.
     pub components: BTreeMap<String, String>,
 }
+
+/// How a saved entity is found again: its [`SaveId`], or the `SceneId` of a level object.
+type Key = (bool, u64);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SaveData {
@@ -156,6 +170,9 @@ impl std::error::Error for SaveError {}
 /// Applies a parsed value to an entity / the resources; built before anything is
 /// changed, so a broken save never leaves the world half-restored.
 type EntityApply = Box<dyn FnOnce(&mut World, Entity)>;
+type ExternalApply = Box<dyn FnOnce(&Resources, Entity)>;
+type ExternalSave = Box<dyn Fn(&Resources, Entity) -> Option<Result<String, String>>>;
+type ExternalPrepare = Box<dyn Fn(&str) -> Result<ExternalApply, String>>;
 type ResourceApply = Box<dyn FnOnce(&Resources)>;
 
 struct ComponentEntry {
@@ -163,6 +180,13 @@ struct ComponentEntry {
     save: fn(&World, Entity) -> Option<Result<String, String>>,
     prepare: fn(&str) -> Result<EntityApply, String>,
     remove: fn(&mut World, Entity),
+}
+
+/// Per-entity state kept outside the ECS (a physics body, script instances).
+struct ExternalEntry {
+    name: String,
+    save: ExternalSave,
+    prepare: ExternalPrepare,
 }
 
 struct ResourceEntry {
@@ -173,20 +197,40 @@ struct ResourceEntry {
 
 /// Resource: which component and resource types are saved, under which names.
 /// Names are the file format: renaming a type in code must not rename it here.
-#[derive(Default)]
 pub struct SaveRegistry {
     components: Vec<ComponentEntry>,
+    externals: Vec<ExternalEntry>,
     resources: Vec<ResourceEntry>,
+    /// Save level objects (entities with a `SceneId` and no [`SaveId`]) under
+    /// their scene id. On by default; off, only [`SaveId`] entities are saved
+    /// and restoring leaves scene objects alone.
+    pub scene_objects: bool,
+}
+
+impl Default for SaveRegistry {
+    fn default() -> Self {
+        Self {
+            components: Vec::new(),
+            externals: Vec::new(),
+            resources: Vec::new(),
+            scene_objects: true,
+        }
+    }
 }
 
 impl SaveRegistry {
-    /// Saves component `T` of entities that have a [`SaveId`].
+    fn has_entity_name(&self, name: &str) -> bool {
+        self.components.iter().any(|c| c.name == name)
+            || self.externals.iter().any(|c| c.name == name)
+    }
+
+    /// Saves component `T` of saved entities ([`SaveId`] or scene objects).
     pub fn register_component<T>(&mut self, name: &str) -> &mut Self
     where
         T: Component + Serialize + DeserializeOwned,
     {
         assert!(
-            !self.components.iter().any(|c| c.name == name),
+            !self.has_entity_name(name),
             "save component `{name}` is registered twice"
         );
         self.components.push(ComponentEntry {
@@ -206,6 +250,123 @@ impl SaveRegistry {
             },
         });
         self
+    }
+
+    /// Saves per-entity state that does not live in an ECS component: `read`
+    /// returns it at capture (`None`: nothing for this entity), `write` puts it
+    /// back after all components are restored (the world is not borrowed then).
+    /// For physics bodies, script instances and the like.
+    pub fn register_external<T>(
+        &mut self,
+        name: &str,
+        read: fn(&Resources, Entity) -> Option<T>,
+        write: fn(&Resources, Entity, T),
+    ) -> &mut Self
+    where
+        T: Serialize + DeserializeOwned + 'static,
+    {
+        assert!(
+            !self.has_entity_name(name),
+            "save component `{name}` is registered twice"
+        );
+        self.externals.push(ExternalEntry {
+            name: name.to_string(),
+            save: Box::new(move |res, e| {
+                let value = read(res, e)?;
+                Some(ron::to_string(&value).map_err(|e| e.to_string()))
+            }),
+            prepare: Box::new(move |text| {
+                let value: T = ron::from_str(text).map_err(|e| e.to_string())?;
+                Ok(Box::new(move |res, e| write(res, e, value)))
+            }),
+        });
+        self
+    }
+
+    /// Built-in engine state, each under a fixed name: `transform`; with the
+    /// `physics` feature `motor` (`CharacterMotor`) and `velocity` (linear and
+    /// angular velocity of dynamic bodies, set back right away; the restored
+    /// `Transform` teleports the body at the next physics step); with `script`
+    /// `scripts` ([`olvin_script::Behaviour::save_state`] of every instance).
+    /// Names already registered are skipped, so calling it twice is fine.
+    pub fn register_engine(&mut self) -> &mut Self {
+        if !self.has_entity_name("transform") {
+            self.register_component::<Transform>("transform");
+        }
+        #[cfg(feature = "physics")]
+        {
+            use olvin_physics::{CharacterMotor, Physics};
+            if !self.has_entity_name("motor") {
+                self.register_component::<CharacterMotor>("motor");
+            }
+            if !self.has_entity_name("velocity") {
+                self.register_external::<BodyVelocity>(
+                    "velocity",
+                    |res, e| {
+                        let world = res.fetch::<World>();
+                        let physics = res.get::<Physics>()?;
+                        Some(BodyVelocity {
+                            linear: physics.velocity(&world, e)?,
+                            angular: physics.angular_velocity(&world, e)?,
+                        })
+                    },
+                    |res, e, v| {
+                        let world = res.fetch::<World>();
+                        if let Some(mut physics) = res.get_mut::<Physics>() {
+                            physics.set_velocity(&world, e, v.linear);
+                            physics.set_angular_velocity(&world, e, v.angular);
+                        }
+                    },
+                );
+            }
+        }
+        #[cfg(feature = "script")]
+        {
+            use olvin_script::{ScriptRuntime, ScriptState};
+            if !self.has_entity_name("scripts") {
+                self.register_external::<ScriptState>(
+                    "scripts",
+                    |res, e| {
+                        let states = res.get::<ScriptRuntime>()?.save_states(e);
+                        (!states.is_empty()).then_some(states)
+                    },
+                    |res, e, states| {
+                        if let Some(mut rt) = res.get_mut::<ScriptRuntime>() {
+                            rt.load_states(e, states);
+                        }
+                    },
+                );
+            }
+        }
+        self
+    }
+
+    /// Saved entities by key, sorted; two entities with one key are an error.
+    fn keyed(&self, world: &World) -> Result<Vec<(Key, Entity)>, SaveError> {
+        let keys = self.keys(world);
+        if let Some(w) = keys.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Err(SaveError::DuplicateId(w[0].0.1));
+        }
+        Ok(keys)
+    }
+
+    fn keys(&self, world: &World) -> Vec<(Key, Entity)> {
+        let mut keys: Vec<(Key, Entity)> = world
+            .query::<(Entity, &SaveId)>()
+            .iter()
+            .map(|(e, id)| ((false, id.0), e))
+            .collect();
+        if self.scene_objects {
+            keys.extend(
+                world
+                    .query::<(Entity, &SceneId)>()
+                    .without::<&SaveId>()
+                    .iter()
+                    .map(|(e, id)| ((true, id.0), e)),
+            );
+        }
+        keys.sort_unstable();
+        keys
     }
 
     /// Saves the resource `T` (global game state: score, quest flags...).
@@ -233,27 +394,20 @@ impl SaveRegistry {
         self
     }
 
-    /// Snapshots every [`SaveId`] entity (sorted by id) and every registered resource
-    /// that is present. `meta.saved_at` is set to now.
+    /// Snapshots every saved entity ([`SaveId`] ones by id, then scene objects by
+    /// scene id) and every registered resource that is present. `meta.saved_at`
+    /// is set to now.
     pub fn capture(&self, res: &Resources, mut meta: SaveMeta) -> Result<SaveData, SaveError> {
         meta.saved_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let world = res.fetch::<World>();
-        let mut ids: Vec<(u64, Entity)> = world
-            .query::<(Entity, &SaveId)>()
-            .iter()
-            .map(|(e, id)| (id.0, e))
-            .collect();
-        ids.sort_unstable();
-        if let Some(w) = ids.windows(2).find(|w| w[0].0 == w[1].0) {
-            return Err(SaveError::DuplicateId(w[0].0));
-        }
+        let keys = self.keyed(&world)?;
         let mut data = SaveData {
             meta,
             ..Default::default()
         };
-        for (id, e) in ids {
+        for ((scene, id), e) in keys {
             let mut components = BTreeMap::new();
             for c in &self.components {
                 if let Some(text) = (c.save)(&world, e) {
@@ -264,7 +418,20 @@ impl SaveRegistry {
                     components.insert(c.name.clone(), text);
                 }
             }
-            data.entities.push(SavedEntity { id, components });
+            for c in &self.externals {
+                if let Some(text) = (c.save)(res, e) {
+                    let text = text.map_err(|error| SaveError::Value {
+                        name: c.name.clone(),
+                        error,
+                    })?;
+                    components.insert(c.name.clone(), text);
+                }
+            }
+            data.entities.push(SavedEntity {
+                id,
+                scene,
+                components,
+            });
         }
         for r in &self.resources {
             if let Some(text) = (r.save)(res) {
@@ -278,30 +445,36 @@ impl SaveRegistry {
         Ok(data)
     }
 
-    /// Makes the world match the save: [`SaveId`] entities are updated or created, those
-    /// missing from the save are despawned, other entities stay. Components that are
-    /// registered but absent from a saved entity are removed. Everything is parsed
-    /// first, so on error nothing changes. Names unknown to the registry are skipped
-    /// with a warning (a save from a build with more types).
+    /// Makes the world match the save: saved entities are updated, [`SaveId`] ones
+    /// missing from the world are created (a missing scene object is skipped with a
+    /// warning: load the scene first), saved entities missing from the save are
+    /// despawned, other entities stay. Components that are registered but absent
+    /// from a saved entity are removed. External state ([`Self::register_external`])
+    /// is written after the components. Everything is parsed first, so on error
+    /// nothing changes. Names unknown to the registry are skipped with a warning (a
+    /// save from a build with more types).
     pub fn restore(&self, res: &Resources, data: &SaveData) -> Result<(), SaveError> {
-        let mut plan: Vec<(u64, Vec<EntityApply>, Vec<usize>)> = Vec::new();
+        type Plan = (Key, Vec<EntityApply>, Vec<usize>, Vec<ExternalApply>);
+        let mut plan: Vec<Plan> = Vec::new();
         for saved in &data.entities {
             let mut applies = Vec::new();
             let mut present = Vec::new();
+            let mut externals = Vec::new();
             for (name, text) in &saved.components {
-                let Some(i) = self.components.iter().position(|c| &c.name == name) else {
-                    log::warn!("save: unknown component `{name}` skipped");
-                    continue;
+                let value = |error| SaveError::Value {
+                    name: name.clone(),
+                    error,
                 };
-                let apply =
-                    (self.components[i].prepare)(text).map_err(|error| SaveError::Value {
-                        name: name.clone(),
-                        error,
-                    })?;
-                applies.push(apply);
-                present.push(i);
+                if let Some(i) = self.components.iter().position(|c| &c.name == name) {
+                    applies.push((self.components[i].prepare)(text).map_err(value)?);
+                    present.push(i);
+                } else if let Some(x) = self.externals.iter().find(|c| &c.name == name) {
+                    externals.push((x.prepare)(text).map_err(value)?);
+                } else {
+                    log::warn!("save: unknown component `{name}` skipped");
+                }
             }
-            plan.push((saved.id, applies, present));
+            plan.push(((saved.scene, saved.id), applies, present, externals));
         }
         let mut resource_applies = Vec::new();
         for (name, text) in &data.resources {
@@ -316,21 +489,23 @@ impl SaveRegistry {
         }
 
         let mut world = res.fetch_mut::<World>();
-        let existing: BTreeMap<u64, Entity> = world
-            .query::<(Entity, &SaveId)>()
-            .iter()
-            .map(|(e, id)| (id.0, e))
-            .collect();
-        let keep: Vec<u64> = plan.iter().map(|p| p.0).collect();
-        for (id, e) in &existing {
-            if !keep.contains(id) {
+        // Duplicates in the world are not an error here: the last one wins.
+        let existing: BTreeMap<Key, Entity> = self.keys(&world).into_iter().collect();
+        let keep: Vec<Key> = plan.iter().map(|p| p.0).collect();
+        for (key, e) in &existing {
+            if !keep.contains(key) {
                 let _ = world.despawn(*e);
             }
         }
-        for (id, applies, present) in plan {
-            let e = match existing.get(&id) {
-                Some(e) => *e,
-                None => world.spawn((SaveId(id),)),
+        let mut later: Vec<(Entity, Vec<ExternalApply>)> = Vec::new();
+        for (key, applies, present, externals) in plan {
+            let e = match (existing.get(&key), key) {
+                (Some(e), _) => *e,
+                (None, (false, id)) => world.spawn((SaveId(id),)),
+                (None, (true, id)) => {
+                    log::warn!("save: scene object {id} is not in the world, skipped");
+                    continue;
+                }
             };
             for (i, c) in self.components.iter().enumerate() {
                 if !present.contains(&i) {
@@ -340,8 +515,14 @@ impl SaveRegistry {
             for apply in applies {
                 apply(&mut world, e);
             }
+            later.push((e, externals));
         }
         drop(world);
+        for (e, externals) in later {
+            for apply in externals {
+                apply(res, e);
+            }
+        }
         for apply in resource_applies {
             apply(res);
         }
@@ -453,14 +634,33 @@ impl SaveSlots {
     }
 }
 
+/// Linear and angular velocity of a dynamic body (`velocity` in saves).
+#[cfg(feature = "physics")]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyVelocity {
+    pub linear: glam::Vec3,
+    pub angular: glam::Vec3,
+}
+
 /// Inserts [`SaveRegistry`] and [`SaveSlots`] for `dir`.
 pub struct SavePlugin {
     pub dir: PathBuf,
+    /// Register engine state ([`SaveRegistry::register_engine`]). On in [`SavePlugin::new`].
+    pub engine: bool,
 }
 
 impl SavePlugin {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            engine: true,
+        }
+    }
+
+    /// Only the types the game registers itself.
+    pub fn without_engine(mut self) -> Self {
+        self.engine = false;
+        self
     }
 }
 
@@ -468,6 +668,9 @@ impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<World>();
         app.init_resource::<SaveRegistry>();
+        if self.engine {
+            app.resources.fetch_mut::<SaveRegistry>().register_engine();
+        }
         app.insert_resource(SaveSlots::new(self.dir.clone()));
     }
 }
@@ -786,5 +989,170 @@ mod tests {
         let world = app.resources.fetch::<World>();
         let hp: Vec<f32> = world.query::<&Health>().iter().map(|h| h.0).collect();
         assert!(hp.contains(&40.0));
+    }
+
+    #[test]
+    fn scene_objects_are_saved_by_scene_id() {
+        let app = game();
+        let (lamp, door) = {
+            let mut world = app.resources.fetch_mut::<World>();
+            // Scene id 10 is not SaveId 10: separate id spaces.
+            let lamp = world.spawn((SceneId(10), Health(3.0)));
+            let door = world.spawn((SceneId(11), Health(4.0)));
+            (lamp, door)
+        };
+        let mut data = capture(&app);
+        let scene: Vec<u64> = data
+            .entities
+            .iter()
+            .filter(|e| e.scene)
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(scene, [10, 11]);
+        assert!(data.to_text().unwrap().contains("scene: true"));
+
+        app.resources
+            .fetch::<World>()
+            .get::<&mut Health>(lamp)
+            .unwrap()
+            .0 = 0.0;
+        // The door is gone from the save, an unknown scene object appears in it.
+        data.entities.retain(|e| !(e.scene && e.id == 11));
+        data.entities.push(SavedEntity {
+            id: 99,
+            scene: true,
+            components: BTreeMap::new(),
+        });
+        restore(&app, &data).unwrap();
+        let world = app.resources.fetch::<World>();
+        assert_eq!(world.get::<&Health>(lamp).unwrap().0, 3.0);
+        assert!(!world.contains(door), "missing from the save: despawned");
+        assert_eq!(
+            world.query::<&SceneId>().iter().count(),
+            1,
+            "a scene object is not created from a save"
+        );
+    }
+
+    #[test]
+    fn external_state_is_written_after_components() {
+        #[derive(Default)]
+        struct Outside(Vec<(Entity, u32, bool)>);
+        let mut app = game();
+        app.insert_resource(Outside::default());
+        app.resources
+            .fetch_mut::<SaveRegistry>()
+            .register_external::<u32>(
+                "outside",
+                |_, _| Some(7),
+                |res, e, v| {
+                    let has_health = res.fetch::<World>().get::<&Health>(e).is_ok();
+                    res.fetch_mut::<Outside>().0.push((e, v, has_health));
+                },
+            );
+        let data = capture(&app);
+        assert_eq!(data.entities[0].components["outside"], "7");
+        restore(&app, &data).unwrap();
+        let outside = app.resources.fetch::<Outside>();
+        assert_eq!(outside.0.len(), 2);
+        assert!(outside.0.iter().all(|&(_, v, h)| v == 7 && h));
+    }
+
+    /// Through the public API only: the engine registrations of `SavePlugin`,
+    /// physics following the restored `Transform`s.
+    #[cfg(feature = "physics")]
+    #[test]
+    fn round_trip_with_physics() {
+        use glam::Vec3;
+        use olvin_core::Time;
+        use olvin_physics::{CharacterMotor, Physics, PhysicsPlugin};
+        use olvin_scene::file::{
+            CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc,
+        };
+
+        let mut app = App::new();
+        app.insert_resource(Time::with_fixed_delta(1.0 / 60.0));
+        app.add_plugin(PhysicsPlugin::default())
+            .add_plugin(SavePlugin::new(temp_dir("physics")));
+        let (crate_, hero) = {
+            let mut world = app.resources.fetch_mut::<World>();
+            world.spawn((
+                Transform::from_xyz(0.0, -0.5, 0.0).with_scale(Vec3::new(40.0, 1.0, 40.0)),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            let crate_ = world.spawn((
+                SceneId(5),
+                Transform::from_xyz(0.0, 0.5, 0.0),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+                RigidbodyDesc::default(),
+            ));
+            let hero = world.spawn((
+                SaveId(1),
+                Transform::from_xyz(5.0, 1.0, 0.0),
+                CharacterControllerDesc::default(),
+            ));
+            (crate_, hero)
+        };
+        let run = |app: &mut App, n: usize| {
+            for _ in 0..n {
+                app.update();
+            }
+        };
+        let pos = |app: &App, e: Entity| {
+            app.resources
+                .fetch::<World>()
+                .get::<&Transform>(e)
+                .unwrap()
+                .translation
+        };
+        let velocity = |app: &App, e: Entity| {
+            let world = app.resources.fetch::<World>();
+            app.resources
+                .fetch::<Physics>()
+                .velocity(&world, e)
+                .unwrap()
+        };
+        run(&mut app, 30);
+        {
+            let world = app.resources.fetch::<World>();
+            let mut physics = app.resources.fetch_mut::<Physics>();
+            physics.set_velocity(&world, crate_, Vec3::new(0.0, 4.0, 0.0));
+            world.get::<&mut CharacterMotor>(hero).unwrap().velocity.y = 3.0;
+        }
+        run(&mut app, 10);
+        let data = capture(&app);
+        let (saved_crate, saved_v, saved_hero) =
+            (pos(&app, crate_), velocity(&app, crate_), pos(&app, hero));
+        assert!(saved_v.y > 1.0, "saved in flight: {saved_v}");
+
+        // Somewhere else, at rest.
+        app.resources
+            .fetch::<World>()
+            .get::<&mut Transform>(hero)
+            .unwrap()
+            .translation = Vec3::new(-8.0, 1.0, 3.0);
+        run(&mut app, 120);
+        assert!(pos(&app, crate_).distance(saved_crate) > 0.3);
+        assert!(pos(&app, hero).distance(saved_hero) > 5.0);
+
+        restore(&app, &data).unwrap();
+        assert!((velocity(&app, crate_) - saved_v).length() < 1e-4);
+        run(&mut app, 1);
+        let dt = 1.0 / 60.0;
+        let crate_now = pos(&app, crate_);
+        assert!(
+            crate_now.distance(saved_crate + saved_v * dt) < 0.02,
+            "{crate_now} vs {saved_crate}"
+        );
+        assert!(
+            pos(&app, hero).distance(saved_hero) < 0.1,
+            "{} vs {saved_hero}",
+            pos(&app, hero)
+        );
+        let world = app.resources.fetch::<World>();
+        assert!(
+            world.get::<&CharacterMotor>(hero).unwrap().velocity.y > 1.0,
+            "mid-jump"
+        );
     }
 }

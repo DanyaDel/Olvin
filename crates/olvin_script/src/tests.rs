@@ -587,3 +587,83 @@ fn free_fly_camera_moves_with_actions() {
     assert!(t.translation.x < -5.0, "flew ~6 m: {}", t.translation);
     assert!(app.resources.fetch::<ActionState>().cursor_locked);
 }
+
+#[test]
+fn behaviour_state_is_saved_and_loaded_before_start() {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Counter {
+        ticks: u32,
+        #[serde(skip)]
+        started_at: Option<u32>,
+    }
+    impl Behaviour for Counter {
+        fn start(&mut self, _: &mut ScriptCtx<'_>) {
+            self.started_at = Some(self.ticks);
+        }
+        fn update(&mut self, _: &mut ScriptCtx<'_>) {
+            self.ticks += 1;
+        }
+        fn save_state(&self) -> Option<String> {
+            state_to_text(self)
+        }
+        fn load_state(&mut self, state: &str) -> Result<(), String> {
+            *self = state_from_text(state)?;
+            Ok(())
+        }
+    }
+    impl FromParams for Counter {
+        fn from_params(_: &Params) -> Self {
+            Counter {
+                ticks: 0,
+                started_at: None,
+            }
+        }
+    }
+    let app_with = || {
+        let mut app = App::new();
+        app.add_plugin(ScriptPlugin { builtins: false })
+            .register_script::<Counter>("Counter")
+            .register_script::<Counter>("Other");
+        let e = app.resources.fetch_mut::<World>().spawn((
+            Transform::IDENTITY,
+            Scripts::new()
+                .with("Counter", [])
+                .with("Other", [])
+                .with("Counter", []),
+        ));
+        (app, e)
+    };
+    let (mut app, e) = app_with();
+    for _ in 0..3 {
+        app.update();
+    }
+    app.resources
+        .fetch_mut::<ScriptRuntime>()
+        .get_mut::<Counter>(e)
+        .unwrap()
+        .ticks = 10;
+    let saved = app.resources.fetch::<ScriptRuntime>().save_states(e);
+    assert_eq!(saved.len(), 3);
+    assert_eq!(saved[0].0, "Counter");
+
+    // Новая сессия: состояния приходят раньше, чем скрипты созданы.
+    let (mut fresh, e) = app_with();
+    fresh
+        .resources
+        .fetch_mut::<ScriptRuntime>()
+        .load_states(e, saved.clone());
+    assert_eq!(
+        fresh.resources.fetch::<ScriptRuntime>().save_states(e),
+        saved
+    );
+    fresh.update();
+    let rt = fresh.resources.fetch::<ScriptRuntime>();
+    let first = rt.get::<Counter>(e).unwrap();
+    assert_eq!(first.started_at, Some(10), "loaded before start");
+    assert_eq!(first.ticks, 11);
+    let ticks: Vec<String> = rt.save_states(e).into_iter().map(|(_, s)| s).collect();
+    assert!(
+        ticks[1].contains("ticks:4") && ticks[2].contains("ticks:4"),
+        "{ticks:?}"
+    );
+}

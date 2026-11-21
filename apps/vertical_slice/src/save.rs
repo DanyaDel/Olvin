@@ -1,13 +1,9 @@
 //! Save slots through `olvin_game::save`: F5 saves to the quick slot, F9
-//! loads it.
-//!
-//! Engine types are not serializable (`Transform`, physics state), so poses
-//! go through a [`Pose`] copy, and after a restore the game moves the
-//! physics bodies itself: a dynamic body ignores its `Transform`.
+//! loads it. Level objects are saved under their scene ids; `SavePlugin`
+//! registers `Transform`, velocities and the character motor, the game adds
+//! its own components and [`Progress`].
 
-use olvin::game::{SaveId, SaveMeta, SaveRegistry, SaveSlots};
-use olvin::physics::Body;
-use olvin::physics::rapier3d::prelude as rp;
+use olvin::game::{SaveMeta, SaveRegistry, SaveSlots};
 use olvin::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -15,13 +11,6 @@ use crate::door::DoorState;
 use crate::hud::Hud;
 use crate::player::PlayerLook;
 use crate::{QUICK_SLOT, SCENE};
-
-/// A saved world pose (copied from `Transform` before capture).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Pose {
-    pub translation: Vec3,
-    pub rotation: Quat,
-}
 
 /// Session-wide state, saved as a resource.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -31,8 +20,8 @@ pub struct Progress {
 }
 
 pub fn register(registry: &mut SaveRegistry) {
+    // Transforms, velocities and the character motor come with `SavePlugin`.
     registry
-        .register_component::<Pose>("pose")
         .register_component::<DoorState>("door")
         .register_component::<PlayerLook>("look")
         .register_resource::<Progress>("progress");
@@ -60,28 +49,8 @@ pub fn hotkeys(res: &mut Resources) {
     }
 }
 
-/// Snapshots every `SaveId` entity and [`Progress`] into `slot`.
+/// Snapshots every scene object and [`Progress`] into `slot`.
 pub fn save_slot(res: &Resources, slot: &str) -> Result<(), String> {
-    {
-        let mut world = res.fetch_mut::<World>();
-        let poses: Vec<(Entity, Pose)> = world
-            .query::<(Entity, &Transform)>()
-            .with::<&SaveId>()
-            .iter()
-            .map(|(e, t)| {
-                (
-                    e,
-                    Pose {
-                        translation: t.translation,
-                        rotation: t.rotation,
-                    },
-                )
-            })
-            .collect();
-        for (e, pose) in poses {
-            let _ = world.insert_one(e, pose);
-        }
-    }
     res.fetch_mut::<Progress>().saves += 1;
     let meta = SaveMeta {
         title: "Quick save".into(),
@@ -100,8 +69,8 @@ pub fn save_slot(res: &Resources, slot: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Restores `slot` into the running level (same scene), then moves physics
-/// bodies to the restored poses and stops them.
+/// Restores `slot` into the running level (same scene); the engine
+/// registrations teleport bodies and restore their velocities.
 pub fn load_slot(res: &Resources, slot: &str) -> Result<(), String> {
     let data = res
         .fetch::<SaveSlots>()
@@ -112,38 +81,5 @@ pub fn load_slot(res: &Resources, slot: &str) -> Result<(), String> {
     }
     res.fetch::<SaveRegistry>()
         .restore(res, &data)
-        .map_err(|e| e.to_string())?;
-    apply_poses(res);
-    Ok(())
-}
-
-fn apply_poses(res: &Resources) {
-    let mut world = res.fetch_mut::<World>();
-    let mut physics = res.fetch_mut::<Physics>();
-    for (pose, t, body, motor) in world.query_mut::<(
-        &Pose,
-        &mut Transform,
-        Option<&Body>,
-        Option<&mut CharacterMotor>,
-    )>() {
-        t.translation = pose.translation;
-        t.rotation = pose.rotation;
-        // A character teleports when its Transform jumps; just drop its speed.
-        if let Some(motor) = motor {
-            motor.velocity = Vec3::ZERO;
-        }
-        // A dynamic body owns its pose: move it in Rapier directly.
-        if let Some(body) = body
-            && let Some(rb) = physics.world.bodies.get_mut(body.handle)
-            && rb.is_dynamic()
-        {
-            let iso = rp::Pose::from_parts(
-                rp::Vector::from_array(pose.translation.to_array()),
-                rp::Rotation::from_array(pose.rotation.to_array()),
-            );
-            rb.set_position(iso, true);
-            rb.set_linvel(rp::Vector::ZERO, true);
-            rb.set_angvel(rp::Vector::ZERO, true);
-        }
-    }
+        .map_err(|e| e.to_string())
 }

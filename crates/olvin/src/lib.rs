@@ -76,7 +76,8 @@ impl Plugin for DefaultPlugins {
         app.add_plugin(olvin_anim::AnimPlugin);
         #[cfg(feature = "scene")]
         app.add_plugin(render_assets::RenderAssetsPlugin)
-            .add_plugin(models::ModelPlugin);
+            .add_plugin(models::ModelPlugin)
+            .init_resource::<scene_file::SceneComponents>();
         #[cfg(feature = "physics")]
         app.add_plugin(olvin_physics::PhysicsPlugin {
             gravity: self.physics.gravity,
@@ -118,13 +119,15 @@ pub mod prelude {
     #[cfg(feature = "input")]
     pub use olvin_input::{ActionState, Binding, InputMap, InputPlugin};
     #[cfg(feature = "physics")]
-    pub use olvin_physics::{CharacterMotor, CollisionEvents, Hit, Physics, PhysicsPlugin};
+    pub use olvin_physics::{
+        CharacterMotor, CollisionEvents, ControllerHit, Hit, Physics, PhysicsPlugin,
+    };
     #[cfg(feature = "render")]
     pub use olvin_render::{
         Color, Fog, Light, LightKind, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo,
         RenderPlugin, RenderSettings, RenderStats, Tonemapping,
     };
-    pub use olvin_scene::{Camera, Name, Tag, Transform};
+    pub use olvin_scene::{Camera, Name, SceneId, Tag, Transform};
     #[cfg(feature = "script")]
     pub use olvin_script::{
         Behaviour, FromParams, ParamSpec, Params, ScriptAppExt, ScriptCtx, ScriptPlugin,

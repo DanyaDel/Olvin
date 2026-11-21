@@ -4,12 +4,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use olvin_core::Resources;
-use olvin_ecs::{EntityBuilder, World};
+use olvin_ecs::{Component, Entity, EntityBuilder, World};
 use olvin_render::{Color, MeshData, MeshHandle, MeshRenderer, Meshes, RenderSettings, Vertex};
 pub use olvin_scene::file::*;
 use olvin_scene::primitives::Primitive;
-use olvin_scene::{Camera, MeshGeometry, Name, Tag, Transform};
+use olvin_scene::{Camera, MeshGeometry, Name, SceneId, Tag, Transform};
 use olvin_transform::{GlobalTransform, Parent};
+use serde::de::DeserializeOwned;
 
 // Gameplay components. With the `script` / `audio` features they are the
 // types those plugins consume, so spawned scenes run scripts and play sound
@@ -32,24 +33,94 @@ pub use olvin_audio::AudioListener;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AudioListener;
 
+type Insert = Box<dyn Fn(&str, &mut EntityBuilder) -> Result<(), String>>;
+
+/// Resource: game-defined component types a scene may carry
+/// (`EntityDesc::components`, name → RON text). Game crates register their
+/// own: `res.fetch_mut::<SceneComponents>().register::<DoorState>("DoorState")`.
+/// Like `SaveRegistry`, the name is the file format. `DefaultPlugins` (feature
+/// `scene`) inserts it; without it scene components are skipped.
+#[derive(Default)]
+pub struct SceneComponents {
+    types: Vec<(String, Insert)>,
+}
+
+impl SceneComponents {
+    pub fn register<T>(&mut self, name: &str) -> &mut Self
+    where
+        T: Component + DeserializeOwned,
+    {
+        assert!(
+            !self.contains(name),
+            "scene component `{name}` is registered twice"
+        );
+        let insert: Insert = Box::new(|text, b| {
+            let value: T = ron::from_str(text).map_err(|e| e.to_string())?;
+            b.add(value);
+            Ok(())
+        });
+        self.types.push((name.to_string(), insert));
+        self
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.types.iter().any(|(n, _)| n == name)
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.types.iter().map(|(n, _)| n.as_str())
+    }
+
+    /// Adds the object's components; unknown names and bad values are logged and skipped.
+    fn add(&self, e: &EntityDesc, b: &mut EntityBuilder) {
+        for (name, text) in &e.components {
+            match self.types.iter().find(|(n, _)| n == name) {
+                Some((_, insert)) => {
+                    if let Err(err) = insert(text, b) {
+                        log::warn!("`{}`: component `{name}` skipped: {err}", e.name);
+                    }
+                }
+                None => log::warn!("`{}`: unknown scene component `{name}` skipped", e.name),
+            }
+        }
+    }
+}
+
+/// The spawned entity of scene object `id` (its [`SceneId`]).
+pub fn find(world: &World, id: u64) -> Option<Entity> {
+    world
+        .query::<(Entity, &SceneId)>()
+        .iter()
+        .find(|(_, s)| s.0 == id)
+        .map(|(e, _)| e)
+}
+
 /// Spawns every active entity with its world transform and components
-/// (Light, Collider, Rigidbody, AudioSource, ... as plain data components),
-/// the CSG level as static meshes with a mesh collider, and points the
-/// renderer's sun at the first directional light. Returns the entity count.
+/// (Light, Collider, Rigidbody, AudioSource, ... as plain data components,
+/// game components registered in [`SceneComponents`], and the object's
+/// [`SceneId`]), the CSG level as static meshes with a mesh collider, and
+/// points the renderer's sun at the first directional light. Returns the
+/// entity count; [`spawn_ids`] returns the scene id → entity map instead.
 ///
 /// Objects with a `model` get a [`PendingModel`](crate::models::PendingModel):
 /// the model loads in the background and [`ModelPlugin`](crate::models::ModelPlugin)
 /// builds it a few frames later (wait for [`models::pending_count`](crate::models::pending_count)).
 ///
 /// The hierarchy is kept: `Transform` is local, `Parent` links children, and
-/// `GlobalTransform` starts at the world matrix.
+/// `GlobalTransform` starts at the world matrix. Material paths resolve
+/// against the `RenderAssets` root; [`spawn_from`] sets it for a scene file.
 pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
+    spawn_ids(res, scene).len()
+}
+
+/// [`spawn`], returning the entity of every spawned scene object by its id.
+pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
     let worlds = scene.world_matrices();
+    let registry = res.get::<SceneComponents>();
     let mut meshes = res.fetch_mut::<Meshes>();
     let mut world = res.fetch_mut::<World>();
     let mut shapes: HashMap<Shape, MeshHandle> = HashMap::new();
-    let mut entities: HashMap<u64, olvin_ecs::Entity> = HashMap::new();
-    let mut spawned = 0;
+    let mut entities: HashMap<u64, Entity> = HashMap::new();
 
     // Parents come before children in scene files, so parent entities exist already.
     for e in scene
@@ -64,7 +135,8 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         let mut b = EntityBuilder::new();
         b.add(e.local_transform())
             .add(GlobalTransform(matrix))
-            .add(Name(e.name.clone()));
+            .add(Name(e.name.clone()))
+            .add(SceneId(e.id));
         if let Some(parent) = e.parent.and_then(|p| entities.get(&p)) {
             b.add(Parent(*parent));
         }
@@ -171,8 +243,15 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
         if !e.scripts.is_empty() {
             b.add(Scripts(e.scripts.clone()));
         }
+        if let Some(registry) = &registry {
+            registry.add(e, &mut b);
+        } else if !e.components.is_empty() {
+            log::warn!(
+                "`{}`: no SceneComponents resource, components skipped",
+                e.name
+            );
+        }
         entities.insert(e.id, world.spawn(b.build()));
-        spawned += 1;
     }
 
     if let Some(mut settings) = res.get_mut::<RenderSettings>() {
@@ -236,7 +315,7 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
             },
         ));
     }
-    spawned
+    entities
 }
 
 /// Applies the scene's sun and [`Environment`](olvin_scene::file::Environment)
@@ -285,14 +364,33 @@ pub fn runtime_light(d: &LightDesc) -> olvin_render::Light {
 /// Loads a scene file and spawns it.
 pub fn load(res: &Resources, path: impl AsRef<Path>) -> Result<usize, String> {
     let path = path.as_ref();
-    // Materials and textures resolve against the project's assets/ folder.
+    let scene = SceneFile::load(path)?;
+    Ok(spawn_from(res, &scene, path).len())
+}
+
+/// [`spawn_ids`] for a scene read from `path`: materials and textures resolve
+/// against the `assets/` folder above it (unless a root is set already).
+pub fn spawn_from(res: &Resources, scene: &SceneFile, path: &Path) -> HashMap<u64, Entity> {
     if let Some(mut assets) = res.get_mut::<crate::render_assets::RenderAssets>()
         && assets.root().is_none()
     {
         assets.set_root(crate::render_assets::RenderAssets::root_for_scene(path));
     }
-    let scene = SceneFile::load(path)?;
-    Ok(spawn(res, &scene))
+    spawn_ids(res, scene)
+}
+
+/// Spawns a scene parsed in the background (`olvin_game::SceneLoader`) the way
+/// [`load`] does, materials included. `None` while it is pending or when the
+/// handle is unknown; `Some(Err)` when the file failed to load.
+#[cfg(feature = "game")]
+pub fn spawn_loaded(
+    res: &Resources,
+    handle: olvin_game::LoadHandle,
+) -> Option<Result<HashMap<u64, Entity>, String>> {
+    let (path, result) = res
+        .get_mut::<olvin_game::SceneLoader>()?
+        .take_with_path(handle)?;
+    Some(result.map(|scene| spawn_from(res, &scene, &path)))
 }
 
 #[cfg(test)]
@@ -338,6 +436,93 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+    struct Door {
+        open: bool,
+    }
+
+    #[test]
+    fn scene_ids_and_game_components_reach_entities() {
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        let mut components = SceneComponents::default();
+        components.register::<Door>("Door");
+        res.insert(components);
+
+        let mut door = EntityDesc::new(7, "Door");
+        door.components.insert("Door".into(), "(open: true)".into());
+        door.components.insert("Nope".into(), "()".into());
+        door.components.insert("Broken".into(), "(".into());
+        let lamp = EntityDesc::new(8, "Lamp");
+        let scene = SceneFile {
+            entities: vec![door, lamp],
+            ..Default::default()
+        };
+        let ids = spawn_ids(&res, &scene);
+        let world = res.fetch::<World>();
+        assert_eq!(find(&world, 7), Some(ids[&7]));
+        assert_eq!(find(&world, 8), Some(ids[&8]));
+        assert!(world.get::<&Door>(ids[&7]).unwrap().open);
+        assert!(world.get::<&Door>(ids[&8]).is_err());
+        // The field is optional on disk, and absent when empty: no version bump.
+        let path =
+            std::env::temp_dir().join(format!("olvin-comp-{}.scene.ron", std::process::id()));
+        SceneFile {
+            entities: vec![EntityDesc::new(1, "A")],
+            ..Default::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("components")
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[cfg(feature = "game")]
+    #[test]
+    fn background_loaded_scene_resolves_assets_like_load() {
+        use crate::render_assets::RenderAssets;
+        let dir = std::env::temp_dir().join(format!("olvin-bg-{}", std::process::id()));
+        let scenes = dir.join("assets").join("scenes");
+        std::fs::create_dir_all(&scenes).unwrap();
+        let path = scenes.join("a.scene.ron");
+        let mut e = EntityDesc::new(3, "Thing");
+        e.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
+        SceneFile {
+            entities: vec![e],
+            ..Default::default()
+        }
+        .save(&path)
+        .unwrap();
+
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        res.insert(RenderAssets::new(None));
+        res.insert(olvin_game::SceneLoader::default());
+        let handle = res.fetch_mut::<olvin_game::SceneLoader>().request(&path);
+        let ids = loop {
+            res.fetch_mut::<olvin_game::SceneLoader>().poll();
+            if let Some(r) = spawn_loaded(&res, handle) {
+                break r.unwrap();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        assert_eq!(ids.len(), 1);
+        let root = res.fetch::<RenderAssets>().root().map(Path::to_path_buf);
+        assert_eq!(root, Some(dir.join("assets")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

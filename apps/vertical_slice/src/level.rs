@@ -1,15 +1,12 @@
 //! Loading the level: `SceneLoader` parses the scene on a worker thread
-//! (state `Loading`), then the facade spawns it, its models load in the
-//! background too, and the game attaches what a scene file cannot express
-//! (game components, save ids, HUD).
+//! (state `Loading`), then the facade spawns it (scene ids and game components
+//! included), its models load in the background too, and the game adds what a
+//! scene file cannot express (the robot marker, music, the first hint).
 
-use olvin::game::{LoadHandle, LoadStatus, SaveId, SceneLoader, State};
+use olvin::game::{LoadHandle, LoadStatus, SceneLoader, State};
 use olvin::prelude::*;
-use olvin::render_assets::RenderAssets;
 
-use crate::door::DoorState;
 use crate::hud::Hud;
-use crate::player::{Player, PlayerCamera, PlayerLook};
 use crate::{GameState, Paths, SCENE, robot};
 
 /// The load in flight.
@@ -18,20 +15,6 @@ pub struct LevelLoad(pub LoadHandle);
 /// The level is spawned; its models (the robot) are still loading.
 pub struct ModelsLoading;
 
-/// Save ids of level objects. Spawned entities do not keep their scene id,
-/// so they are matched by name (GAPS.md).
-pub const SAVED: &[(&str, u64)] = &[
-    ("Player", 100),
-    ("Door", 20),
-    ("Crate 1", 40),
-    ("Crate 2", 41),
-    ("Crate 3", 42),
-    ("Crate 4", 43),
-    ("Ball", 44),
-];
-
-pub const DOOR_LIFT: f32 = 3.1;
-
 /// `on_enter(Loading)`: starts parsing the scene in the background.
 pub fn request(res: &mut Resources) {
     let path = res.fetch::<Paths>().assets.join(SCENE);
@@ -39,7 +22,8 @@ pub fn request(res: &mut Resources) {
     res.insert(LevelLoad(handle));
 }
 
-/// While `Loading`: once the scene is parsed, spawn it and start playing.
+/// While `Loading`: once the scene is parsed, spawn it; once its models are
+/// built, start playing.
 pub fn finish_loading(res: &mut Resources) {
     if res.get::<ModelsLoading>().is_some() {
         if olvin::models::pending_count(res) == 0 {
@@ -62,68 +46,34 @@ pub fn finish_loading(res: &mut Resources) {
             return;
         }
     }
-    let Some(result) = res.fetch_mut::<SceneLoader>().take(handle) else {
+    // Materials resolve like in `scene_file::load`; game components and save
+    // ids come from the scene file itself (`SceneId`, `components`).
+    let Some(result) = olvin::scene_file::spawn_loaded(res, handle) else {
         return;
     };
     res.remove::<LevelLoad>();
-    let scene = match result {
-        Ok(scene) => scene,
+    match result {
+        Ok(ids) => log::info!("level: {} objects", ids.len()),
         Err(e) => {
             log::error!("level failed to load: {e}");
             res.fetch_mut::<AppExit>().requested = true;
             return;
         }
-    };
-    // `scene_file::load` points material lookups at assets/, a background
-    // load has to do it by hand.
-    let assets = res.fetch::<Paths>().assets.clone();
-    if let Some(mut ra) = res.get_mut::<RenderAssets>() {
-        ra.set_root(Some(assets.clone()));
     }
-    let count = olvin::scene_file::spawn(res, &scene);
-    log::info!("level: {count} objects");
     // Playing starts once the models are built (next frames).
     res.insert(ModelsLoading);
 }
 
-fn find(world: &World, name: &str) -> Option<Entity> {
-    world
-        .query::<(Entity, &Name)>()
-        .iter()
-        .find(|(_, n)| n.0 == name)
-        .map(|(e, _)| e)
-}
-
-/// Attaches game components to the spawned level and adds the rest.
+/// Adds what a scene file cannot express: the robot marker, music and the hint.
 pub fn setup(res: &mut Resources) {
     {
         let mut world = res.fetch_mut::<World>();
-        for (name, id) in SAVED {
-            match find(&world, name) {
-                Some(e) => {
-                    let _ = world.insert_one(e, SaveId(*id));
-                }
-                None => log::warn!("level has no `{name}`"),
-            }
-        }
-        if let Some(e) = find(&world, "Player") {
-            let _ = world.insert(e, (Player, PlayerLook::default()));
-        }
-        if let Some(e) = find(&world, "Player Camera") {
-            let _ = world.insert_one(e, PlayerCamera);
-        }
-        if let Some(e) = find(&world, "Door") {
-            let y = world.get::<&Transform>(e).map_or(1.5, |t| t.translation.y);
-            let _ = world.insert_one(
-                e,
-                DoorState {
-                    open: false,
-                    closed_y: y,
-                    lift: DOOR_LIFT,
-                },
-            );
-        }
-        match find(&world, robot::NAME) {
+        let robot_entity = world
+            .query::<(Entity, &Name)>()
+            .iter()
+            .find(|(_, n)| n.0 == robot::NAME)
+            .map(|(e, _)| e);
+        match robot_entity {
             Some(e) => {
                 let _ = world.insert_one(e, robot::Robot);
             }

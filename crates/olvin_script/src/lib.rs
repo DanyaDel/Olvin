@@ -27,7 +27,7 @@ pub use ctx::{ScriptCtx, TimeInfo};
 pub use olvin_scene::file::ScriptDesc;
 pub use params::{FromParams, ParamKind, ParamSpec, Params, format_vec3, parse_bool, parse_vec3};
 pub use registry::{ScriptRegistry, ScriptSchema};
-pub use runtime::{ScriptRuntime, ScriptsAttached, run_fixed_update, run_update};
+pub use runtime::{ScriptRuntime, ScriptState, ScriptsAttached, run_fixed_update, run_update};
 
 use std::collections::BTreeMap;
 
@@ -90,6 +90,18 @@ impl Plugin for ScriptPlugin {
         }
         app.add_system(Stage::Update, |res| run_update(res, None));
     }
+}
+
+/// RON text of a behaviour's state, for [`Behaviour::save_state`].
+pub fn state_to_text<T: serde::Serialize>(state: &T) -> Option<String> {
+    ron::to_string(state)
+        .map_err(|e| log::warn!("script state not saved: {e}"))
+        .ok()
+}
+
+/// Parses what [`state_to_text`] wrote, for [`Behaviour::load_state`].
+pub fn state_from_text<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, String> {
+    ron::from_str(text).map_err(|e| e.to_string())
 }
 
 /// `app.register_script::<Player>("Player")` sugar.

@@ -135,6 +135,7 @@ impl Plugin for GamePlugin {
             // The HUD's tree; `DefaultPlugins` with a renderer added `GuiRenderPlugin`
             // (which includes this) to draw it, headless runs only lay it out.
             .add_plugin(olvin::gui::GuiPlugin)
+            .init_resource::<olvin::scene_file::SceneComponents>()
             .add_plugin(SceneLoaderPlugin)
             .add_plugin(SavePlugin::new(c.saves.clone()))
             .insert_resource(Paths {
@@ -146,6 +147,16 @@ impl Plugin for GamePlugin {
             let mut scripts = app.resources.fetch_mut::<ScriptRegistry>();
             scripts.register::<door::DoorSwitch>("DoorSwitch");
             scripts.register::<door::Thud>("Thud");
+        }
+        {
+            let mut components = app
+                .resources
+                .fetch_mut::<olvin::scene_file::SceneComponents>();
+            components
+                .register::<door::DoorState>("DoorState")
+                .register::<player::Player>("Player")
+                .register::<player::PlayerCamera>("PlayerCamera")
+                .register::<player::PlayerLook>("PlayerLook");
         }
         save::register(&mut app.resources.fetch_mut::<olvin::game::SaveRegistry>());
 

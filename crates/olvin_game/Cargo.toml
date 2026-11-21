@@ -6,10 +6,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Saves of body velocities and the character motor (`SaveRegistry::register_engine`).
+physics = ["dep:olvin_physics", "dep:glam"]
+# Saves of behaviour states (`Behaviour::save_state`).
+script = ["dep:olvin_script"]
+
 [dependencies]
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene = { workspace = true, features = ["serde"] }
+olvin_physics = { workspace = true, optional = true }
+olvin_script = { path = "../olvin_script", optional = true, default-features = false }
+glam = { workspace = true, optional = true }
 serde.workspace = true
 ron.workspace = true
 log.workspace = true

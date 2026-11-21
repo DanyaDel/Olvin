@@ -26,7 +26,15 @@ pub struct MeshGeometry {
     pub indices: Vec<[u32; 3]>,
 }
 
+/// Id of the scene object an entity was spawned from (`EntityDesc::id`):
+/// stable across edits and renames, unlike `Name`. Saves use it as the
+/// default key of level objects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SceneId(pub u64);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transform {
     pub translation: Vec3,
     pub rotation: Quat,

@@ -7,8 +7,8 @@ use crate::hud::Hud;
 use crate::player::Player;
 use crate::save::Progress;
 
-/// A sliding door. The scene has no way to attach game components, so the
-/// game adds this after loading (see `level::setup`).
+/// A sliding door. Carried by the scene file (`components` of the door object,
+/// registered in `GamePlugin`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DoorState {
     pub open: bool,

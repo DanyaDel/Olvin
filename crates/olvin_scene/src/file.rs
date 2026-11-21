@@ -269,6 +269,12 @@ pub struct EntityDesc {
     /// Game-side behaviours by name, with string parameters.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<ScriptDesc>,
+    /// Game-defined components: registered type name → RON text of the value
+    /// (`{"DoorState": "(open: false)"}`). The game registers the types it
+    /// knows (`olvin::scene_file::SceneComponents`); unknown names are skipped
+    /// when spawning and kept when the editor saves the scene.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<String, String>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -407,6 +413,15 @@ pub struct CharacterControllerDesc {
     pub radius: f32,
     pub step_offset: f32,
     pub slope_limit_deg: f32,
+    /// Mass (kg) the character pushes dynamic bodies with: a body of the same
+    /// mass gets about half of the blocked motion, a light one nearly all.
+    /// 0 turns pushing off.
+    #[serde(default = "default_push_mass")]
+    pub push_mass: f32,
+}
+
+fn default_push_mass() -> f32 {
+    80.0
 }
 
 impl Default for CharacterControllerDesc {
@@ -416,6 +431,7 @@ impl Default for CharacterControllerDesc {
             radius: 0.5,
             step_offset: 0.3,
             slope_limit_deg: 45.0,
+            push_mass: default_push_mass(),
         }
     }
 }
@@ -546,6 +562,7 @@ impl EntityDesc {
             audio_source: None,
             audio_listener: false,
             scripts: Vec::new(),
+            components: BTreeMap::new(),
         }
     }
 

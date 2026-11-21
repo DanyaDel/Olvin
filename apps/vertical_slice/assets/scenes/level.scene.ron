@@ -38,7 +38,8 @@
         (id: 20, name: "Door", position: (0.0, 1.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (2.4, 3.0, 0.3),
             mesh: Some((shape: Cube, color: (0.75, 0.2, 0.15, 1.0))),
             collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0)),
-            rigidbody: Some((kind: Kinematic, mass: 1.0, drag: 0.0, angular_drag: 0.05, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false))),
+            rigidbody: Some((kind: Kinematic, mass: 1.0, drag: 0.0, angular_drag: 0.05, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            components: {"DoorState": "(open: false, closed_y: 1.5, lift: 3.1)"}),
 
         // Pressure plate: a flat marker plus an invisible trigger volume above it.
         (id: 30, name: "Plate", position: (4.0, 0.03, 6.0), rotation: (0.0, 0.0, 0.0), scale: (2.0, 0.06, 2.0),
@@ -107,9 +108,11 @@
 
         // Player: character controller; the camera (and the ears) are a child at eye height.
         (id: 100, name: "Player", position: (0.0, 1.0, 10.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
-            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0))),
+            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0)),
+            components: {"Player": "()", "PlayerLook": "(yaw: 0.0, pitch: 0.0)"}),
         (id: 101, name: "Player Camera", parent: Some(100), position: (0.0, 0.7, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
             camera: Some((fov_deg: 75.0, near: 0.05, far: 200.0)),
-            audio_listener: true),
+            audio_listener: true,
+            components: {"PlayerCamera": "()"}),
     ],
 )

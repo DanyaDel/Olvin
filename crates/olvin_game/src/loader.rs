@@ -93,6 +93,12 @@ impl SceneLoader {
         self.done.remove(&handle.0).map(|(_, r)| r)
     }
 
+    /// [`SceneLoader::take`] plus the path the scene was loaded from (asset
+    /// paths inside the scene resolve against its `assets/` folder).
+    pub fn take_with_path(&mut self, handle: LoadHandle) -> Option<(PathBuf, LoadResult)> {
+        self.done.remove(&handle.0)
+    }
+
     /// The path a request was made for, while it is pending or not yet taken.
     pub fn path(&self, handle: LoadHandle) -> Option<&Path> {
         self.pending

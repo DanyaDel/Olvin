@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use olvin::anim::Animator;
-use olvin::game::{SaveId, SaveSlots, State};
+use olvin::game::{SaveSlots, State};
 use olvin::input::Input;
 use olvin::prelude::*;
 use vertical_slice::door::DoorState;
@@ -121,7 +121,10 @@ fn door(app: &App) -> (DoorState, f32) {
 fn level_loads_and_is_wired() {
     let app = game("wired");
     let world = app.resources.fetch::<World>();
-    assert_eq!(world.query::<&SaveId>().iter().count(), 7);
+    assert!(
+        world.query::<&SceneId>().iter().count() >= 20,
+        "scene ids on spawned objects"
+    );
     assert_eq!(
         world.query::<(&Player, &CharacterMotor)>().iter().count(),
         1
@@ -295,11 +298,11 @@ fn robot_waves_at_a_nearby_player() {
     assert_eq!(state(&app).0, "Idle");
 }
 
-/// Records a gap rather than the game: the engine's character controller
-/// alone does not move dynamic bodies it walks into (the game pushes them
-/// itself, see `player::push_bodies`).
+/// The engine's character controller pushes dynamic bodies it walks into
+/// and reports the hit (GAPS.md #8).
 #[test]
-fn engine_controller_alone_does_not_push() {
+fn engine_controller_pushes_and_reports_hits() {
+    use olvin::physics::ControllerHit;
     use olvin::scene::file::{CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc};
     let mut app = App::new();
     app.insert_resource(Time::with_fixed_delta(DT));
@@ -323,6 +326,8 @@ fn engine_controller_alone_does_not_push() {
     };
     frames(&mut app, 30);
     let before = pos(&app, box_);
+    let mut hit = None;
+    let mut cursor = olvin::core::EventCursor::default();
     for _ in 0..120 {
         if let Ok(mut m) = app
             .resources
@@ -332,10 +337,11 @@ fn engine_controller_alone_does_not_push() {
             m.velocity.z = -4.0;
         }
         app.update();
+        let events = app.resources.fetch::<olvin::core::Events<ControllerHit>>();
+        hit = hit.or_else(|| events.read(&mut cursor).find(|h| h.other == box_).copied());
     }
     let moved = pos(&app, box_).distance(before);
-    assert!(
-        moved < 0.1,
-        "the controller pushed the box {moved} m: the gap is closed, update GAPS.md"
-    );
+    assert!(moved > 0.5, "the controller pushed the box only {moved} m");
+    let hit = hit.expect("a controller hit on the box");
+    assert_eq!(hit.character, player);
 }

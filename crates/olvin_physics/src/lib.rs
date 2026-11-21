@@ -113,6 +113,9 @@ impl Physics {
 
     /// Adds `dt` to the accumulator and returns how many fixed steps are due.
     fn consume(&mut self, dt: f32) -> u32 {
+        // A NaN or negative frame time must not poison the accumulator
+        // (`NaN.min(x)` is `x`: it would burst the step cap).
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
         self.accumulator = (self.accumulator + dt).min(FIXED_DT * MAX_STEPS_PER_FRAME as f32);
         let mut steps = 0;
         while self.accumulator >= FIXED_DT {
@@ -312,11 +315,18 @@ fn pull_poses(world: &mut World, physics: &Physics) {
                 (Some(pm), Some(rotation)) => {
                     let local =
                         pm.inverse() * glam::Mat4::from_rotation_translation(rotation, translation);
-                    let (_, r, tr) = local.to_scale_rotation_translation();
-                    t.translation = tr;
-                    t.rotation = r;
+                    let (_, r, tr) = split(local);
+                    if tr.is_finite() {
+                        t.translation = tr;
+                        t.rotation = r;
+                    }
                 }
-                (Some(pm), None) => t.translation = pm.inverse().transform_point3(translation),
+                (Some(pm), None) => {
+                    let local = pm.inverse().transform_point3(translation);
+                    if local.is_finite() {
+                        t.translation = local;
+                    }
+                }
                 (None, rotation) => {
                     t.translation = translation;
                     if let Some(r) = rotation {
@@ -350,8 +360,21 @@ fn remove_orphans(world: &World, physics: &mut Physics) {
     }
 }
 
-fn decompose(m: glam::Mat4) -> Transform {
+/// `to_scale_rotation_translation` with a finite rotation: a zero (or
+/// non-finite) scale makes glam return NaN, which would poison the body and
+/// then the `Transform` physics writes back.
+fn split(m: Mat4) -> (Vec3, Quat, Vec3) {
     let (scale, rotation, translation) = m.to_scale_rotation_translation();
+    let rotation = if rotation.is_finite() {
+        rotation
+    } else {
+        Quat::IDENTITY
+    };
+    (scale, rotation, translation)
+}
+
+fn decompose(m: glam::Mat4) -> Transform {
+    let (scale, rotation, translation) = split(m);
     Transform {
         translation,
         rotation,
@@ -494,6 +517,12 @@ fn collider_builder(
         }
         ColliderShape::Mesh => {
             let mesh = mesh?;
+            // Parry indexes the vertices unchecked and panics on a stray index.
+            let n = mesh.positions.len() as u32;
+            if mesh.indices.iter().flatten().any(|&i| i >= n) {
+                log::warn!("mesh collider has indices past its vertices: ignored");
+                return None;
+            }
             let vertices: Vec<rp::Vector> = mesh.positions.iter().map(|p| v(*p * scale)).collect();
             if dynamic {
                 rp::ColliderBuilder::convex_hull(&vertices)?
@@ -1163,5 +1192,45 @@ mod tests {
         let mut events = events;
         events.clear();
         assert_eq!(events.iter().count(), 0);
+    }
+
+    #[test]
+    fn zero_scale_keeps_the_transform_finite() {
+        let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        let e = res.fetch_mut::<World>().spawn((
+            Transform::from_xyz(0.0, 3.0, 0.0).with_scale(Vec3::ZERO),
+            ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            RigidbodyDesc::default(),
+        ));
+        for _ in 0..30 {
+            step(&res, FIXED_DT);
+        }
+        let t = *res.fetch::<World>().get::<&Transform>(e).unwrap();
+        assert!(t.translation.is_finite() && t.rotation.is_finite(), "{t:?}");
+        assert!(t.translation.y < 3.0, "still falls: {t:?}");
+    }
+
+    #[test]
+    fn mesh_collider_with_stray_indices_is_skipped() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        res.fetch_mut::<World>().spawn((
+            Transform::IDENTITY,
+            ColliderDesc::new(ColliderShape::Mesh),
+            MeshGeometry {
+                positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+                indices: vec![[0, 1, 9]],
+            },
+        ));
+        step(&res, FIXED_DT);
+        assert_eq!(res.fetch::<Physics>().world.colliders.len(), 0);
+    }
+
+    #[test]
+    fn non_finite_frame_time_is_ignored() {
+        let mut physics = Physics::new(Vec3::ZERO);
+        assert_eq!(physics.consume(f32::NAN), 0);
+        assert_eq!(physics.consume(-1.0), 0);
+        assert_eq!(physics.consume(f32::INFINITY), 0);
+        assert_eq!(physics.consume(FIXED_DT), 1);
     }
 }

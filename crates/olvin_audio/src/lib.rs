@@ -322,7 +322,8 @@ pub struct Audio {
 }
 
 fn amplitude_to_db(amplitude: f32) -> Decibels {
-    if amplitude <= 0.001 {
+    // `!(x > y)` also catches NaN, which would reach the mixer as NaN dB.
+    if !(amplitude > 0.001) {
         Decibels::SILENCE
     } else {
         Decibels(20.0 * amplitude.log10())
@@ -1139,6 +1140,7 @@ impl Audio {
 
         // Follow source entities; forget finished and orphaned sounds.
         let mut done = Vec::new();
+        let has_device = self.manager.is_some();
         for (id, p) in &mut self.playing {
             if let Some(e) = p.entity {
                 match world.get::<&AudioSourceDesc>(e) {
@@ -1178,6 +1180,9 @@ impl Audio {
                 Some(h) if matches!(h.state(), PlaybackState::Stopped) => done.push(*id),
                 // Without a device, one-shots end right away; looping/entity sounds stay tracked.
                 None if !p.virtualized && !p.params.looping && p.entity.is_none() => done.push(*id),
+                // With a device a voice without a handle means the file would
+                // not load: forget it, or looping ghosts hold voices forever.
+                None if !p.virtualized && has_device => done.push(*id),
                 _ => {}
             }
         }

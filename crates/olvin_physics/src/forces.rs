@@ -87,7 +87,7 @@ impl Physics {
         let Some(rb) = self.world.bodies.get_mut(body.handle) else {
             return false;
         };
-        let (_, rotation, translation) = m.to_scale_rotation_translation();
+        let (_, rotation, translation) = crate::split(m);
         if body.kind == Kind::Character {
             // Only the position is simulated for characters.
             rb.set_translation(v(translation), true);

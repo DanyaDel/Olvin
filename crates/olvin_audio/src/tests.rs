@@ -654,3 +654,34 @@ fn time_pause_holds_pausable_buses() {
     assert!(!app.resources.fetch::<Audio>().is_sound_paused(sfx));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sounds_that_fail_to_load_do_not_hold_voices() {
+    let dir = std::env::temp_dir().join(format!("olvin_audio_missing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut audio = Audio::open(&dir);
+    assert!(audio.is_available());
+    audio.set_max_voices(2);
+    for _ in 0..4 {
+        audio.play_with("typo.wav", looping(0));
+    }
+    let mut world = World::new();
+    // Those waiting for a voice are tried (and forgotten) once one frees up.
+    for _ in 0..3 {
+        audio.update_with(&mut world, 0.016);
+    }
+    assert_eq!(audio.active_count(), 0, "looping ghosts are forgotten");
+    std::fs::write(dir.join("tone.wav"), wav(0.2)).unwrap();
+    let id = audio.play_with("tone.wav", looping(128));
+    audio.update_with(&mut world, 0.016);
+    assert!(audio.is_playing(id), "a real sound still gets a voice");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn non_finite_inputs_stay_silent_not_nan() {
+    assert_eq!(attenuation(f32::NAN, 1.0, 10.0), 0.0);
+    assert_eq!(pan(Vec3::NAN, Quat::IDENTITY, Vec3::X), 0.0);
+    assert_eq!(pan(Vec3::ZERO, Quat::IDENTITY, Vec3::INFINITY), 0.0);
+    assert_eq!(amplitude_to_db(f32::NAN), Decibels::SILENCE);
+}

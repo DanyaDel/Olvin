@@ -7,6 +7,9 @@ use glam::{Quat, Vec3};
 pub fn attenuation(distance: f32, min: f32, max: f32) -> f32 {
     let min = min.max(1e-3);
     let max = max.max(min + 1e-3);
+    if distance.is_nan() {
+        return 0.0;
+    }
     if distance <= min {
         return 1.0;
     }
@@ -24,7 +27,7 @@ pub fn attenuation(distance: f32, min: f32, max: f32) -> f32 {
 pub fn pan(position: Vec3, rotation: Quat, source: Vec3) -> f32 {
     let local = rotation.inverse() * (source - position);
     let len = local.length();
-    if len < 1e-4 {
+    if !(len >= 1e-4) || !len.is_finite() {
         return 0.0;
     }
     (local.x / len) * 0.8

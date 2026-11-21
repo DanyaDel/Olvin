@@ -1,6 +1,8 @@
 //! Character controller (Unity's `CharacterController`) on Rapier's
 //! `KinematicCharacterController`: a kinematic capsule that slides along
 //! walls, climbs steps and slopes up to a limit and snaps down to the ground.
+//! It pushes dynamic bodies it walks into (`CharacterMotor::push_mass`) and
+//! reports every collider it runs into as a [`ControllerHit`] event.
 
 use glam::Vec3;
 use olvin_ecs::{Entity, World};
@@ -8,9 +10,11 @@ use olvin_scene::Transform;
 use olvin_scene::file::CharacterControllerDesc;
 use olvin_transform::{Parent, world_matrix};
 use rapier3d::control::{
-    CharacterAutostep, CharacterLength, EffectiveCharacterMovement, KinematicCharacterController,
+    CharacterAutostep, CharacterCollision, CharacterLength, EffectiveCharacterMovement,
+    KinematicCharacterController,
 };
 use rapier3d::prelude as rp;
+use serde::{Deserialize, Serialize};
 
 use crate::{Body, FIXED_DT, Physics, g, v};
 
@@ -19,8 +23,9 @@ use crate::{Body, FIXED_DT, Physics, g, v};
 /// x/z from input every frame and y once for a jump. Every fixed step gravity
 /// is added to `velocity.y`, the capsule is moved by `velocity * dt` with
 /// collisions, and `grounded` is updated. Landing or hitting a ceiling zeroes
-/// the vertical speed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// the vertical speed. Serializable, so saves keep a jump in mid-air.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CharacterMotor {
     pub velocity: Vec3,
     /// Standing on something walkable after the last step.
@@ -29,6 +34,9 @@ pub struct CharacterMotor {
     pub sliding: bool,
     /// 0 turns gravity off (flying, ladders, or moving only with [`move_character`]).
     pub gravity_scale: f32,
+    /// Mass (kg) dynamic bodies are pushed with; 0 = the character only
+    /// stops at them. Starts at `CharacterControllerDesc::push_mass`.
+    pub push_mass: f32,
 }
 
 impl Default for CharacterMotor {
@@ -38,8 +46,24 @@ impl Default for CharacterMotor {
             grounded: false,
             sliding: false,
             gravity_scale: 1.0,
+            push_mass: CharacterControllerDesc::default().push_mass,
         }
     }
+}
+
+/// A character ran into a collider while moving (Unity's
+/// `OnControllerColliderHit`), sent through `Events<ControllerHit>`: once per
+/// collider and fixed step, also for [`move_character`]. Triggers are not hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControllerHit {
+    pub character: Entity,
+    pub other: Entity,
+    /// Contact point on `other`, world space.
+    pub point: Vec3,
+    /// Surface normal of `other` at the point (towards the character).
+    pub normal: Vec3,
+    /// Unit direction the character was moving in.
+    pub direction: Vec3,
 }
 
 /// Result of [`move_character`].
@@ -105,13 +129,15 @@ pub(crate) fn create(
     )
 }
 
-/// Computes a collision-aware move from the body's latest (pending) pose.
+/// Computes a collision-aware move from the body's latest (pending) pose;
+/// the colliders it ran into are appended to `hits`.
 fn compute(
     physics: &Physics,
     body: rp::RigidBodyHandle,
     character: &Character,
     desired: Vec3,
     dt: f32,
+    hits: &mut Vec<CharacterCollision>,
 ) -> Option<(Vec3, EffectiveCharacterMovement)> {
     let rb = physics.world.bodies.get(body)?;
     let pos = *rb.next_position();
@@ -122,7 +148,7 @@ fn compute(
     let queries = physics.world.query_pipeline_with_filter(filter);
     let movement = character
         .controller
-        .move_shape(dt, &queries, shape, &pos, v(desired), |_| {});
+        .move_shape(dt, &queries, shape, &pos, v(desired), |c| hits.push(c));
     Some((g(pos.translation), movement))
 }
 
@@ -130,7 +156,8 @@ fn compute(
 /// moving character that starts inside the floor (e.g. placed exactly on it)
 /// would stay stuck. A zero move first resolves that.
 fn depenetrate(physics: &mut Physics, body: rp::RigidBodyHandle, character: &Character, dt: f32) {
-    let Some((from, mv)) = compute(physics, body, character, Vec3::ZERO, dt) else {
+    let Some((from, mv)) = compute(physics, body, character, Vec3::ZERO, dt, &mut Vec::new())
+    else {
         return;
     };
     let push = g(mv.translation);
@@ -150,15 +177,80 @@ fn move_unstuck(
     character: &Character,
     desired: Vec3,
     dt: f32,
+    hits: &mut Vec<CharacterCollision>,
 ) -> Option<(Vec3, EffectiveCharacterMovement)> {
-    let first = compute(physics, body, character, desired, dt)?;
+    let first = compute(physics, body, character, desired, dt, hits)?;
     let wanted = Vec3::new(desired.x, 0.0, desired.z).length();
     let got = Vec3::new(first.1.translation.x, 0.0, first.1.translation.z).length();
     if wanted < 1e-5 || got > wanted * 0.05 {
         return Some(first);
     }
     depenetrate(physics, body, character, dt);
-    compute(physics, body, character, desired, dt)
+    hits.clear();
+    compute(physics, body, character, desired, dt, hits)
+}
+
+/// After a move: queues a [`ControllerHit`] per collider hit and pushes the
+/// dynamic ones with Rapier's impulse solver (it transfers the part of the
+/// move the body blocked, scaled by the character/body mass ratio).
+#[allow(clippy::too_many_arguments)]
+fn after_move(
+    physics: &mut Physics,
+    entity: Entity,
+    body: rp::RigidBodyHandle,
+    character: &Character,
+    hits: &[CharacterCollision],
+    desired: Vec3,
+    push_mass: f32,
+    dt: f32,
+) {
+    if hits.is_empty() {
+        return;
+    }
+    let direction = desired.normalize_or_zero();
+    for (i, hit) in hits.iter().enumerate() {
+        // The solver may slide along the same collider several times per move.
+        if hits[..i].iter().any(|h| h.handle == hit.handle) {
+            continue;
+        }
+        if let Some(other) = physics.collider_entity(hit.handle) {
+            physics.hits.push(ControllerHit {
+                character: entity,
+                other,
+                point: g(hit.hit.witness1),
+                normal: g(hit.hit.normal1),
+                direction,
+            });
+        }
+    }
+    if push_mass <= 0.0 {
+        return;
+    }
+    let Some(shape) = physics
+        .world
+        .colliders
+        .get(character.collider)
+        .map(|c| c.shared_shape().clone())
+    else {
+        return;
+    };
+    let filter = rp::QueryFilter::default()
+        .exclude_rigid_body(body)
+        .exclude_sensors();
+    let w = &mut physics.world;
+    let mut queries = w.broad_phase.as_query_pipeline_mut(
+        w.narrow_phase.query_dispatcher(),
+        &mut w.bodies,
+        &mut w.colliders,
+        filter,
+    );
+    character.controller.solve_character_collision_impulses(
+        dt,
+        &mut queries,
+        &*shape,
+        push_mass,
+        hits,
+    );
 }
 
 /// Applies a teleport: `Transform` was moved by gameplay since the last write.
@@ -188,12 +280,25 @@ pub(crate) fn move_characters(world: &mut World, physics: &mut Physics, dt: f32)
     for (e, body, _, _) in &characters {
         sync_teleport(world, physics, *e, *body);
     }
+    let mut hits = Vec::new();
     for (e, body, character, mut motor) in characters {
         motor.velocity += gravity * motor.gravity_scale * dt;
         let desired = motor.velocity * dt;
-        let Some((from, mv)) = move_unstuck(physics, body, &character, desired, dt) else {
+        hits.clear();
+        let Some((from, mv)) = move_unstuck(physics, body, &character, desired, dt, &mut hits)
+        else {
             continue;
         };
+        after_move(
+            physics,
+            e,
+            body,
+            &character,
+            &hits,
+            desired,
+            motor.push_mass,
+            dt,
+        );
         let moved = g(mv.translation);
         if let Some(rb) = physics.world.bodies.get_mut(body) {
             rb.set_next_kinematic_translation(v(from + moved));
@@ -215,8 +320,9 @@ pub(crate) fn move_characters(world: &mut World, physics: &mut Physics, dt: f32)
 
 /// Moves a character right now by `desired` (world space, metres) with
 /// collisions, like Unity's `CharacterController.Move`. Updates `Transform`
-/// and `CharacterMotor::grounded`. `None` if the entity has no controller yet
-/// (it gets one at the next physics step).
+/// and `CharacterMotor::grounded`, pushes bodies and queues hits like a
+/// motor step. `None` if the entity has no controller yet (it gets one at
+/// the next physics step).
 ///
 /// Mixing this with `CharacterMotor::velocity` adds both; set the motor's
 /// `gravity_scale` to 0 to drive the character only from here.
@@ -229,7 +335,14 @@ pub fn move_character(
     let body = world.get::<&Body>(entity).ok()?.handle;
     let character = *world.get::<&Character>(entity).ok()?;
     sync_teleport(world, physics, entity, body);
-    let (from, mv) = move_unstuck(physics, body, &character, desired, FIXED_DT)?;
+    let mut hits = Vec::new();
+    let (from, mv) = move_unstuck(physics, body, &character, desired, FIXED_DT, &mut hits)?;
+    let push_mass = world
+        .get::<&CharacterMotor>(entity)
+        .map_or(0.0, |m| m.push_mass);
+    after_move(
+        physics, entity, body, &character, &hits, desired, push_mass, FIXED_DT,
+    );
     let moved = g(mv.translation);
     let to = from + moved;
     physics

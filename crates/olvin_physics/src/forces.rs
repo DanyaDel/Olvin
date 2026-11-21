@@ -1,10 +1,12 @@
-//! Pushing dynamic bodies from code: forces, impulses, velocity.
+//! Pushing dynamic bodies from code: forces, impulses, velocity; teleports.
 
 use glam::Vec3;
 use olvin_ecs::{Entity, World};
+use olvin_transform::world_matrix;
 use rapier3d::prelude as rp;
 
-use crate::{Body, Kind, Physics, g, v};
+use crate::character::Character;
+use crate::{Body, CharacterMotor, Kind, Physics, g, v};
 
 impl Physics {
     /// Pushes the entity's body with a force in newtons (`ForceMode.Force`).
@@ -51,6 +53,65 @@ impl Physics {
     pub fn velocity(&self, world: &World, entity: Entity) -> Option<Vec3> {
         let handle = dynamic_body(world, entity)?;
         Some(g(self.world.bodies.get(handle)?.linvel()))
+    }
+
+    /// Angular velocity in rad/s around world axes (`Rigidbody.angularVelocity`).
+    pub fn angular_velocity(&self, world: &World, entity: Entity) -> Option<Vec3> {
+        let handle = dynamic_body(world, entity)?;
+        Some(g(self.world.bodies.get(handle)?.angvel()))
+    }
+
+    /// Sets the angular velocity in rad/s. Same rules as [`Physics::apply_force`].
+    pub fn set_angular_velocity(&mut self, world: &World, entity: Entity, w: Vec3) -> bool {
+        let Some(rb) = dynamic_body(world, entity).and_then(|h| self.world.bodies.get_mut(h))
+        else {
+            return false;
+        };
+        rb.set_angvel(v(w), true);
+        true
+    }
+
+    /// Puts the entity's body (any kind) at the world pose of its `Transform`
+    /// right now and stops it: velocities and pending forces are cleared and
+    /// the body is woken, so its contacts are rebuilt from the new pose at the
+    /// next step. A character's `CharacterMotor::velocity` is zeroed too. For
+    /// respawns; a plain `Transform` write is followed at the next step anyway
+    /// (keeping the velocity). False when the entity has no body yet.
+    pub fn teleport(&mut self, world: &World, entity: Entity) -> bool {
+        let Ok(mut body) = world.get::<&mut Body>(entity) else {
+            return false;
+        };
+        let Some(m) = world_matrix(world, entity) else {
+            return false;
+        };
+        let Some(rb) = self.world.bodies.get_mut(body.handle) else {
+            return false;
+        };
+        let (_, rotation, translation) = m.to_scale_rotation_translation();
+        if body.kind == Kind::Character {
+            // Only the position is simulated for characters.
+            rb.set_translation(v(translation), true);
+            if let Ok(mut c) = world.get::<&mut Character>(entity) {
+                c.last = translation;
+            }
+            if let Ok(mut motor) = world.get::<&mut CharacterMotor>(entity) {
+                motor.velocity = Vec3::ZERO;
+            }
+        } else {
+            let pose = rp::Pose::from_parts(
+                v(translation),
+                rp::Rotation::from_array(rotation.normalize().to_array()),
+            );
+            rb.set_position(pose, true);
+            if body.kind == Kind::Kinematic {
+                rb.set_next_kinematic_position(pose);
+            }
+        }
+        rb.set_linvel(rp::Vector::ZERO, true);
+        rb.set_angvel(rp::Vector::ZERO, true);
+        rb.reset_forces(true);
+        body.seen = m;
+        true
     }
 
     /// Forces are one-shot here (Rapier keeps them until cleared).

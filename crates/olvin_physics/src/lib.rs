@@ -5,23 +5,31 @@
 //! Also: character controllers ([`CharacterMotor`], from
 //! `CharacterControllerDesc`), collision/trigger events ([`CollisionEvents`]),
 //! scene queries ([`Physics::raycast`], [`Physics::spherecast`]), pushing bodies
-//! ([`Physics::apply_force`], [`Physics::apply_impulse`], [`Physics::set_velocity`])
-//! and a hook for
+//! ([`Physics::apply_force`], [`Physics::apply_impulse`], [`Physics::set_velocity`]),
+//! controller hits ([`ControllerHit`] through `Events`) and a hook for
 //! code that must run before every fixed step ([`FixedSystems`]).
+//!
+//! Who owns the pose: kinematic bodies follow `Transform` every step; dynamic
+//! and static (collider without `Rigidbody`) bodies are teleported when gameplay
+//! writes their `Transform` (compared with the pose physics last saw, so an
+//! untouched body costs one matrix compare per step). A teleport has no
+//! velocity: a static collider that moves every frame should be Kinematic to
+//! push things properly. Scale is baked into the shape at creation and is not
+//! followed.
 
 mod character;
 mod events;
 mod forces;
 mod query;
 
-pub use character::{CharacterMotor, CharacterMove, move_character};
+pub use character::{CharacterMotor, CharacterMove, ControllerHit, move_character};
 pub use events::{CollisionEvent, CollisionEvents};
 pub use query::Hit;
 
 use std::sync::mpsc;
 
-use glam::{Quat, Vec3};
-use olvin_core::{App, Plugin, Resources, Stage, Time};
+use glam::{Mat4, Quat, Vec3};
+use olvin_core::{App, Events, Plugin, Resources, Stage, Time};
 use olvin_ecs::{EcsPlugin, Entity, World};
 use olvin_scene::file::{
     BodyKind, CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc,
@@ -40,6 +48,9 @@ const MAX_STEPS_PER_FRAME: u32 = 5;
 pub struct Body {
     pub handle: rp::RigidBodyHandle,
     kind: Kind,
+    /// World matrix of the `Transform` the body was last synced with: a
+    /// different one means gameplay moved a fixed or dynamic body.
+    seen: Mat4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +67,8 @@ pub struct Physics {
     accumulator: f32,
     /// Bodies with a force pending, cleared after the step.
     forced: Vec<rp::RigidBodyHandle>,
+    /// Controller hits since the last step, moved into `Events<ControllerHit>`.
+    pub(crate) hits: Vec<ControllerHit>,
     collector: rp::ChannelEventCollector,
     collisions: mpsc::Receiver<rp::CollisionEvent>,
     // The collector needs these channels; their events are not used.
@@ -75,6 +88,7 @@ impl Physics {
             world,
             accumulator: 0.0,
             forced: Vec::new(),
+            hits: Vec::new(),
             collector: rp::ChannelEventCollector::new(cs, fs, ts),
             collisions,
             _forces,
@@ -163,6 +177,7 @@ impl Plugin for PhysicsPlugin {
             .insert_resource(Physics::new(self.gravity))
             .init_resource::<CollisionEvents>()
             .init_resource::<FixedSystems>()
+            .add_event::<ControllerHit>()
             .add_system(Stage::PreUpdate, |res| {
                 let dt = res.fetch::<Time>().delta();
                 step(res, dt);
@@ -172,8 +187,9 @@ impl Plugin for PhysicsPlugin {
 
 /// One frame of physics: create new bodies (and drop those of despawned
 /// entities), then for every due fixed step: run [`FixedSystems`], push
-/// kinematic poses, move characters, simulate, pull dynamic poses.
-/// [`CollisionEvents`] (if present) holds this frame's events afterwards.
+/// teleported fixed/dynamic bodies and kinematic poses, move characters,
+/// simulate, pull dynamic poses. [`CollisionEvents`] (if present) holds this
+/// frame's events afterwards; controller hits go to `Events<ControllerHit>`.
 pub fn step(res: &Resources, dt: f32) {
     let steps = {
         let mut physics = res.fetch_mut::<Physics>();
@@ -193,12 +209,56 @@ pub fn step(res: &Resources, dt: f32) {
         let mut physics = res.fetch_mut::<Physics>();
         let mut world = res.fetch_mut::<World>();
         create_bodies(&mut world, &mut physics);
+        sync_moved(&world, &mut physics);
         push_kinematic(&world, &mut physics);
         character::move_characters(&mut world, &mut physics, FIXED_DT);
         physics.step_with_events();
         pull_poses(&mut world, &physics);
         let mut events = res.get_mut::<CollisionEvents>();
         events::drain(&physics, events.as_deref_mut());
+        send_hits(res, &mut physics);
+    }
+}
+
+/// Moves the step's controller hits (and those of [`move_character`] calls
+/// since the last step) into `Events<ControllerHit>`, or drops them.
+fn send_hits(res: &Resources, physics: &mut Physics) {
+    match res.get_mut::<Events<ControllerHit>>() {
+        Some(mut events) => events.send_batch(physics.hits.drain(..)),
+        None => physics.hits.clear(),
+    }
+}
+
+/// The matrix [`sync_moved`] compares: the local one for roots (cheap), the
+/// whole parent chain for children.
+fn current_matrix(world: &World, e: Entity, t: &Transform, parented: bool) -> Option<Mat4> {
+    if parented {
+        world_matrix(world, e)
+    } else {
+        Some(t.matrix())
+    }
+}
+
+/// Teleports fixed and dynamic bodies whose `Transform` gameplay changed
+/// since physics last saw it. Velocity is kept, like setting
+/// `transform.position` of a Unity rigidbody.
+fn sync_moved(world: &World, physics: &mut Physics) {
+    let moved: Vec<(Entity, rp::RigidBodyHandle, Mat4)> = world
+        .query::<(Entity, &Body, &Transform, Option<&Parent>)>()
+        .iter()
+        .filter(|(_, b, _, _)| matches!(b.kind, Kind::Fixed | Kind::Dynamic))
+        .filter_map(|(e, b, t, parent)| {
+            let m = current_matrix(world, e, t, parent.is_some())?;
+            (m != b.seen).then_some((e, b.handle, m))
+        })
+        .collect();
+    for (e, handle, m) in moved {
+        if let Some(rb) = physics.world.bodies.get_mut(handle) {
+            rb.set_position(pose(&decompose(m)), true);
+        }
+        if let Ok(mut b) = world.get::<&mut Body>(e) {
+            b.seen = m;
+        }
     }
 }
 
@@ -268,6 +328,11 @@ fn pull_poses(world: &mut World, physics: &Physics) {
         if let Ok(mut c) = world.get::<&mut character::Character>(e) {
             c.last = translation;
         }
+        if let Some(m) = world_matrix(world, e)
+            && let Ok(mut b) = world.get::<&mut Body>(e)
+        {
+            b.seen = m;
+        }
     }
 }
 
@@ -328,9 +393,8 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
         .collect();
     for mut p in pending {
         // Bodies live in world space: use the world pose of parented objects.
-        if let Some(m) = world_matrix(world, p.entity) {
-            p.transform = decompose(m);
-        }
+        let seen = world_matrix(world, p.entity).unwrap_or_else(|| p.transform.matrix());
+        p.transform = decompose(seen);
         let data = entity_bits(p.entity);
         if let Some(desc) = &p.character {
             if p.rigidbody.is_some() {
@@ -343,12 +407,17 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
                     Body {
                         handle: body,
                         kind: Kind::Character,
+                        seen,
                     },
                     character,
                 ),
             );
             if world.get::<&CharacterMotor>(p.entity).is_err() {
-                let _ = world.insert_one(p.entity, CharacterMotor::default());
+                let motor = CharacterMotor {
+                    push_mass: desc.push_mass,
+                    ..Default::default()
+                };
+                let _ = world.insert_one(p.entity, motor);
             }
             continue;
         }
@@ -396,7 +465,7 @@ fn create_bodies(world: &mut World, physics: &mut Physics) {
             }
             None => log::warn!("mesh collider without geometry: body has no collider"),
         }
-        let _ = world.insert_one(p.entity, Body { handle, kind });
+        let _ = world.insert_one(p.entity, Body { handle, kind, seen });
     }
 }
 
@@ -926,6 +995,146 @@ mod tests {
         // Долгий кадр (подвисание) не превращается в лавину шагов.
         assert_eq!(physics.advance(10.0), MAX_STEPS_PER_FRAME);
         assert_eq!(physics.advance(0.0), 0);
+    }
+
+    #[test]
+    fn static_and_dynamic_bodies_follow_a_moved_transform() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let (wall, ball) = {
+            let mut world = res.fetch_mut::<World>();
+            let wall = world.spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+            ));
+            let ball = world.spawn((
+                Transform::from_xyz(0.0, 0.0, 10.0),
+                ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+                RigidbodyDesc::default(),
+            ));
+            (wall, ball)
+        };
+        step(&res, FIXED_DT);
+        {
+            let world = res.fetch::<World>();
+            let mut physics = res.fetch_mut::<Physics>();
+            assert!(physics.set_velocity(&world, ball, Vec3::X));
+            world.get::<&mut Transform>(wall).unwrap().translation = Vec3::new(5.0, 0.0, 0.0);
+            world.get::<&mut Transform>(ball).unwrap().translation = Vec3::new(0.0, 0.0, -10.0);
+        }
+        step(&res, FIXED_DT);
+        step(&res, FIXED_DT);
+        let world = res.fetch::<World>();
+        let physics = res.fetch::<Physics>();
+        let hit = physics
+            .raycast(Vec3::new(5.0, 5.0, 0.0), Vec3::NEG_Y, 10.0)
+            .expect("the static box moved with its Transform");
+        assert_eq!(hit.entity, wall);
+        assert!(
+            physics
+                .raycast(Vec3::new(0.0, 5.0, 0.0), Vec3::NEG_Y, 10.0)
+                .is_none(),
+            "nothing left at the old place"
+        );
+        let at = world.get::<&Transform>(ball).unwrap().translation;
+        assert!(
+            at.abs_diff_eq(Vec3::new(2.0 * FIXED_DT, 0.0, -10.0), 1e-3),
+            "teleported, velocity kept: {at}"
+        );
+    }
+
+    #[test]
+    fn teleport_stops_the_body() {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let ball = res.fetch_mut::<World>().spawn((
+            Transform::IDENTITY,
+            ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 }),
+            RigidbodyDesc::default(),
+        ));
+        step(&res, FIXED_DT);
+        {
+            let world = res.fetch::<World>();
+            let mut physics = res.fetch_mut::<Physics>();
+            physics.set_velocity(&world, ball, Vec3::new(3.0, 0.0, 0.0));
+            physics.set_angular_velocity(&world, ball, Vec3::Y);
+            world.get::<&mut Transform>(ball).unwrap().translation = Vec3::new(0.0, 7.0, 0.0);
+            assert!(physics.teleport(&world, ball));
+        }
+        step(&res, FIXED_DT);
+        let world = res.fetch::<World>();
+        let physics = res.fetch::<Physics>();
+        assert_eq!(physics.velocity(&world, ball), Some(Vec3::ZERO));
+        assert_eq!(physics.angular_velocity(&world, ball), Some(Vec3::ZERO));
+        let at = world.get::<&Transform>(ball).unwrap().translation;
+        assert!(at.abs_diff_eq(Vec3::new(0.0, 7.0, 0.0), 1e-5), "{at}");
+    }
+
+    /// A character walking at a 2 kg box along -Z for two seconds; returns how
+    /// far the box moved and the hit events.
+    fn walk_into_box(push_mass: f32) -> (f32, Entity, Vec<ControllerHit>) {
+        let mut res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+        res.insert(Events::<ControllerHit>::default());
+        let (c, box_) = {
+            let mut world = res.fetch_mut::<World>();
+            ground(&mut world);
+            let c = world.spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                CharacterControllerDesc {
+                    push_mass,
+                    ..Default::default()
+                },
+            ));
+            let box_ = world.spawn((
+                Transform::from_xyz(0.0, 0.5, -2.0),
+                ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }),
+                RigidbodyDesc {
+                    mass: 2.0,
+                    ..Default::default()
+                },
+            ));
+            (c, box_)
+        };
+        run(&res, c, Vec3::ZERO, 30);
+        let before = res
+            .fetch::<World>()
+            .get::<&Transform>(box_)
+            .unwrap()
+            .translation;
+        run(&res, c, Vec3::new(0.0, 0.0, -3.0), 120);
+        let after = res
+            .fetch::<World>()
+            .get::<&Transform>(box_)
+            .unwrap()
+            .translation;
+        let mut cursor = olvin_core::EventCursor::default();
+        let hits = res
+            .fetch::<Events<ControllerHit>>()
+            .read(&mut cursor)
+            .copied()
+            .filter(|h| h.character == c)
+            .collect();
+        (before.z - after.z, box_, hits)
+    }
+
+    #[test]
+    fn character_pushes_dynamic_bodies_and_reports_hits() {
+        let (moved, box_, hits) = walk_into_box(80.0);
+        assert!(moved > 2.0, "pushed along: {moved} m");
+        assert!(moved < 7.0, "not launched: {moved} m");
+        let hit = hits
+            .iter()
+            .find(|h| h.other == box_)
+            .expect("a hit on the box");
+        assert!(hit.normal.abs_diff_eq(Vec3::Z, 0.1), "{hit:?}");
+        assert!(hit.direction.z < -0.9, "{hit:?}");
+        assert!(hit.point.z < -0.3, "on the box's near face: {hit:?}");
+        assert!(
+            hits.iter().any(|h| h.other != box_),
+            "the floor is hit too (gravity)"
+        );
+
+        let (still, _, hits) = walk_into_box(0.0);
+        assert!(still.abs() < 0.1, "push_mass 0 only blocks: {still} m");
+        assert!(hits.iter().any(|h| h.other == box_));
     }
 
     #[test]

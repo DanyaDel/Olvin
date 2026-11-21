@@ -1,6 +1,5 @@
--- Beacon: spins, bobs, and greets whoever walks into its trigger sphere.
--- Lua sees only its own entity's transform, lookups by name, physics and input:
--- no sound, no HUD, no game resources (see GAPS.md).
+-- Beacon: spins, bobs, and greets whoever walks into its trigger sphere with
+-- a chirp (positional, at the beacon) and a HUD message.
 return {
     params = {
         { name = "speed", kind = "float", default = 90, doc = "spin, degrees per second" },
@@ -15,16 +14,18 @@ return {
     end,
 
     update = function(self, ctx)
-        self.t = self.t + ctx:dt()
-        ctx:rotate_euler_deg(vec3(0, self.params.speed * ctx:dt(), 0))
+        local dt = ctx:dt()
+        self.t = self.t + dt
+        ctx:rotate_euler_deg_xyz(0, self.params.speed * dt, 0)
         local y = self.base.y + math.sin(self.t * 2) * self.params.bob
-        ctx:set_position(vec3(self.base.x, y, self.base.z))
+        ctx:set_position_xyz(self.base.x, y, self.base.z)
     end,
 
     on_trigger_enter = function(self, ctx, other)
         if other == ctx:find_by_name("Player") then
             self.visits = self.visits + 1
-            ctx:log("beacon: hello, player (visit " .. self.visits .. ")")
+            ctx:play_sound_at("sfx/thud.wav", ctx:entity(), { pitch = 1.8, volume = 0.6, max_distance = 15 })
+            ctx:send("hud", "Маяк: привет (" .. self.visits .. ")")
         end
     end,
 }

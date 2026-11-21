@@ -7,9 +7,12 @@
 //! `fixed_update` before each physics step, collision/trigger callbacks from
 //! `olvin_physics`, `on_destroy` on despawn.
 //!
+//! Behaviours talk to each other and to the game with [`ScriptMessage`]s
+//! (`on_message`) and share named values in [`ScriptVars`].
+//!
 //! Features: `input` gives `ScriptCtx::input()` (olvin_input actions),
 //! `physics` gives fixed updates, collision callbacks, raycasts and the
-//! character motor. Without them the crate only needs core + ECS. `lua` (off
+//! character motor, `audio` lets Lua scripts play sounds (olvin_audio). Without them the crate only needs core + ECS. `lua` (off
 //! by default) adds behaviours written in Lua 5.4 with hot reload: see
 //! the `lua` module.
 
@@ -18,12 +21,14 @@ pub mod builtin;
 mod ctx;
 #[cfg(feature = "lua")]
 pub mod lua;
+mod message;
 mod params;
 mod registry;
 mod runtime;
 
 pub use behaviour::Behaviour;
 pub use ctx::{ScriptCtx, TimeInfo};
+pub use message::{ScriptMessage, ScriptValue, ScriptVars};
 pub use olvin_scene::file::ScriptDesc;
 pub use params::{FromParams, ParamKind, ParamSpec, Params, format_vec3, parse_bool, parse_vec3};
 pub use registry::{ScriptRegistry, ScriptSchema};
@@ -61,7 +66,8 @@ impl Scripts {
 }
 
 /// Runs scripts. Inserts [`ScriptRegistry`] (with built-ins unless
-/// `builtins` is false) and [`ScriptRuntime`]; `update` in `Stage::Update`,
+/// `builtins` is false), [`ScriptRuntime`], [`ScriptVars`] and the
+/// `Events<ScriptMessage>` queue; `update` in `Stage::Update`,
 /// `fixed_update` through `olvin_physics::FixedSystems` (feature `physics`).
 pub struct ScriptPlugin {
     pub builtins: bool,
@@ -77,7 +83,9 @@ impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
             .init_resource::<ScriptRegistry>()
-            .init_resource::<ScriptRuntime>();
+            .init_resource::<ScriptRuntime>()
+            .init_resource::<ScriptVars>()
+            .add_event::<ScriptMessage>();
         if self.builtins {
             builtin::register_all(&mut app.resources.fetch_mut::<ScriptRegistry>());
         }

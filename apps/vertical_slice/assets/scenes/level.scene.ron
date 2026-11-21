@@ -34,19 +34,20 @@
             mesh: Some((shape: Cube, color: (0.42, 0.45, 0.5, 1.0))),
             collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
 
-        // The door: a kinematic body that follows its Transform (the game slides it up).
+        // The door: a kinematic body that follows its Transform (door.lua slides it up
+        // while the shared variable `door_open` is set; plate.lua sets it).
         (id: 20, name: "Door", position: (0.0, 1.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (2.4, 3.0, 0.3),
             mesh: Some((shape: Cube, color: (0.75, 0.2, 0.15, 1.0))),
             collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0)),
             rigidbody: Some((kind: Kinematic, mass: 1.0, drag: 0.0, angular_drag: 0.05, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
-            components: {"DoorState": "(open: false, closed_y: 1.5, lift: 3.1)"}),
+            scripts: [(name: "door", params: {"lift": "3.1", "speed": "1.5"})]),
 
         // Pressure plate: a flat marker plus an invisible trigger volume above it.
         (id: 30, name: "Plate", position: (4.0, 0.03, 6.0), rotation: (0.0, 0.0, 0.0), scale: (2.0, 0.06, 2.0),
             mesh: Some((shape: Cube, color: (0.9, 0.75, 0.1, 1.0)))),
         (id: 31, name: "Plate Trigger", position: (4.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (2.0, 2.0, 2.0),
             collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: true, friction: 0.6, restitution: 0.0)),
-            scripts: [(name: "DoorSwitch", params: {"door": "Door", "message": "Дверь открыта: зайди к роботу"})]),
+            scripts: [(name: "plate", params: {"door": "Door", "message": "Дверь открыта: зайди к роботу"})]),
 
         // Things to push around.
         (id: 40, name: "Crate 1", position: (-4.0, 0.5, 5.0), rotation: (0.0, 10.0, 0.0), scale: (1.0, 1.0, 1.0),

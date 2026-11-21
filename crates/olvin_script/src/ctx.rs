@@ -10,7 +10,7 @@ use olvin_ecs::{Component, Entity, World};
 use olvin_scene::{Name, Tag, Transform};
 use olvin_transform::world_matrix;
 
-use crate::Behaviour;
+use crate::{Behaviour, ScriptMessage, ScriptValue, ScriptVars};
 
 /// Frame timing as seen by the current callback.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -169,6 +169,39 @@ impl<'a> ScriptCtx<'a> {
 
     pub fn res_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         self.res.get_mut::<T>()
+    }
+
+    // --- Messages and shared variables -----------------------------------
+
+    /// Sends a [`ScriptMessage`] from this entity: to `target`, or to every
+    /// behaviour with `None`. Delivered (`on_message`) in the next `update`
+    /// pass; game systems can read `Events<ScriptMessage>` too. False when
+    /// there is no queue (no `ScriptPlugin`).
+    pub fn send_message(
+        &self,
+        name: &str,
+        value: impl Into<ScriptValue>,
+        target: Option<Entity>,
+    ) -> bool {
+        let Some(mut events) = self.res.get_mut::<olvin_core::Events<ScriptMessage>>() else {
+            return false;
+        };
+        events.send(ScriptMessage {
+            name: name.to_owned(),
+            value: value.into(),
+            from: Some(self.entity),
+            target,
+        });
+        true
+    }
+
+    /// The shared [`ScriptVars`], if the plugin added them.
+    pub fn vars(&self) -> Option<Ref<'_, ScriptVars>> {
+        self.res.get::<ScriptVars>()
+    }
+
+    pub fn vars_mut(&self) -> Option<RefMut<'_, ScriptVars>> {
+        self.res.get_mut::<ScriptVars>()
     }
 
     // --- Time ------------------------------------------------------------

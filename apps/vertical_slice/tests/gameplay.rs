@@ -9,7 +9,8 @@ use olvin::anim::Animator;
 use olvin::game::{SaveSlots, State};
 use olvin::input::Input;
 use olvin::prelude::*;
-use vertical_slice::door::DoorState;
+use olvin::script::ScriptVars;
+use vertical_slice::door::DOOR_OPEN;
 use vertical_slice::hud::Hud;
 use vertical_slice::player::{Player, PlayerLook};
 use vertical_slice::robot::{Robot, current_state};
@@ -109,12 +110,18 @@ fn walk_towards(app: &mut App, target: Vec3, n: usize) {
     frames(app, 1);
 }
 
-fn door(app: &App) -> (DoorState, f32) {
+/// How far door.lua lifts the door (its `lift` parameter in the scene).
+const DOOR_LIFT: f32 = 3.1;
+
+/// Whether the door is open (the Lua scripts' shared variable) and its height.
+fn door(app: &App) -> (bool, f32) {
     let e = entity(app, "Door");
-    let world = app.resources.fetch::<World>();
-    let d = *world.get::<&DoorState>(e).unwrap();
-    let y = world.get::<&Transform>(e).unwrap().translation.y;
-    (d, y)
+    let open = app.resources.fetch::<ScriptVars>().flag(DOOR_OPEN);
+    (open, pos(app, e).y)
+}
+
+fn set_door(app: &App, open: bool) {
+    app.resources.fetch_mut::<ScriptVars>().set(DOOR_OPEN, open);
 }
 
 #[test]
@@ -141,11 +148,11 @@ fn level_loads_and_is_wired() {
 #[test]
 fn walking_onto_the_plate_opens_the_door() {
     let mut app = game("plate");
-    let (d, closed_y) = door(&app);
-    assert!(!d.open);
+    let (open, closed_y) = door(&app);
+    assert!(!open);
     walk_towards(&mut app, Vec3::new(4.0, 1.0, 6.0), 90);
-    let (d, _) = door(&app);
-    assert!(d.open, "the plate trigger did not fire");
+    let (open, _) = door(&app);
+    assert!(open, "the plate trigger (plate.lua) did not fire");
     assert!(app.resources.fetch::<Progress>().door_opened);
     assert!(
         app.resources
@@ -156,8 +163,8 @@ fn walking_onto_the_plate_opens_the_door() {
     );
     // The door slides up at 1.5 m/s.
     frames(&mut app, 180);
-    let (d, y) = door(&app);
-    assert!((y - (closed_y + d.lift)).abs() < 0.01, "door at y = {y}");
+    let (_, y) = door(&app);
+    assert!((y - (closed_y + DOOR_LIFT)).abs() < 0.01, "door at y = {y}");
 }
 
 #[test]
@@ -177,12 +184,7 @@ fn save_and_load_round_trip() {
     frames(&mut app, 60); // let the crate stack settle
     let player = entity(&app, "Player");
     let crate_ = entity(&app, "Crate 3");
-    let door_e = entity(&app, "Door");
-    app.resources
-        .fetch::<World>()
-        .get::<&mut DoorState>(door_e)
-        .unwrap()
-        .open = true;
+    set_door(&app, true);
     frames(&mut app, 30);
     let saved_player = pos(&app, player);
     let saved_crate = pos(&app, crate_);
@@ -196,8 +198,8 @@ fn save_and_load_round_trip() {
         let world = app.resources.fetch::<World>();
         let mut physics = app.resources.fetch_mut::<Physics>();
         assert!(physics.set_velocity(&world, crate_, Vec3::new(6.0, 3.0, 0.0)));
-        world.get::<&mut DoorState>(door_e).unwrap().open = false;
     }
+    set_door(&app, false);
     frames(&mut app, 90);
     assert!(pos(&app, crate_).distance(saved_crate) > 0.5);
     assert!(pos(&app, player).distance(saved_player) > 3.0);
@@ -214,8 +216,8 @@ fn save_and_load_round_trip() {
         player_now.distance(saved_player) < 0.1,
         "player {player_now} vs saved {saved_player}"
     );
-    let (d, y) = door(&app);
-    assert!(d.open);
+    let (open, y) = door(&app);
+    assert!(open, "the loaded progress reopens the door for the scripts");
     assert!((y - saved_door_y).abs() < 0.1, "door {y} vs {saved_door_y}");
     assert_eq!(app.resources.fetch::<Progress>().saves, 1);
 }

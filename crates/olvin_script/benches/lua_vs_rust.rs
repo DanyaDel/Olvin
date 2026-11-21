@@ -9,8 +9,10 @@
 //! - `walker`: reads the `Move` input axis and `dt`, moves the Transform;
 //! - Lua twice: with the default instruction limit (a count hook every 1000
 //!   instructions, what games get) and with the limit off;
+//! - `walker fast`: the same walker on the multi-value API
+//!   (`ctx:axis2d_xy`, `ctx:translate_xyz`), no tables;
 //! - Lua-only parts of the walker (one `ctx` call each) to see where its
-//!   time goes.
+//!   time goes, old table API next to the number API.
 //!
 //! Run: `cargo bench -p olvin_script --features lua --bench lua_vs_rust`
 //! (`OLVIN_BENCH_FRAMES=N` changes the number of measured frames).
@@ -89,6 +91,18 @@ return {
 }
 "#;
 
+// The same walker on the multi-value fast path: no tables cross the boundary.
+const LUA_WALKER_FAST: &str = r#"
+return {
+    params = { { name = "speed", kind = "float", default = 3 } },
+    update = function(self, ctx)
+        local mx, my = ctx:axis2d_xy("Move")
+        local s = self.params.speed * ctx:dt()
+        ctx:translate_xyz(mx * s, 0, -my * s)
+    end,
+}
+"#;
+
 // Lua-only breakdown of the walker: which part of the bridge costs what.
 const LUA_PARTS: &[(&str, &str)] = &[
     (
@@ -106,6 +120,26 @@ const LUA_PARTS: &[(&str, &str)] = &[
     (
         "Translate",
         "return { update = function(self, ctx) ctx:translate(vec3(0.01, 0, 0)) end }",
+    ),
+    (
+        "AxisXy",
+        r#"return { update = function(self, ctx) local x, y = ctx:axis2d_xy("Move") end }"#,
+    ),
+    (
+        "TranslateXyz",
+        "return { update = function(self, ctx) ctx:translate_xyz(0.01, 0, 0) end }",
+    ),
+    (
+        "TranslateNums",
+        "return { update = function(self, ctx) ctx:translate(0.01, 0, 0) end }",
+    ),
+    (
+        "Position",
+        "return { update = function(self, ctx) local p = ctx:position() end }",
+    ),
+    (
+        "PositionXyz",
+        "return { update = function(self, ctx) local x, y, z = ctx:position_xyz() end }",
     ),
 ];
 
@@ -148,12 +182,15 @@ fn setup(case: &Case) -> (App, Option<LuaScripts>, Entity) {
             Impl::Rust => {
                 registry.register::<Empty>("Empty");
                 registry.register::<Walker>("Walker");
+                registry.register::<Walker>("WalkerFast");
                 None
             }
             Impl::Lua(limits) => {
                 let mut lua = LuaScripts::with_limits(*limits).expect("lua state");
                 lua.load_source(&mut registry, "Empty", LUA_EMPTY).unwrap();
                 lua.load_source(&mut registry, "Walker", LUA_WALKER)
+                    .unwrap();
+                lua.load_source(&mut registry, "WalkerFast", LUA_WALKER_FAST)
                     .unwrap();
                 for (name, source) in LUA_PARTS {
                     lua.load_source(&mut registry, name, source).unwrap();
@@ -258,6 +295,16 @@ fn main() {
             script: "Walker",
         },
         Case {
+            label: "lua   walker fast (*_xy/_xyz)",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "WalkerFast",
+        },
+        Case {
+            label: "lua   walker fast (no limit)",
+            imp: Impl::Lua(no_limit),
+            script: "WalkerFast",
+        },
+        Case {
             label: "lua   part: pure Lua, no ctx",
             imp: Impl::Lua(LuaLimits::default()),
             script: "PureLua",
@@ -277,13 +324,38 @@ fn main() {
             imp: Impl::Lua(LuaLimits::default()),
             script: "Translate",
         },
+        Case {
+            label: "lua   part: ctx:axis2d_xy(\"Move\")",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "AxisXy",
+        },
+        Case {
+            label: "lua   part: ctx:translate_xyz(x,y,z)",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "TranslateXyz",
+        },
+        Case {
+            label: "lua   part: ctx:translate(x,y,z)",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "TranslateNums",
+        },
+        Case {
+            label: "lua   part: ctx:position()",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "Position",
+        },
+        Case {
+            label: "lua   part: ctx:position_xyz()",
+            imp: Impl::Lua(LuaLimits::default()),
+            script: "PositionXyz",
+        },
     ];
 
     println!(
         "{ENTITIES} entities x 1 update behaviour, {WARMUP} warmup + {frames} measured frames, run_update per frame"
     );
     println!(
-        "{:<32} {:>10} {:>10} {:>10} {:>12} {:>9}",
+        "{:<38} {:>10} {:>10} {:>10} {:>12} {:>9}",
         "case", "median ms", "min ms", "p90 ms", "ns / update", "% 16.6ms"
     );
     let mut walked = Vec::new();
@@ -291,7 +363,7 @@ fn main() {
         let r = run(case, frames);
         let per_call = r.median.as_secs_f64() * 1e9 / ENTITIES as f64;
         println!(
-            "{:<32} {:>10.3} {:>10.3} {:>10.3} {:>12.1} {:>8.1}%",
+            "{:<38} {:>10.3} {:>10.3} {:>10.3} {:>12.1} {:>8.1}%",
             case.label,
             ms(r.median),
             ms(r.min),
@@ -299,7 +371,7 @@ fn main() {
             per_call,
             ms(r.median) / (1000.0 / 60.0) * 100.0
         );
-        if case.script == "Walker" {
+        if case.script.starts_with("Walker") {
             walked.push((case.label, r.moved));
         }
     }

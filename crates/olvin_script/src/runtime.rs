@@ -4,12 +4,12 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use olvin_core::{Resources, Time};
+use olvin_core::{EventCursor, Events, Resources, Time};
 use olvin_ecs::{Entity, World};
 use olvin_transform::Parent;
 
 use crate::ctx::{Commands, TimeInfo};
-use crate::{Behaviour, Params, ScriptCtx, ScriptRegistry, Scripts};
+use crate::{Behaviour, Params, ScriptCtx, ScriptMessage, ScriptRegistry, Scripts};
 
 /// Marks an entity whose `Scripts` were turned into instances.
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,6 +42,8 @@ pub struct ScriptRuntime {
     /// States restored before the entity's scripts were attached.
     pending_states: HashMap<Entity, ScriptState>,
     warned: HashSet<String>,
+    /// Read position in `Events<ScriptMessage>`.
+    messages: EventCursor,
 }
 
 impl ScriptRuntime {
@@ -326,8 +328,9 @@ pub(crate) fn run_pass(res: &Resources, phase: Phase, dt: Option<f32>) {
         }
     }
 
-    #[cfg(feature = "physics")]
     if phase == Phase::Update {
+        dispatch_messages(&mut rt, &mut env);
+        #[cfg(feature = "physics")]
         dispatch_collisions(&mut rt, &mut env);
     }
 
@@ -345,6 +348,41 @@ pub(crate) fn run_pass(res: &Resources, phase: Phase, dt: Option<f32>) {
     }
 
     apply_commands(&mut rt, &mut env);
+}
+
+/// Messages sent since the previous update pass, to their targets (or to
+/// everyone). Copied out first: handlers may send more (those wait a pass).
+fn dispatch_messages(rt: &mut ScriptRuntime, env: &mut Env<'_>) {
+    let messages: Vec<ScriptMessage> = match env.res.get::<Events<ScriptMessage>>() {
+        Some(ev) => ev.read(&mut rt.messages).cloned().collect(),
+        None => return,
+    };
+    for msg in &messages {
+        match msg.target {
+            Some(target) => {
+                let Some(&i) = rt.index.get(&target) else {
+                    continue;
+                };
+                if !env.world.contains(target) {
+                    continue;
+                }
+                for slot in &mut rt.entries[i].slots {
+                    env.call(target, slot, "on_message", |b, c| b.on_message(c, msg));
+                }
+            }
+            None => {
+                for entry in &mut rt.entries {
+                    let entity = entry.entity;
+                    if !env.world.contains(entity) {
+                        continue;
+                    }
+                    for slot in &mut entry.slots {
+                        env.call(entity, slot, "on_message", |b, c| b.on_message(c, msg));
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(feature = "physics")]

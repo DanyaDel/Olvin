@@ -25,7 +25,7 @@ lua = ["script", "olvin_script/lua"]
 # Action maps over keyboard, mouse and gamepads (gilrs).
 input = ["dep:olvin_input", "olvin_script?/input"]
 # Sound on kira: AudioSource / AudioListener, one-shots, streamed music.
-audio = ["dep:olvin_audio"]
+audio = ["dep:olvin_audio", "olvin_script?/audio"]
 # Game states, background scene loading, save slots.
 game = ["dep:olvin_game"]
 # In-game UI (`olvin::gui`): buttons, labels, layout, gamepad focus; with `render`

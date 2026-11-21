@@ -3521,6 +3521,7 @@ dependencies = [
  "hecs",
  "log",
  "mlua",
+ "olvin_audio",
  "olvin_core",
  "olvin_ecs",
  "olvin_input",

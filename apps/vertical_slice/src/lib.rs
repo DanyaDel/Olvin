@@ -90,10 +90,10 @@ impl Plugin for GamePlugin {
             c.saves.clone().unwrap_or_else(|| paths.resolve("saves")),
         ))
         .init_resource::<hud::Hud>()
+        .init_resource::<door::ScriptInbox>()
         .init_resource::<save::Progress>();
         {
             let mut scripts = app.resources.fetch_mut::<ScriptRegistry>();
-            scripts.register::<door::DoorSwitch>("DoorSwitch");
             scripts.register::<door::Thud>("Thud");
         }
         {
@@ -101,7 +101,6 @@ impl Plugin for GamePlugin {
                 .resources
                 .fetch_mut::<olvin::scene_file::SceneComponents>();
             components
-                .register::<door::DoorState>("DoorState")
                 .register::<player::Player>("Player")
                 .register::<player::PlayerCamera>("PlayerCamera")
                 .register::<player::PlayerLook>("PlayerLook");
@@ -124,9 +123,9 @@ impl Plugin for GamePlugin {
             .add_system(Stage::Update, pause_toggle)
             .add_system_in_state(Stage::Update, GameState::Playing, player::control)
             .add_system_in_state(Stage::Update, GameState::Playing, save::hotkeys)
-            .add_system(Stage::Update, door::animate)
             .add_system(Stage::Update, robot::update)
             .add_system(Stage::Startup, hud::build)
+            .add_system(Stage::PostUpdate, door::bridge)
             .add_system(Stage::Update, hud::update);
     }
 }

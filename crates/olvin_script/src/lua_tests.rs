@@ -329,3 +329,201 @@ fn collision_callbacks_get_the_other_entity() {
     step(&app);
     assert_eq!(x(&app, a), b.to_bits().get() as f32);
 }
+
+#[test]
+fn vectors_fast_paths_and_overloads() {
+    let (app, _lua) = app_with(
+        "Vec",
+        r#"
+        return {
+            update = function(self, ctx)
+                local a = vec3(1, 2, 3) + vec3(1, 1, 1) * 2
+                assert(a == vec3(3, 4, 5), tostring(a))
+                assert(math.abs(vec3(3, 4, 0):length() - 5) < 1e-6)
+                assert((-a).x == -3 and (a / 2).y == 2)
+                assert(getmetatable(a) == "vec3")
+                ctx:set_position(1, 2, 3)            -- three numbers
+                ctx:translate({ 1, 0, 0 })            -- array table
+                ctx:translate_xyz(0, 0, 1)            -- raw fast path
+                local x, y, z = ctx:position_xyz()
+                assert(x == 2 and y == 2 and z == 4)
+                local p = ctx:position()
+                assert(p == vec3(2, 2, 4) and p:distance(vec3(2, 2, 0)) == 4)
+                ctx:set_rotation_euler_deg(0, 90, 0)
+                local r = ctx:rotation_euler_deg()
+                assert(math.abs(r.y - 90) < 1e-3)
+                local mx, my = ctx:axis2d_xy("Move")
+                assert(mx == 0 and my == 0 and ctx:axis2d("Move").x == 0)
+                assert(not pcall(function() ctx:translate("up") end))
+                assert(ctx:unscaled_dt() >= 0 and ctx:time_scale() == 1 and not ctx:paused())
+            end,
+        }
+        "#,
+    );
+    let e = spawn(&app, "Vec", &[]);
+    step(&app);
+    assert_eq!(x(&app, e), 2.0, "asserts held");
+}
+
+#[test]
+fn other_entities_transform_and_names() {
+    let (app, _lua) = app_with(
+        "Mover",
+        r#"
+        return {
+            update = function(self, ctx)
+                local door = ctx:find_by_name("Door")
+                assert(ctx:name_of(door) == "Door" and ctx:has_tag(door, "gate"))
+                ctx:translate_of(door, vec3(0, 1, 0))
+                local p = ctx:position_of(door)
+                ctx:set_scale_of(door, 2, 2, 2)
+                ctx:set_position(p.y, 0, 0)
+                assert(ctx:position_of(424242424242) == nil)
+                assert(ctx:set_position_of(424242424242, 0, 0, 0) == false)
+            end,
+        }
+        "#,
+    );
+    let e = spawn(&app, "Mover", &[]);
+    let door = app.resources.fetch_mut::<World>().spawn((
+        Transform::from_xyz(0.0, 5.0, 0.0),
+        Name("Door".into()),
+        olvin_scene::Tag("gate".into()),
+    ));
+    step(&app);
+    assert_eq!(x(&app, e), 6.0);
+    let w = app.resources.fetch::<World>();
+    assert_eq!(w.get::<&Transform>(door).unwrap().scale, Vec3::splat(2.0));
+}
+
+#[test]
+fn messages_and_vars_between_lua_and_rust() {
+    use olvin_core::{EventCursor, Events};
+    let (app, mut lua) = app_with(
+        "Sender",
+        r#"
+        return {
+            update = function(self, ctx)
+                if not self.sent then
+                    self.sent = true
+                    ctx:send("open", vec3(1, 2, 3), ctx:find_by_name("Box"))
+                    ctx:send("hud", "hello")
+                    ctx:set_var("door_open", true)
+                end
+            end,
+        }
+        "#,
+    );
+    lua.load_source(
+        &mut app.resources.fetch_mut::<ScriptRegistry>(),
+        "Receiver",
+        r#"
+        return {
+            on_message = function(self, ctx, name, value, from)
+                if name == "open" then
+                    assert(from == ctx:find_by_name("hero"))
+                    ctx:set_position(value + vec3(0, 0, ctx:var("bonus") or 0))
+                elseif name == "game" then
+                    ctx:set_var("heard", value)
+                end
+            end,
+        }
+        "#,
+    )
+    .unwrap();
+    spawn(&app, "Sender", &[]);
+    let rx = app.resources.fetch_mut::<World>().spawn((
+        Transform::IDENTITY,
+        Name("Box".into()),
+        Scripts::new().with("Receiver", []),
+    ));
+    app.resources.fetch_mut::<ScriptVars>().set("bonus", 10_i64);
+    step(&app); // Sender sends
+    step(&app); // Receiver gets it
+    {
+        let w = app.resources.fetch::<World>();
+        assert_eq!(
+            w.get::<&Transform>(rx).unwrap().translation,
+            Vec3::new(1.0, 2.0, 13.0)
+        );
+    }
+    assert!(app.resources.fetch::<ScriptVars>().flag("door_open"));
+    // The game reads script messages and sends its own.
+    let mut cursor = EventCursor::default();
+    let names: Vec<String> = app
+        .resources
+        .fetch::<Events<ScriptMessage>>()
+        .read(&mut cursor)
+        .map(|m| m.name.clone())
+        .collect();
+    assert_eq!(names, ["open", "hud"]);
+    app.resources
+        .fetch_mut::<Events<ScriptMessage>>()
+        .send(ScriptMessage::new("game", "hi"));
+    step(&app);
+    assert_eq!(
+        app.resources.fetch::<ScriptVars>().get("heard"),
+        Some(&ScriptValue::Str("hi".into()))
+    );
+}
+
+#[test]
+fn bad_values_are_lua_errors_not_crashes() {
+    let (app, _lua) = app_with(
+        "Bad",
+        r#"
+        return {
+            update = function(self, ctx)
+                assert(not pcall(function() ctx:send("x", function() end) end))
+                assert(not pcall(function() ctx:set_var("x", {}) end))
+                assert(not pcall(function() ctx:send(string.rep("a", 20000)) end))
+                ctx:translate(1, 0, 0)
+                ctx:send("x", {})  -- uncaught: the script is disabled, the frame goes on
+            end,
+        }
+        "#,
+    );
+    let e = spawn(&app, "Bad", &[]);
+    step(&app);
+    step(&app);
+    assert_eq!(x(&app, e), 1.0, "ran once, then skipped");
+    let mut registry = ScriptRegistry::default();
+    let err = LuaScripts::new()
+        .unwrap()
+        .load_source(&mut registry, "NotFn", "return { update = 5 }")
+        .unwrap_err();
+    assert!(err.contains("must be a function"), "{err}");
+}
+
+#[cfg(feature = "audio")]
+#[test]
+fn lua_plays_and_stops_sounds() {
+    use olvin_audio::Audio;
+    let (mut app, _lua) = app_with(
+        "Noisy",
+        r#"
+        return {
+            start = function(self, ctx)
+                self.a = ctx:play_sound("sfx/a.wav", { volume = 0.5, bus = "ambient", loop = true })
+                self.b = ctx:play_sound_at("sfx/b.wav", vec3(1, 2, 3), { max_distance = 10 })
+                self.c = ctx:play_sound_at("sfx/c.wav", ctx:entity())
+                assert(self.a and self.b and self.c)
+                assert(not ctx:sound_playing(self.a)) -- no device in tests
+                assert(not pcall(function() ctx:play_sound("../secret.wav") end))
+                assert(not pcall(function() ctx:play_sound("/etc/passwd") end))
+                assert(not pcall(function() ctx:play_sound("x.wav", { bus = "nope" }) end))
+                ctx:set_sound_volume(self.a, 0.2)
+            end,
+            update = function(self, ctx)
+                ctx:stop_sound(self.a, 0.1)
+                ctx:set_position(1, 0, 0)
+            end,
+        }
+        "#,
+    );
+    app.insert_resource(Audio::disabled("assets"));
+    let e = spawn(&app, "Noisy", &[]);
+    step(&app);
+    assert_eq!(x(&app, e), 1.0, "start's asserts held");
+    assert_eq!(app.resources.fetch::<Audio>().active_count(), 2);
+}

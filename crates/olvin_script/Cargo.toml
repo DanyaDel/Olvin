@@ -14,6 +14,8 @@ input = ["dep:olvin_input"]
 physics = ["dep:olvin_physics"]
 # Behaviours written in Lua 5.4 (mlua, vendored: no system Lua needed), with hot reload.
 lua = ["dep:mlua"]
+# Lua `ctx:play_sound*` / `ctx:play_source` through olvin_audio's `Audio` resource.
+audio = ["dep:olvin_audio"]
 
 [dependencies]
 olvin_core = { path = "../olvin_core" }
@@ -22,6 +24,7 @@ olvin_scene = { path = "../olvin_scene", features = ["serde"] }
 olvin_transform = { path = "../olvin_transform" }
 olvin_input = { path = "../olvin_input", optional = true, default-features = false }
 olvin_physics = { path = "../olvin_physics", optional = true }
+olvin_audio = { path = "../olvin_audio", optional = true }
 # Ref/RefMut/DynamicBundle are not re-exported by olvin_ecs yet.
 hecs.workspace = true
 glam.workspace = true

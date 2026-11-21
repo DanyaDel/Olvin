@@ -2,13 +2,14 @@ use std::any::Any;
 
 use olvin_ecs::Entity;
 
-use crate::ScriptCtx;
+use crate::{ScriptCtx, ScriptMessage};
 
 /// A Unity-style script. Every method is optional.
 ///
 /// Order within a frame: `start` (once, before the script's first other
 /// callback), `fixed_update` before each physics step (PreUpdate), then in
-/// `Stage::Update`: collision/trigger callbacks for the frame's physics events,
+/// `Stage::Update`: messages sent since the previous pass (`on_message`),
+/// collision/trigger callbacks for the frame's physics events,
 /// then `update`. `on_destroy` runs when the entity is despawned through
 /// [`ScriptCtx::despawn`] (entity still alive) or when it disappeared any
 /// other way (entity already gone, `ctx.alive()` is false).
@@ -37,4 +38,9 @@ pub trait Behaviour: Any {
     fn load_state(&mut self, state: &str) -> Result<(), String> {
         Ok(())
     }
+
+    /// A [`ScriptMessage`] addressed to this entity or broadcast (sent by
+    /// [`ScriptCtx::send_message`], a Lua `ctx:send`, or the game through
+    /// `Events<ScriptMessage>`). Delivered once, in the next `update` pass.
+    fn on_message(&mut self, ctx: &mut ScriptCtx<'_>, message: &ScriptMessage) {}
 }

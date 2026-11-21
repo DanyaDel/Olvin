@@ -7,12 +7,13 @@ use olvin::game::{SaveMeta, SaveRegistry, SaveSlots};
 use olvin::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::door::DoorState;
+use crate::door;
 use crate::hud::Hud;
 use crate::player::PlayerLook;
 use crate::{QUICK_SLOT, SCENE};
 
-/// Session-wide state, saved as a resource.
+/// Session-wide state, saved as a resource. `door_opened` mirrors the Lua
+/// scripts' shared variable `door_open` (see `door::bridge`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
     pub door_opened: bool,
@@ -22,7 +23,6 @@ pub struct Progress {
 pub fn register(registry: &mut SaveRegistry) {
     // Transforms, velocities and the character motor come with `SavePlugin`.
     registry
-        .register_component::<DoorState>("door")
         .register_component::<PlayerLook>("look")
         .register_resource::<Progress>("progress");
 }
@@ -51,6 +51,7 @@ pub fn hotkeys(res: &mut Resources) {
 
 /// Snapshots every scene object and [`Progress`] into `slot`.
 pub fn save_slot(res: &Resources, slot: &str) -> Result<(), String> {
+    door::sync_progress(res);
     res.fetch_mut::<Progress>().saves += 1;
     let meta = SaveMeta {
         title: "Quick save".into(),
@@ -81,5 +82,7 @@ pub fn load_slot(res: &Resources, slot: &str) -> Result<(), String> {
     }
     res.fetch::<SaveRegistry>()
         .restore(res, &data)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    door::restore_vars(res);
+    Ok(())
 }

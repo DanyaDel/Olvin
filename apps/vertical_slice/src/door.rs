@@ -1,98 +1,52 @@
-//! The pressure plate and the door it opens, plus crate impact sounds.
+//! The pressure plate and the door are Lua now (`scripts/plate.lua`,
+//! `scripts/door.lua`); this is the Rust side they talk to — the HUD and the
+//! saved progress — plus crate impact sounds.
 
+use olvin::core::{EventCursor, Events};
 use olvin::prelude::*;
-use serde::{Deserialize, Serialize};
+use olvin::script::{ScriptMessage, ScriptVars};
 
 use crate::hud::Hud;
-use crate::player::Player;
 use crate::save::Progress;
 
-/// A sliding door. Carried by the scene file (`components` of the door object,
-/// registered in `GamePlugin`).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DoorState {
-    pub open: bool,
-    /// Height of the door's centre when closed.
-    pub closed_y: f32,
-    /// How far up it slides when open.
-    pub lift: f32,
-}
+/// Shared variable the plate sets and the door follows.
+pub const DOOR_OPEN: &str = "door_open";
 
-pub const DOOR_SPEED: f32 = 1.5;
+/// Read position of [`bridge`] in the script message queue.
+#[derive(Default)]
+pub struct ScriptInbox(EventCursor);
 
-/// Slides doors toward their target height (simulation time: stops on pause).
-/// Doors are kinematic bodies, so the collider follows the `Transform`.
-pub fn animate(res: &mut Resources) {
-    let dt = res.fetch::<Time>().delta();
-    let mut world = res.fetch_mut::<World>();
-    for (t, door) in world.query_mut::<(&mut Transform, &DoorState)>() {
-        let target = door.closed_y + if door.open { door.lift } else { 0.0 };
-        let dy = target - t.translation.y;
-        let step = DOOR_SPEED * dt;
-        t.translation.y += dy.clamp(-step, step);
-    }
-}
-
-/// Behaviour on the plate's trigger: the player stepping in opens the door
-/// named by `door`, plays the door sound there and shows `message`.
-pub struct DoorSwitch {
-    door: String,
-    message: String,
-}
-
-impl FromParams for DoorSwitch {
-    fn from_params(p: &Params) -> Self {
-        Self {
-            door: p.string("door", "Door"),
-            message: p.string("message", "The door is open"),
+/// Script → game: `hud` messages go on screen, `door_open` into [`Progress`]
+/// (which the save slots keep).
+pub fn bridge(res: &mut Resources) {
+    let texts: Vec<String> = {
+        let events = res.fetch::<Events<ScriptMessage>>();
+        let mut inbox = res.fetch_mut::<ScriptInbox>();
+        events
+            .read(&mut inbox.0)
+            .filter(|m| m.name == "hud")
+            .filter_map(|m| m.value.as_str().map(str::to_owned))
+            .collect()
+    };
+    if !texts.is_empty() {
+        let mut hud = res.fetch_mut::<Hud>();
+        for text in &texts {
+            hud.show(text);
         }
     }
-
-    fn schema() -> Vec<ParamSpec> {
-        vec![
-            ParamSpec::string("door", "Door", "name of the door entity"),
-            ParamSpec::string("message", "The door is open", "shown when it opens"),
-        ]
-    }
+    sync_progress(res);
 }
 
-impl Behaviour for DoorSwitch {
-    fn on_trigger_enter(&mut self, ctx: &mut ScriptCtx, other: Entity) {
-        if !ctx.has::<Player>(other) {
-            return;
-        }
-        let Some(door) = ctx.find_by_name(&self.door) else {
-            ctx.warn(format!("no door named `{}`", self.door));
-            return;
-        };
-        let opened = match ctx.get_mut::<DoorState>(door) {
-            Some(mut d) if !d.open => {
-                d.open = true;
-                true
-            }
-            _ => false,
-        };
-        if !opened {
-            return;
-        }
-        let at = ctx.world_position_of(door);
-        if let Some(mut audio) = ctx.res_mut::<Audio>() {
-            audio.play_with(
-                "sfx/door.wav",
-                PlayParams {
-                    volume: 0.9,
-                    max_distance: 30.0,
-                    ..PlayParams::at(at)
-                },
-            );
-        }
-        if let Some(mut hud) = ctx.res_mut::<Hud>() {
-            hud.show(&self.message);
-        }
-        if let Some(mut progress) = ctx.res_mut::<Progress>() {
-            progress.door_opened = true;
-        }
-    }
+/// Copies the scripts' door flag into [`Progress`].
+pub fn sync_progress(res: &Resources) {
+    let open = res.fetch::<ScriptVars>().flag(DOOR_OPEN);
+    res.fetch_mut::<Progress>().door_opened = open;
+}
+
+/// After a load: the restored [`Progress`] tells the scripts whether the door is open.
+pub fn restore_vars(res: &Resources) {
+    let open = res.fetch::<Progress>().door_opened;
+    res.fetch_mut::<ScriptVars>().set(DOOR_OPEN, open);
 }
 
 /// Crates thump when they hit something hard enough.

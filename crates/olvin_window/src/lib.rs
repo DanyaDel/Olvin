@@ -245,10 +245,10 @@ impl ApplicationHandler for Runner {
             }
         };
         let size = window.inner_size();
-        self.app.insert_resource(SurfaceTarget::new(
-            window.clone(),
-            (size.width, size.height),
-        ));
+        self.app.insert_resource(
+            SurfaceTarget::new(window.clone(), (size.width, size.height))
+                .with_scale_factor(window.scale_factor() as f32),
+        );
         self.applied = Some(wanted);
         self.publish_monitors(&window);
         self.app.startup();
@@ -273,6 +273,10 @@ impl ApplicationHandler for Runner {
                     settings.set_resolution(logical.width, logical.height);
                     self.applied = Some(*settings);
                 }
+            }
+            // Moved to a monitor with another display scale (a Resized follows).
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                res.fetch_mut::<SurfaceTarget>().scale_factor = scale_factor as f32;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key

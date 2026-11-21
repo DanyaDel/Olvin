@@ -3,7 +3,7 @@
 //! Disable features (`window`, `render`) for servers, tools or custom platforms;
 //! `scene` adds loading of scenes saved by olvin-editor, `anim` (animation,
 //! no renderer needed) and `assets` (glTF import, asset manager) the crates
-//! behind it.
+//! behind it, `gui` the in-game UI.
 
 pub use glam as math;
 #[cfg(feature = "anim")]
@@ -16,6 +16,8 @@ pub use olvin_core as core;
 pub use olvin_ecs as ecs;
 #[cfg(feature = "game")]
 pub use olvin_game as game;
+#[cfg(feature = "gui")]
+pub use olvin_gui as gui;
 #[cfg(feature = "input")]
 pub use olvin_input as input;
 #[cfg(feature = "physics")]
@@ -25,6 +27,8 @@ pub use olvin_render as render;
 pub use olvin_scene as scene;
 #[cfg(feature = "script")]
 pub use olvin_script as script;
+#[cfg(feature = "gui")]
+pub use olvin_text as text;
 pub use olvin_transform as transform;
 #[cfg(feature = "window")]
 pub use olvin_window as window;
@@ -90,6 +94,11 @@ impl Plugin for DefaultPlugins {
             assets_dir: self.audio.assets_dir.clone(),
             enabled: self.audio.enabled,
         });
+        // After input: the UI adds its actions to the map.
+        #[cfg(all(feature = "gui", feature = "render"))]
+        app.add_plugin(olvin_gui::GuiRenderPlugin::default());
+        #[cfg(all(feature = "gui", not(feature = "render")))]
+        app.add_plugin(olvin_gui::GuiPlugin);
     }
 }
 
@@ -102,6 +111,10 @@ pub mod prelude {
     pub use olvin_audio::{Audio, AudioListener, AudioPlugin, PlayParams};
     pub use olvin_core::{App, AppExit, Plugin, Resources, Stage, Time};
     pub use olvin_ecs::{Entity, World};
+    #[cfg(all(feature = "gui", feature = "render"))]
+    pub use olvin_gui::GuiRenderPlugin;
+    #[cfg(feature = "gui")]
+    pub use olvin_gui::{Gui, GuiPlugin, Node, NodeId, UiEvent};
     #[cfg(feature = "input")]
     pub use olvin_input::{ActionState, Binding, InputMap, InputPlugin};
     #[cfg(feature = "physics")]

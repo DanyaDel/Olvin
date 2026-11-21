@@ -99,7 +99,8 @@ pub(crate) struct QuadBatcher {
 }
 
 impl QuadBatcher {
-    /// `color` / `samples` / `depth` must match the pass `draw` goes into.
+    /// `color` / `samples` / `depth` must match the pass `draw` goes into
+    /// (`None`: a pass without a depth attachment, like the screen overlay).
     /// With `depth_test` the quads are hidden by nearer geometry (they never
     /// write depth); without it they paint over everything.
     pub fn new(
@@ -107,7 +108,7 @@ impl QuadBatcher {
         queue: &wgpu::Queue,
         color: wgpu::TextureFormat,
         samples: u32,
-        depth: wgpu::TextureFormat,
+        depth: Option<wgpu::TextureFormat>,
         depth_test: bool,
     ) -> Self {
         let module = device.create_shader_module(wgpu::include_wgsl!("quad.wgsl"));
@@ -183,8 +184,8 @@ impl QuadBatcher {
                     })],
                 },
                 primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: depth,
+                depth_stencil: depth.map(|format| wgpu::DepthStencilState {
+                    format,
                     depth_write_enabled: Some(false),
                     depth_compare: Some(if depth_test {
                         wgpu::CompareFunction::Less
@@ -492,6 +493,12 @@ mod tests {
 
         /// Draws into a cleared (black) target and returns RGB at (x, y).
         fn render(&self, draw: impl FnOnce(&mut wgpu::RenderPass<'_>)) -> Pixels {
+            self.render_with(true, draw)
+        }
+
+        /// As [`Self::render`]; `depth: false` gives a pass without a depth
+        /// attachment (the overlay's).
+        fn render_with(&self, depth: bool, draw: impl FnOnce(&mut wgpu::RenderPass<'_>)) -> Pixels {
             let device = &self.core.device;
             let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
             let extent = wgpu::Extent3d {
@@ -509,7 +516,7 @@ mod tests {
                 usage: rt | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let depth = device
+            let depth_view = device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: None,
                     size: extent,
@@ -541,13 +548,15 @@ mod tests {
                             store: wgpu::StoreOp::Store,
                         },
                     })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &depth,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Discard,
-                        }),
-                        stencil_ops: None,
+                    depth_stencil_attachment: depth.then_some({
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Discard,
+                            }),
+                            stencil_ops: None,
+                        }
                     }),
                     ..Default::default()
                 });
@@ -649,6 +658,59 @@ mod tests {
         assert_eq!(px(15, 3), [0, 0, 0]);
         assert_eq!(px(5, 10), [0, 0, 0]);
         assert_eq!(px(5, 60), [0, 0, 0]);
+    }
+
+    #[test]
+    fn overlay_paints_in_order_without_depth() {
+        let Some(mut h) = Harness::new() else {
+            return;
+        };
+        let tex = h.texture(2, 1, &[RED, BLUE]);
+        let mut overlay = crate::Overlay::default();
+        overlay.rect(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(32.0, 64.0),
+            Color::rgb(0.0, 1.0, 0.0),
+        );
+        // Later quads go on top; the left texel of `tex` only.
+        overlay.image(
+            Vec2::new(16.0, 0.0),
+            Vec2::new(48.0, 16.0),
+            tex,
+            (Vec2::ZERO, Vec2::new(0.5, 1.0)),
+            Color::WHITE,
+        );
+        // Half-transparent white over black: linear 0.5 -> sRGB 188.
+        overlay.rect(
+            Vec2::new(0.0, 48.0),
+            Vec2::new(8.0, 56.0),
+            Color([1.0, 1.0, 1.0, 0.5]),
+        );
+        // Degenerate and invisible quads are dropped.
+        overlay.rect(Vec2::new(60.0, 0.0), Vec2::new(60.0, 64.0), Color::WHITE);
+        overlay.rect(
+            Vec2::new(56.0, 0.0),
+            Vec2::new(64.0, 8.0),
+            Color([1.0; 4].map(|_| 0.0)),
+        );
+        let mut r = crate::OverlayRenderer::new(&h.core.device, &h.core.queue, FORMAT);
+        let draws = r.prepare(
+            &h.core.device,
+            &h.core.queue,
+            &h.gpu,
+            &overlay,
+            (SIZE, SIZE),
+        );
+        assert_eq!(draws, 3, "white, texture, white");
+        let px = h.render_with(false, |pass| r.draw(pass));
+        assert_eq!(px(4, 32), [0, 255, 0]);
+        assert_eq!(px(20, 8), [255, 0, 0], "texture over the rect");
+        let mid = px(31, 8); // uv ≈ 0.25: the left texel's centre
+        assert!(mid[0] > 240 && mid[2] < 40, "{mid:?}");
+        assert_eq!(px(40, 32), [0, 0, 0]);
+        let grey = px(4, 52);
+        assert!((180..=196).contains(&grey[0]), "{grey:?}");
+        assert_eq!(px(60, 4), [0, 0, 0]);
     }
 
     #[test]

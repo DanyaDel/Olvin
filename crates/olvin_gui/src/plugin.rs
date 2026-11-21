@@ -95,11 +95,19 @@ pub struct Gui {
     pub theme: Theme,
     pub actions: UiActions,
     pub repeat: NavRepeat,
-    /// Text sizes for layout. Replace with a font-backed measure once a text renderer exists.
+    /// Text sizes for layout. `GuiRenderPlugin` (feature `render`) puts the
+    /// real font here; the default is a [`Monospace`] estimate.
     pub measure: Box<dyn TextMeasure>,
-    /// Viewport in pixels. The plugin keeps it equal to `SurfaceTarget.size`
-    /// when there is one; set it yourself for headless use.
+    /// Viewport in UI pixels. The plugin keeps it equal to
+    /// `SurfaceTarget.size / scale` when there is one; set it yourself for headless use.
     pub viewport: Vec2,
+    /// Extra zoom on top of the display scale (a "UI size" setting), 1 = none.
+    pub ui_scale: f32,
+    /// Physical pixels per UI pixel: `SurfaceTarget.scale_factor × ui_scale`,
+    /// written by the plugin every frame (`ui_scale` alone without a surface).
+    /// Layout, node sizes and text sizes are in UI pixels; the renderer
+    /// multiplies by this, and the pointer is divided by it.
+    pub scale: f32,
     /// Output of the last frame, for the renderer.
     pub draw: DrawList,
 }
@@ -113,6 +121,8 @@ impl Default for Gui {
             repeat: NavRepeat::default(),
             measure: Box::new(Monospace::default()),
             viewport: Vec2::new(1280.0, 720.0),
+            ui_scale: 1.0,
+            scale: 1.0,
             draw: DrawList::default(),
         }
     }
@@ -150,7 +160,8 @@ fn gui_input(res: &mut Resources) {
     if let Some(a) = res.get::<ActionState>() {
         let n = &gui.actions;
         if !a.cursor_locked {
-            input.pointer = Some(a.mouse_position);
+            // The cursor is in physical pixels, the layout in UI pixels.
+            input.pointer = Some(a.mouse_position / gui.scale.max(1e-3));
         }
         input.nav = gui.repeat.update(a.axis2d(&n.navigate), dt);
         input.next = a.just_pressed(&n.next);
@@ -173,11 +184,14 @@ fn gui_input(res: &mut Resources) {
 fn gui_layout(res: &mut Resources) {
     let mut gui = res.fetch_mut::<Gui>();
     let gui = &mut *gui;
+    let ui_scale = gui.ui_scale.max(0.1);
+    gui.scale = ui_scale;
     if let Some(s) = res.get::<SurfaceTarget>()
         && s.size.0 > 0
         && s.size.1 > 0
     {
-        gui.viewport = Vec2::new(s.size.0 as f32, s.size.1 as f32);
+        gui.scale = s.scale_factor.max(0.1) * ui_scale;
+        gui.viewport = Vec2::new(s.size.0 as f32, s.size.1 as f32) / gui.scale;
     }
     gui.ui.layout(gui.viewport, gui.measure.as_ref());
     gui.ui.paint(&gui.theme, &mut gui.draw);

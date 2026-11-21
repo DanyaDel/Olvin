@@ -5,6 +5,7 @@ use olvin_core::{AppExit, Resources, SurfaceTarget, WindowHandleSource};
 use olvin_ecs::World;
 
 use crate::core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
+use crate::overlay::{Overlay, OverlayRenderer, begin_overlay_pass};
 use crate::particles::ParticleRenderer;
 use crate::post::{HDR_FORMAT, PostProcess};
 use crate::sprite::SpriteRenderer;
@@ -49,6 +50,8 @@ pub struct Renderer {
     /// Particles and 2D sprites, drawn after the meshes in the same pass.
     particles: ParticleRenderer,
     sprites: SpriteRenderer,
+    /// Screen overlay (game UI), drawn on the final image after post.
+    overlay: OverlayRenderer,
 }
 
 /// `Stage::Startup`: creates the GPU device once a surface exists.
@@ -104,7 +107,15 @@ pub(crate) fn render(res: &mut Resources) {
         renderer.core.set_time(time.elapsed() as f32);
     }
     let size = res.fetch::<SurfaceTarget>().size;
-    let stats = renderer.frame(&res.fetch::<World>(), size, &res.fetch::<RenderSettings>());
+    let empty = Overlay::default();
+    let overlay = res.get::<Overlay>();
+    let stats = renderer.frame(
+        &res.fetch::<World>(),
+        size,
+        &res.fetch::<RenderSettings>(),
+        overlay.as_deref().unwrap_or(&empty),
+    );
+    drop(overlay);
     *res.fetch_mut::<crate::RenderStats>() = stats;
 }
 
@@ -195,6 +206,7 @@ impl Renderer {
             SpriteRenderer::new(&core.device, &core.queue, scene_format, 1, DEPTH_FORMAT);
         particles.set_hdr_output(post.is_some());
         sprites.set_hdr_output(post.is_some());
+        let overlay = OverlayRenderer::new(&core.device, &core.queue, config.format);
         let view = core.create_view();
         Ok((
             Self {
@@ -207,6 +219,7 @@ impl Renderer {
                 post,
                 particles,
                 sprites,
+                overlay,
             },
             info,
         ))
@@ -224,6 +237,7 @@ impl Renderer {
         world: &World,
         size: (u32, u32),
         settings: &RenderSettings,
+        overlay: &Overlay,
     ) -> crate::RenderStats {
         if size.0 == 0 || size.1 == 0 {
             return Default::default(); // minimized
@@ -249,6 +263,13 @@ impl Renderer {
         }
         self.sprites
             .prepare(&self.core.device, &self.core.queue, &self.gpu, world, size);
+        let overlay_draws = self.overlay.prepare(
+            &self.core.device,
+            &self.core.queue,
+            &self.gpu,
+            overlay,
+            size,
+        );
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -286,6 +307,11 @@ impl Renderer {
             }
             self.particles.draw(&mut pass);
             self.sprites.draw(&mut pass);
+        }
+        if overlay_draws > 0 {
+            // Its own pass: after tonemapping, no depth, over the final image.
+            let mut pass = begin_overlay_pass(&mut encoder, &target);
+            self.overlay.draw(&mut pass);
         }
         self.core.queue.submit([encoder.finish()]);
         self.core.queue.present(frame);

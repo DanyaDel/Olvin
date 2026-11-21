@@ -498,7 +498,7 @@ impl ParticleRenderer {
         depth: wgpu::TextureFormat,
     ) -> Self {
         Self {
-            quads: QuadBatcher::new(device, queue, color, samples, depth, true),
+            quads: QuadBatcher::new(device, queue, color, samples, Some(depth), true),
             scratch: Vec::new(),
             color,
         }

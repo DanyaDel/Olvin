@@ -520,8 +520,8 @@ impl SpriteRenderer {
         depth: wgpu::TextureFormat,
     ) -> Self {
         Self {
-            world: QuadBatcher::new(device, queue, color, samples, depth, false),
-            screen: QuadBatcher::new(device, queue, color, samples, depth, false),
+            world: QuadBatcher::new(device, queue, color, samples, Some(depth), false),
+            screen: QuadBatcher::new(device, queue, color, samples, Some(depth), false),
             entries: Vec::new(),
             color,
         }

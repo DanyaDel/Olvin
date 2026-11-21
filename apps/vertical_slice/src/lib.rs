@@ -132,6 +132,9 @@ impl Plugin for GamePlugin {
                 hot_reload: c.lua_hot_reload,
                 limits: LuaLimits::default(),
             })
+            // The HUD's tree; `DefaultPlugins` with a renderer added `GuiRenderPlugin`
+            // (which includes this) to draw it, headless runs only lay it out.
+            .add_plugin(olvin::gui::GuiPlugin)
             .add_plugin(SceneLoaderPlugin)
             .add_plugin(SavePlugin::new(c.saves.clone()))
             .insert_resource(Paths {
@@ -174,7 +177,8 @@ impl Plugin for GamePlugin {
             .add_system_in_state(Stage::Update, GameState::Playing, save::hotkeys)
             .add_system(Stage::Update, door::animate)
             .add_system(Stage::Update, robot::update)
-            .add_system(Stage::PostUpdate, hud::update);
+            .add_system(Stage::Startup, hud::build)
+            .add_system(Stage::Update, hud::update);
     }
 }
 

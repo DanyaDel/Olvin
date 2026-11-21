@@ -7,6 +7,7 @@ mod frustum;
 mod light;
 mod material;
 mod mesh;
+mod overlay;
 mod particles;
 mod pipelines;
 mod post;
@@ -22,6 +23,7 @@ pub use frustum::Frustum;
 pub use light::{Light, LightKind, MAX_CASCADES, MAX_LIGHTS};
 pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
+pub use overlay::{Overlay, OverlayQuad, OverlayRenderer, begin_overlay_pass};
 pub use particles::{
     Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
     update_emitters,
@@ -240,7 +242,9 @@ impl Plugin for RenderPlugin {
             .init_resource::<Materials>()
             .init_resource::<Shaders>()
             .init_resource::<RenderStats>()
+            .init_resource::<Overlay>()
             .add_system(Stage::Startup, renderer::init)
+            .add_system(Stage::First, overlay::clear)
             .add_system(Stage::PostUpdate, particles::update)
             .add_system(Stage::PostUpdate, skinning::skin_meshes)
             .add_system(Stage::Render, renderer::render);

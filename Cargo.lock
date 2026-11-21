@@ -3239,11 +3239,13 @@ dependencies = [
  "olvin_csg",
  "olvin_ecs",
  "olvin_game",
+ "olvin_gui",
  "olvin_input",
  "olvin_physics",
  "olvin_render",
  "olvin_scene",
  "olvin_script",
+ "olvin_text",
  "olvin_transform",
  "olvin_window",
 ]
@@ -3398,6 +3400,9 @@ dependencies = [
  "glam 0.34.3",
  "olvin_core",
  "olvin_input",
+ "olvin_render",
+ "olvin_text",
+ "pollster",
 ]
 
 [[package]]
@@ -3518,6 +3523,14 @@ dependencies = [
  "olvin_transform",
  "ron",
  "serde",
+]
+
+[[package]]
+name = "olvin_text"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "glam 0.34.3",
 ]
 
 [[package]]

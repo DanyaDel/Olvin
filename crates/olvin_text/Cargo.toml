@@ -1,0 +1,12 @@
+[package]
+name = "olvin_text"
+description = "Olvin text without a GPU: fonts (ab_glyph), a glyph atlas with a shelf packer, line layout and measuring. Built-in Inter subset (Latin + Cyrillic, OFL)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Pure-Rust TrueType/OpenType outlines and rasteriser; already in the tree through egui.
+ab_glyph = "0.2"
+glam.workspace = true

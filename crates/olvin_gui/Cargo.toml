@@ -10,8 +10,16 @@ repository.workspace = true
 default = ["gamepad"]
 # Gamepads in `olvin_input` (gilrs); without it the UI still reads whatever fills `GamepadState`.
 gamepad = ["olvin_input/gamepad"]
+# Draws the UI: `GuiRenderPlugin` turns the `DrawList` into `olvin_render::Overlay`
+# quads with text from `olvin_text` (built-in Inter, Latin + Cyrillic).
+render = ["dep:olvin_render", "dep:olvin_text"]
 
 [dependencies]
 olvin_core.workspace = true
 olvin_input = { path = "../olvin_input", default-features = false }
 glam.workspace = true
+olvin_render = { workspace = true, optional = true }
+olvin_text = { workspace = true, optional = true }
+
+[dev-dependencies]
+pollster.workspace = true

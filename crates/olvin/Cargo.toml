@@ -9,7 +9,7 @@ repository.workspace = true
 [features]
 default = ["window", "render"]
 window = ["dep:olvin_window"]
-render = ["dep:olvin_render"]
+render = ["dep:olvin_render", "olvin_gui?/render"]
 # Load .scene.ron files saved by olvin-editor (with their glTF models and animators).
 scene = ["render", "anim", "assets", "olvin_scene/serde", "dep:olvin_csg"]
 # Skeletal animation without the renderer: Animator, AnimGraph, AnimPlugin.
@@ -28,6 +28,9 @@ input = ["dep:olvin_input", "olvin_script?/input"]
 audio = ["dep:olvin_audio"]
 # Game states, background scene loading, save slots.
 game = ["dep:olvin_game"]
+# In-game UI (`olvin::gui`): buttons, labels, layout, gamepad focus; with `render`
+# it is drawn over the frame with real text (`olvin::text`, built-in Inter).
+gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 
 [dependencies]
 olvin_core.workspace = true
@@ -44,5 +47,7 @@ olvin_script = { path = "../olvin_script", optional = true, default-features = f
 olvin_input = { path = "../olvin_input", optional = true }
 olvin_audio = { path = "../olvin_audio", optional = true }
 olvin_game = { path = "../olvin_game", optional = true }
+olvin_gui = { workspace = true, optional = true }
+olvin_text = { workspace = true, optional = true }
 glam.workspace = true
 log.workspace = true

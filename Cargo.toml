@@ -19,6 +19,8 @@ olvin_physics = { path = "crates/olvin_physics" }
 olvin_transform = { path = "crates/olvin_transform" }
 olvin_anim = { path = "crates/olvin_anim" }
 olvin_mesh = { path = "crates/olvin_mesh" }
+olvin_text = { path = "crates/olvin_text" }
+olvin_gui = { path = "crates/olvin_gui" }
 olvin = { path = "crates/olvin" }
 # Shared UI kit (themes, fonts, logo, motion) for the editor and the hub.
 olvin_ui = { path = "crates/olvin_ui" }

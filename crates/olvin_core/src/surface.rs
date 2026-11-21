@@ -14,11 +14,23 @@ pub struct SurfaceTarget {
     pub handle: Arc<dyn WindowHandleSource>,
     /// Physical size in pixels. May be (0, 0) while minimized.
     pub size: (u32, u32),
+    /// Physical pixels per logical pixel (the OS display scale: 1.0, 1.25,
+    /// 2.0...). Screen-space UI multiplies its sizes by it.
+    pub scale_factor: f32,
 }
 
 impl SurfaceTarget {
     pub fn new(handle: Arc<dyn WindowHandleSource>, size: (u32, u32)) -> Self {
-        Self { handle, size }
+        Self {
+            handle,
+            size,
+            scale_factor: 1.0,
+        }
+    }
+
+    pub fn with_scale_factor(mut self, scale_factor: f32) -> Self {
+        self.scale_factor = scale_factor;
+        self
     }
 
     pub fn aspect(&self) -> f32 {

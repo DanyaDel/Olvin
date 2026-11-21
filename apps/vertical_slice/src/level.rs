@@ -8,7 +8,7 @@ use olvin::prelude::*;
 use olvin::render_assets::RenderAssets;
 
 use crate::door::DoorState;
-use crate::hud::{self, Hud};
+use crate::hud::Hud;
 use crate::player::{Player, PlayerCamera, PlayerLook};
 use crate::{GameState, Paths, SCENE, robot};
 
@@ -129,12 +129,12 @@ pub fn setup(res: &mut Resources) {
             }
             None => log::warn!("level has no `{}`", robot::NAME),
         }
-        hud::spawn(&mut world);
     }
     res.fetch_mut::<Audio>()
         .play_music("music/theme.wav", 0.35, true);
     res.fetch_mut::<Hud>().show(
-        "WASD — ходить, мышь — смотреть, Space — прыжок, Shift — бег, \
-         Esc — пауза, F5/F9 — сохранить/загрузить. Встань на жёлтую плиту.",
+        "WASD — ходить, мышь — смотреть, Space — прыжок, Shift — бег\n\
+         Esc — пауза, F5/F9 — сохранить/загрузить\n\
+         Встань на жёлтую плиту",
     );
 }

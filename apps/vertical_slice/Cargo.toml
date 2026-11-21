@@ -8,6 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-olvin = { path = "../../crates/olvin", features = ["scene", "physics", "script", "lua", "input", "audio", "game"] }
+olvin = { path = "../../crates/olvin", features = ["scene", "physics", "script", "lua", "input", "audio", "game", "gui"] }
 serde.workspace = true
 log.workspace = true

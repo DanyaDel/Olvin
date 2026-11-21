@@ -27,7 +27,7 @@ pub fn attenuation(distance: f32, min: f32, max: f32) -> f32 {
 pub fn pan(position: Vec3, rotation: Quat, source: Vec3) -> f32 {
     let local = rotation.inverse() * (source - position);
     let len = local.length();
-    if !(len >= 1e-4) || !len.is_finite() {
+    if len.is_nan() || len.is_infinite() || len < 1e-4 {
         return 0.0;
     }
     (local.x / len) * 0.8

@@ -372,8 +372,8 @@ impl ParticleEmitter {
 
     /// Advances by `dt` seconds. `matrix` is the emitter's world transform.
     pub fn update(&mut self, dt: f32, matrix: &Mat4) {
-        // `!(dt > 0.0)` also drops NaN, which would poison `time` and `carry` for good.
-        if !(dt > 0.0) {
+        // NaN would poison `time` and `carry` for good.
+        if dt.is_nan() || dt <= 0.0 {
             return;
         }
         let max = self.params.max_particles as usize;

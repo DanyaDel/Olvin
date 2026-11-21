@@ -322,8 +322,8 @@ pub struct Audio {
 }
 
 fn amplitude_to_db(amplitude: f32) -> Decibels {
-    // `!(x > y)` also catches NaN, which would reach the mixer as NaN dB.
-    if !(amplitude > 0.001) {
+    // NaN must not reach the mixer as NaN dB.
+    if amplitude.is_nan() || amplitude <= 0.001 {
         Decibels::SILENCE
     } else {
         Decibels(20.0 * amplitude.log10())

@@ -352,3 +352,88 @@ fn engine_controller_pushes_and_reports_hits() {
     let hit = hit.expect("a controller hit on the box");
     assert_eq!(hit.character, player);
 }
+
+/// Bodies, scripts, sounds and particles of despawned objects must go away:
+/// the level is torn down and respawned several times and the counts return
+/// to what they were after the first load.
+#[test]
+fn respawning_the_level_does_not_leak_bodies_scripts_or_sounds() {
+    use olvin::audio::Audio;
+    use olvin::script::ScriptRuntime;
+
+    fn counts(app: &App) -> (usize, usize, usize, usize, usize) {
+        let physics = app.resources.fetch::<Physics>();
+        (
+            physics.world.bodies.len(),
+            physics.world.colliders.len(),
+            app.resources.fetch::<ScriptRuntime>().entity_count(),
+            app.resources.fetch::<Audio>().active_count(),
+            app.resources.fetch::<World>().len() as usize,
+        )
+    }
+    fn despawn_all(app: &mut App) {
+        let all: Vec<Entity> = app
+            .resources
+            .fetch::<World>()
+            .iter()
+            .map(|e| e.entity())
+            .collect();
+        {
+            let mut world = app.resources.fetch_mut::<World>();
+            for e in all {
+                let _ = world.despawn(e);
+            }
+        }
+        frames(app, 3);
+    }
+
+    let mut app = game("respawn");
+    let first = counts(&app);
+    assert!(
+        first.0 > 0 && first.2 > 0,
+        "the level has bodies and scripts: {first:?}"
+    );
+
+    let path = app
+        .resources
+        .fetch::<vertical_slice::Paths>()
+        .assets
+        .join(vertical_slice::SCENE);
+    for round in 0..4 {
+        despawn_all(&mut app);
+        let empty = counts(&app);
+        assert_eq!(
+            (empty.0, empty.1, empty.2, empty.4),
+            (0, 0, 0, 0),
+            "round {round}: nothing left after despawning everything: {empty:?}"
+        );
+        olvin::scene_file::load(&app.resources, &path).unwrap();
+        for _ in 0..200 {
+            app.update();
+            if olvin::models::pending_count(&app.resources) == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        frames(&mut app, 3);
+        let again = counts(&app);
+        // The scene alone (no `setup` extras like the robot marker or music):
+        // bodies and colliders match the first load, scripts never pile up.
+        assert_eq!(
+            again.0, first.0,
+            "round {round}: bodies {again:?} vs {first:?}"
+        );
+        assert_eq!(
+            again.1, first.1,
+            "round {round}: colliders {again:?} vs {first:?}"
+        );
+        assert!(
+            again.2 <= first.2,
+            "round {round}: scripts {again:?} vs {first:?}"
+        );
+        assert!(
+            again.3 <= first.3 + 2,
+            "round {round}: sounds {again:?} vs {first:?}"
+        );
+    }
+}

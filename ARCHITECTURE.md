@@ -97,6 +97,7 @@ hub/                  olvin-hub — отдельный инструмент, н�
 - `animator.rs`: компонент `Animator { skeleton, clips, params, layers, pose, matrices, version, events }` (слои смешиваются по `weight` и маске суставов), `AnimPlugin` двигает все `Animator` в `Update` по `Time::delta` и шлёт `Events<AnimationEvent>`. Его подключают `RenderDataPlugin` (значит, и `RenderPlugin`), `DefaultPlugins` и `HeadlessPlugins`.
 - `object.rs`: `ActionPlayer` (ресурс, его заводит `AnimPlugin`): проигрывает объектную анимацию сцены (`olvin_scene::action::Action`, F-кривые) во времени игры. Находит сущности по `SceneId`, пишет `Transform` (Эйлер YXZ, как в `EntityDesc`; каналы без кривой остаются авторскими значениями, переданными в `ActionPlayer::new`). Период цикла — `frame_end - frame_start`, поэтому клип, где последний ключ повторяет первый, зацикливается без заминки. `olvin::scene_file::spawn` заполняет его из `SceneFile::animation` (флаги autoplay / loop).
 - `tests.rs`: 15 тестов (сэмплирование, скелет, граф, слои, события, плагин, проигрыватель действий).
+- `Channel::sample(NaN)` возвращает первый ключ; NaN-шаг не портит время слоёв/`ActionPlayer`; `JointPose::from` нулевого масштаба даёт конечное вращение.
 
 ## olvin_render
 
@@ -118,6 +119,7 @@ hub/                  olvin-hub — отдельный инструмент, н�
 - `Renderer` (окно) создаёт `ParticleRenderer` и `SpriteRenderer` и рисует их в основном проходе после мешей (и в HDR-цепочке). Не сделано: GPU-частицы, подключение к `scene_file`/редактору (компоненты не читаются из сцены), анимация спрайтов (кадры по времени), текстовый рендер, 9-slice, свет/тени на спрайтах, стрейч-билборды, столкновения и шлейфы частиц; во вьюпорте редактора (`EngineGpu`) частицы и спрайты не рисуются.
 - `RenderSettings.scene_lights` (по умолчанию true): false — компоненты `Light` игнорируются (Solid-вид редактора).
 - `mesh.wgsl`: instanced-шейдер в пределах WebGL2: один uniform, 7 атрибутов (матрица модели — 4 vec4 + цвет). Полусферический ambient, солнце с PCF 3×3 (сравнивающий сэмплер, slope bias + normal offset, затухание к краю дистанции), 16 point/spot (спад `saturate(1-(d/r)^4)^2/(d²+1)`, мягкий конус), Blinn-Phong, туман, экспозиция + ACES, sRGB. `shadow.wgsl` — проход только глубины. Тени работают и на Compat (GL).
+- Меш без вершин/индексов не создаёт GPU-буферы (слот пуст, проходы его пропускают); `max_particles` резервируется не больше `MAX_RESERVED` (65536) слотов, NaN-шаг частиц игнорируется; тайл только с флагами отражения пуст. Известный пробел: `Meshes` не умеет освобождать слоты, повторный спавн сцен/скиннинг-мешей растит GPU-память (в движке нет выгрузки сцен).
 
 ## olvin_csg
 
@@ -135,6 +137,7 @@ hub/                  olvin-hub — отдельный инструмент, н�
 Ассеты как в Unity, без GPU. `AssetRoot` (`assets/`): `resolve/relative`, `scan()` создаёт `.meta` (RON: `Meta { guid, importer: Importer::{None, Texture(TextureImport { srgb, max_size, generate_mips, point_filter }), Model(ModelImport { scale, .. })} }`), копии с чужим meta получают новый GUID, `guid_of/path_of`, `move_asset/delete_asset` переносят meta. `texture.rs`: `load_image(path, srgb)` → `ImageData` (HDR/EXR во float), `thumbnail`, `ThumbnailCache` (LRU). `model.rs`: `import_gltf` → `ModelData { meshes, materials: MaterialDesc, nodes (YXZ), extracted_textures, skipped }`, встроенные картинки в `<model>_textures/`, `model_to_entities` (poly + `uvs_per_face`), `write_materials`. `AssetWatcher` (notify 8): неблокирующий `poll()` с дебаунсом. `AssetsPlugin`. 9 тестов. `manager.rs`: `AssetManager` (ресурс, `AssetsPlugin` гонит его в `Stage::First`, `with_hot_reload()`) — счётные `Handle<T>`/`AnyHandle` (T: `Asset` = `ImageData`, `MaterialDesc`, `ModelData`), `load` отдаёт хэндл сразу и грузит в пуле потоков (meta читается на вызывающем потоке), тот же путь = тот же хэндл; `get` → `Arc<T>`, `state` (`Loading/Ready/Failed`), `is_fully_loaded`, `wait_idle`. Зависимости (`Dependency`) берутся из разобранных данных: материал → текстуры, модель → текстуры своих материалов; хэндлы зависимостей держит запись родителя, поэтому текстура живёт, пока жив материал. Выгрузка: `unload_unused` (и в `update`, если `auto_unload`) снимает записи без хэндлов до неподвижной точки; хэндл, брошенный до выгрузки, оживает без перезагрузки. Горячая перезагрузка поверх `AssetWatcher`: старые данные доступны, пока грузятся новые, при ошибке остаются последние рабочие, `version`/`take_changes` для потребителя (заливка в GPU). 7 тестов менеджера.
 
 `model.rs` (glTF): меши, материалы, скины → `Skeleton`, анимации → `Clip`, камеры (`CameraData`; перспективные попадают в `CameraDesc` сущности), `ModelData::animator(skin)`. Позы в модельном пространстве с масштабом импорта; скин-меш рисуется в корне модели. `KHR_texture_transform` с поворотом запекается в UV примитива, отдельная текстура окклюзии сливается в `<модель>_textures/<материал>_orm.png`. Не поддержаны: морфы, ортографические камеры как компонент, анимация узлов вне скелета на сущностях.
+- Паника декодера на битом файле ловится в воркере (`Failed`, воркер жив); цикл родителей в glTF не зацикливает `world_of`.
 
 ## olvin_scene::material
 
@@ -162,6 +165,7 @@ hub/                  olvin-hub — отдельный инструмент, н�
 ## olvin_audio
 
 kira 0.12: `AudioPlugin { assets_dir: Option (None — `ProjectPaths::assets`, относительный — от папки проекта), enabled }`, ресурс `Audio` (one-shot, `play_at`, `play_with`, музыка потоком, громкость, высота). `AudioSourceDesc` играет при появлении и следует за позицией; 3D — затухание и панорама от `AudioListener`. Без устройства — no-op. Шины: `BusId::{SFX, MUSIC, AMBIENT, VOICE}` + `add_bus(name)`, у каждой громкость, mute, 3-полосный EQ (`EqSettings`, shelf 250 Гц / bell 1 кГц / shelf 4 кГц) и уровень отправки в общий реверб (`ReverbSettings`, kira send-трек). `PlayParams { bus, priority (0 важнее всего), occludable }`. Occlusion: `set_occluder(|listener, source| 0..1)` (обычно луч физики) или `set_occlusion(id, ..)`; позиционный звук получает свой sub-трек с low-pass (20 кГц → 500 Гц) и падение громкости до 0.35, значение сглаживается. Голоса: `set_max_voices` (64) и `set_max_streams` (8); не влезшие по (priority, громкость, новизна) виртуализируются — зацикленные ждут и стартуют с начала, one-shot отбрасываются. Стриминг: `stream_threshold` для источников, `play_music_fade` (кроссфейд), `position`, ошибки декодера в лог, `unload_clip/clear_clips` для кэша декодированных клипов. Пауза: система плагина зовёт `set_paused(Time::paused())` (отключается `set_follow_time_pause(false)`); звуки на шинах с `pausable` (все, кроме `music`: `set_bus_pausable`) встают на паузу kira и продолжают с того же места, запущенные во время паузы (звуки меню) не задерживаются; отдельный звук — `pause_sound/resume_sound/is_sound_paused`. Голос, полученный во время паузы, сразу ставится на паузу. В тестах бэкенд — kira `MockBackend`: дорожки и эффекты строятся без звуковой карты. 14 тестов.
+- Зацикленные звуки, чей файл не загрузился (устройство есть), забываются, а не занимают голос навсегда; NaN в дистанции/позиции даёт 0 громкости/центр, а не NaN в kira.
 
 ## olvin_physics (дополнения)
 
@@ -182,6 +186,7 @@ kira 0.12: `AudioPlugin { assets_dir: Option (None — `ProjectPaths::assets`, �
 ## olvin_physics
 
 `PhysicsPlugin { gravity }` и ресурс `Physics { world: rapier PhysicsWorld }`. На каждом кадре (PreUpdate): сущности с `ColliderDesc` или `RigidbodyDesc` без маркера `Body` получают тела (Dynamic, Kinematic или Fixed, если Rigidbody нет). Масштаб объекта запекается в форму коллайдера, у Rapier масштаба нет. `Mesh` берёт `MeshGeometry`. Кинематические тела следуют за `Transform`, затем фиксированные шаги по 1/60 (не больше 5 за кадр), затем динамические пишут позу обратно. Rapier 0.36 считает в glam 0.33, конвертация через массивы. Тесты: ящик ложится на землю, шар — на mesh-пол, сквозь триггер проходит.
+- Края ввода: у нулевого масштаба вращение берётся из `split` (конечное, а не NaN от glam); меш-коллайдер с индексами за пределами вершин пропускается с предупреждением (parry иначе паникует); NaN/отрицательный `dt` игнорируется.
 
 ## olvin (фасад)
 
@@ -204,6 +209,7 @@ Features `window` и `render` включены по умолчанию. `scene` 
 - `atlas.rs`: `GlyphAtlas` — кэш растеризованных глифов в одной текстуре покрытия, полочная упаковка, размер кэшируется с шагом 1/4 px, отступ 1 px, белый блок 2×2 в углу для сплошных прямоугольников; растёт вниз, при переполнении начинает заново (`take_stale`). `version` меняется при добавлении глифов, `rgba` отдаёт данные для загрузки.
 - `layout.rs`: `layout(font, atlas, text, size, origin, HAlign, &mut Vec<GlyphQuad>)` — строки по `\n`, глифы на целых пикселях (резко при 1:1), UTF-8 по символам (без лигатур и RTL).
 - 7 unit-тестов (упаковка, рост, кириллица, метрики, раскладка).
+- Глиф, который не влезает в атлас ни при каком размере, кэшируется пустым и не сбрасывает атлас.
 
 ## olvin_gui
 

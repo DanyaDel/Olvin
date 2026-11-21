@@ -1,6 +1,7 @@
 //! Stress demo: a field of spinning instanced cubes and a fly camera.
 //! WASD/Space/Ctrl move, hold RMB to look, Shift to go fast, Esc to quit.
 //! `OLVIN_CUBES=250000 cargo run -p sandbox --release` for a heavier field.
+//! `--frames N` (or `OLVIN_SANDBOX_AUTOQUIT=N`) quits after N frames.
 
 use olvin::prelude::*;
 
@@ -16,6 +17,15 @@ fn main() {
     olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
         .file("logs/sandbox.log")
         .init();
+
+    let args: Vec<String> = std::env::args().collect();
+    let frames: Option<u64> = args
+        .iter()
+        .position(|a| a == "--frames")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .or_else(|| std::env::var("OLVIN_SANDBOX_AUTOQUIT").ok())
+        .and_then(|n| n.parse().ok());
 
     let mut app = App::new();
     app.add_plugin(DefaultPlugins {
@@ -33,7 +43,8 @@ fn main() {
             res.fetch_mut::<AppExit>().requested = true;
         }
     })
-    .add_system(Stage::Last, stats_logger());
+    .add_system(Stage::Last, stats_logger())
+    .add_system(Stage::Last, auto_quit(frames));
     app.run();
 }
 
@@ -121,6 +132,18 @@ fn fly_camera(res: &mut Resources) {
             1.0
         };
         transform.translation += dir.normalize_or_zero() * fly.speed * boost * dt;
+    }
+}
+
+/// With a limit, requests exit after that many frames.
+fn auto_quit(limit: Option<u64>) -> impl FnMut(&mut Resources) {
+    let mut total = 0u64;
+    move |res| {
+        total += 1;
+        if limit.is_some_and(|n| total >= n) {
+            log::info!("auto-quit after {total} frames");
+            res.fetch_mut::<AppExit>().requested = true;
+        }
     }
 }
 

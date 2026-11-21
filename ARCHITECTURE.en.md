@@ -97,6 +97,7 @@ Pure animation, no GPU or window (depends on `olvin_core`/`olvin_ecs` only for t
 - `animator.rs`: component `Animator { skeleton, clips, params, layers, pose, matrices, version, events }` (layers blend by `weight` and a joint mask); `AnimPlugin` advances every `Animator` in `Update` by `Time::delta` and sends `Events<AnimationEvent>`. It is added by `RenderDataPlugin` (so by `RenderPlugin` too), `DefaultPlugins` and `HeadlessPlugins`.
 - `object.rs`: `ActionPlayer` (resource started by `AnimPlugin`): plays the scene's object animation (`olvin_scene::action::Action`, F-curves) in game time. Finds entities by `SceneId`, writes `Transform` (Euler YXZ like `EntityDesc`; channels without a curve keep the authored base values passed to `ActionPlayer::new`). Loop period is `frame_end - frame_start`, so a clip whose last key repeats the first loops seamlessly. `olvin::scene_file::spawn` fills it from `SceneFile::animation` (autoplay / loop flags).
 - `tests.rs`: 15 tests (sampling, skeleton, graph, layers, events, plugin, action player).
+- `Channel::sample(NaN)` returns the first key; a NaN step no longer poisons layer/`ActionPlayer` time; `JointPose::from` of a zero-scale matrix has a finite rotation.
 
 ## olvin_render
 
@@ -118,6 +119,7 @@ Pure animation, no GPU or window (depends on `olvin_core`/`olvin_ecs` only for t
 - The window `Renderer` creates a `ParticleRenderer` and a `SpriteRenderer` and draws them in the main pass after the meshes (also in the HDR chain). Not done: GPU particles, hooking up to `scene_file`/the editor (the components aren't read from scenes), sprite animation (frames over time), text rendering, 9-slice, light/shadows on sprites, stretched billboards, particle collisions and trails; the editor viewport (`EngineGpu`) doesn't draw particles or sprites.
 - `RenderSettings.scene_lights` (default true): when false, `Light` components are ignored (the editor's Solid view).
 - `mesh.wgsl`: an instanced shader within WebGL2 limits: one uniform, 7 attributes (the model matrix as 4 vec4 + colour). Hemispherical ambient, the sun with PCF 3×3 (comparison sampler, slope bias + normal offset, fade towards the edge of the distance), 16 point/spot lights (falloff `saturate(1-(d/r)^4)^2/(d²+1)`, soft cone), Blinn-Phong, fog, exposure + ACES, sRGB. `shadow.wgsl` is a depth-only pass. Shadows work on Compat (GL) too.
+- A mesh with no vertices/indices creates no GPU buffers (empty slot, every pass skips it); `max_particles` reserves at most `MAX_RESERVED` (65536) slots and a NaN particle step is ignored; a tile holding only flip flags is empty. Known gap: `Meshes` cannot free slots, so respawning scenes/skinned meshes grows GPU memory (the engine has no scene unloading).
 
 ## olvin_csg
 
@@ -135,6 +137,7 @@ An editable polygon mesh `PolyMesh { positions, faces: Vec<Vec<u32>> (n-gons, co
 Unity-style assets, without the GPU. `AssetRoot` (`assets/`): `resolve/relative`, `scan()` creates `.meta` files (RON: `Meta { guid, importer: Importer::{None, Texture(TextureImport { srgb, max_size, generate_mips, point_filter }), Model(ModelImport { scale, .. })} }`); copies with someone else's meta get a new GUID; `guid_of/path_of`; `move_asset/delete_asset` carry the meta along. `texture.rs`: `load_image(path, srgb)` → `ImageData` (HDR/EXR as float), `thumbnail`, `ThumbnailCache` (LRU). `model.rs`: `import_gltf` → `ModelData { meshes, materials: MaterialDesc, nodes (YXZ), extracted_textures, skipped }`; embedded images go to `<model>_textures/`; `model_to_entities` (poly + `uvs_per_face`); `write_materials`. `AssetWatcher` (notify 8): a non-blocking `poll()` with debouncing. `AssetsPlugin`. 9 tests. `manager.rs`: `AssetManager` (a resource; `AssetsPlugin` drives it in `Stage::First`, `with_hot_reload()`) with counted `Handle<T>`/`AnyHandle` (T: `Asset` = `ImageData`, `MaterialDesc`, `ModelData`). `load` returns a handle at once and loads on a thread pool (the meta is read on the calling thread); the same path gives the same handle; `get` → `Arc<T>`, `state` (`Loading/Ready/Failed`), `is_fully_loaded`, `wait_idle`. Dependencies (`Dependency`) come from the parsed data: material → textures, model → the textures of its materials; the parent's entry holds the dependency handles, so a texture lives as long as its material. Unloading: `unload_unused` (also in `update` with `auto_unload`) drops entries without handles until a fixed point; a handle dropped before the sweep revives without a reload. Hot reload sits on `AssetWatcher`: old data stays readable while the new loads, the last good data stays on failure, `version`/`take_changes` for the consumer (GPU upload). 7 manager tests.
 
 `model.rs` (glTF): meshes, materials, skins → `Skeleton`, animations → `Clip`, cameras (`CameraData`; perspective ones become the entity's `CameraDesc`), `ModelData::animator(skin)`. Poses are model-space with the import scale applied; a skinned mesh is drawn at the model root. A rotated `KHR_texture_transform` is baked into the primitive's UVs, a separate occlusion texture is merged into `<model>_textures/<material>_orm.png`. Not supported: morph targets, orthographic cameras as a component, animating non-skeleton nodes on entities.
+- A decoder panic on a corrupt file is caught in the worker (`Failed`, the worker survives); a glTF parent cycle no longer spins `world_of`.
 
 ## olvin_scene::material
 
@@ -162,6 +165,7 @@ Action maps: `InputMap { actions: name → [Binding] }` (keys, mouse, wheel, gam
 ## olvin_audio
 
 kira 0.12: `AudioPlugin { assets_dir: Option (None = `ProjectPaths::assets`, relative = inside the project folder), enabled }`, the resource `Audio` (one-shots, `play_at`, `play_with`, streamed music, volume, pitch). `AudioSourceDesc` plays when it appears and follows its position; in 3D, attenuation and panning come from the `AudioListener`. Without a device it is a no-op. Buses: `BusId::{SFX, MUSIC, AMBIENT, VOICE}` + `add_bus(name)`, each with volume, mute, a 3-band EQ (`EqSettings`, shelf 250 Hz / bell 1 kHz / shelf 4 kHz) and a send level into one shared reverb (`ReverbSettings`, a kira send track). `PlayParams { bus, priority (0 = most important), occludable }`. Occlusion: `set_occluder(|listener, source| 0..1)` (usually a physics ray) or `set_occlusion(id, ..)`; a positional sound gets its own sub-track with a low-pass (20 kHz → 500 Hz) and a gain drop to 0.35, the value is eased. Voices: `set_max_voices` (64) and `set_max_streams` (8); sounds that don't fit by (priority, loudness, recency) are virtualized: loops wait and restart from the beginning, one-shots are dropped. Streaming: `stream_threshold` for sources, `play_music_fade` (crossfade), `position`, decoder errors logged, `unload_clip/clear_clips` for the decoded-clip cache. Pause: the plugin's system calls `set_paused(Time::paused())` (off with `set_follow_time_pause(false)`); sounds on `pausable` buses (all but `music`: `set_bus_pausable`) are paused in kira and continue from the same spot, sounds started during the pause (menu sounds) are not held; a single sound: `pause_sound/resume_sound/is_sound_paused`. A voice won back during the pause starts paused. Tests use kira's `MockBackend`: tracks and effects are built without a sound card. 14 tests.
+- Looping sounds whose file fails to load (with a device) are forgotten instead of holding a voice forever; NaN distance/position gives silence/centre, not NaN to kira.
 
 ## olvin_physics (additions)
 
@@ -182,6 +186,7 @@ Game layer on top of the core, no GPU or window. Spawning a loaded scene stays w
 ## olvin_physics
 
 `PhysicsPlugin { gravity }` and the resource `Physics { world: rapier PhysicsWorld }`. Every frame (PreUpdate): entities with a `ColliderDesc` or `RigidbodyDesc` but no `Body` marker get bodies (Dynamic, Kinematic, or Fixed if there is no Rigidbody). The object's scale is baked into the collider shape, since Rapier has no scale. `Mesh` uses `MeshGeometry`. Kinematic bodies follow `Transform`, then fixed steps of 1/60 (at most 5 per frame), then dynamic bodies write their pose back. Rapier 0.36 computes in glam 0.33, converting through arrays. Tests: a box lands on the ground, a ball lands on a mesh floor, a ball passes through a trigger.
+- Edge input: a zero scale no longer writes a NaN rotation (`split` falls back to identity); a mesh collider with indices past its vertices is skipped with a warning (parry would panic); NaN/negative `dt` is ignored.
 
 ## olvin (facade)
 
@@ -204,6 +209,7 @@ Text without a GPU or a window: depends on `ab_glyph` (pure Rust, already in the
 - `atlas.rs`: `GlyphAtlas`, a cache of rasterised glyphs in one coverage texture with a shelf packer; sizes are cached in 1/4 px steps, 1 px padding, a 2x2 white block in the corner for solid rectangles; it grows downwards and starts over when full (`take_stale`). `version` changes when glyphs are added, `rgba` gives the upload data.
 - `layout.rs`: `layout(font, atlas, text, size, origin, HAlign, &mut Vec<GlyphQuad>)`: lines split on `\n`, glyphs on whole pixels (sharp at 1:1), UTF-8 per character (no ligatures or RTL).
 - 7 unit tests (packing, growth, Cyrillic, metrics, layout).
+- A glyph that cannot fit the atlas at any size is cached as empty and does not reset the atlas.
 
 ## olvin_gui
 

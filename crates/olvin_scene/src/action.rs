@@ -155,7 +155,8 @@ impl Key {
             HandleType::Vector => HandleType::Free,
             t => t,
         };
-        if matches!(*other, HandleType::Auto | HandleType::AutoClamped) && *own == HandleType::Aligned
+        if matches!(*other, HandleType::Auto | HandleType::AutoClamped)
+            && *own == HandleType::Aligned
         {
             *other = HandleType::Aligned;
         }
@@ -171,7 +172,10 @@ impl Key {
             let twin = if left { self.right } else { self.left };
             let twin_len = ((twin[0] - key[0]).powi(2) + (twin[1] - key[1]).powi(2)).sqrt();
             if len > 1e-6 {
-                let p = [key[0] + dir[0] / len * twin_len, key[1] + dir[1] / len * twin_len];
+                let p = [
+                    key[0] + dir[0] / len * twin_len,
+                    key[1] + dir[1] / len * twin_len,
+                ];
                 if left {
                     self.right = p;
                 } else {
@@ -1131,6 +1135,52 @@ mod tests {
         a.select_all(true);
         a.delete_selected();
         assert!(a.curves.is_empty());
+    }
+
+    #[test]
+    fn dragging_an_auto_handle_makes_it_aligned_and_twists_the_twin() {
+        let mut c = curve(&[(1.0, 0.0), (10.0, 10.0), (20.0, 0.0)]);
+        let len_before = {
+            let k = c.keys[1];
+            (k.left[0] - k.frame).hypot(k.left[1] - k.value)
+        };
+        c.keys[1].set_handle(false, [14.0, 6.0]);
+        let k = c.keys[1];
+        assert_eq!(
+            (k.left_type, k.right_type),
+            (HandleType::Aligned, HandleType::Aligned)
+        );
+        assert_eq!(k.right, [14.0, 6.0]);
+        assert!(k.left[1] > 10.0, "twin goes the other way: {:?}", k.left);
+        // The twin keeps its own length and the two stay collinear.
+        let twin = (k.left[0] - k.frame).hypot(k.left[1] - k.value);
+        assert!((twin - len_before).abs() < 1e-3);
+        let cross = (k.right[0] - k.frame) * (k.left[1] - k.value)
+            - (k.right[1] - k.value) * (k.left[0] - k.frame);
+        assert!(cross.abs() < 1e-3);
+        // Aligned handles survive recalculation; handles never cross their key.
+        c.recalc_handles();
+        assert_eq!(c.keys[1].right, [14.0, 6.0]);
+        c.keys[1].set_handle(false, [3.0, 6.0]);
+        assert_eq!(c.keys[1].right[0], 10.0);
+    }
+
+    #[test]
+    fn graph_translate_moves_keys_with_handles_and_lone_handles_alone() {
+        let mut a = Action::default();
+        for f in [1.0, 10.0] {
+            a.insert_key(1, Prop::Location, 0, f, 0.0);
+        }
+        a.curves[0].keys[1].select = SEL_ALL;
+        a.translate_selected(2.0, 5.0);
+        let k = a.curves[0].keys[1];
+        assert_eq!((k.frame, k.value), (12.0, 5.0));
+        a.select_all(false);
+        a.curves[0].keys[1].select = SEL_LEFT;
+        a.translate_selected(0.0, 1.0);
+        let k = a.curves[0].keys[1];
+        assert_eq!(k.frame, 12.0);
+        assert_eq!(k.left[1], 6.0 + 0.0 * k.value);
     }
 
     #[test]

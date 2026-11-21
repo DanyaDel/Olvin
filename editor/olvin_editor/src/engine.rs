@@ -725,6 +725,38 @@ mod tests {
         assert_eq!(play.saved, scene);
     }
 
+    /// The running game plays the authored animation through `olvin_anim`.
+    #[test]
+    fn play_mode_runs_the_authored_animation() {
+        use olvin::scene::SceneId;
+        let mut scene = SceneFile {
+            entities: vec![EntityDesc::new(7, "Mover")],
+            ..Default::default()
+        };
+        scene.animation.frame_end = 25;
+        scene
+            .animation
+            .insert_key(7, olvin_scene::file::Prop::Location, 0, 1.0, 0.0);
+        scene
+            .animation
+            .insert_key(7, olvin_scene::file::Prop::Location, 0, 25.0, 12.0);
+        let mut play = PlaySession::start(&scene, 0, None);
+        play.app
+            .resources
+            .fetch_mut::<olvin::core::Time>()
+            .set_fixed_delta(Some(0.5));
+        play.tick();
+        let world = play.app.resources.fetch::<World>();
+        let x = world
+            .query::<(&SceneId, &Transform)>()
+            .iter()
+            .find(|(id, _)| id.0 == 7)
+            .map(|(_, t)| t.translation.x)
+            .unwrap();
+        // Half a second at 24 fps is frame 13: the middle of a symmetric ease.
+        assert!((x - 6.0).abs() < 1e-3, "x = {x}");
+    }
+
     #[test]
     fn preview_mirrors_meshes_and_cameras() {
         let mut cube = EntityDesc::new(1, "Cube");

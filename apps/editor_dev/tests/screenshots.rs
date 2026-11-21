@@ -24,10 +24,10 @@ use olvin_editor::olvin_scene::file::{
 use olvin_editor::theme::ThemeKind;
 use olvin_editor::{EditorApp, EditorPlugin, egui};
 
-const SIZE: egui::Vec2 = egui::vec2(1600.0, 940.0);
-const SELECTED: u64 = 10;
+pub const SIZE: egui::Vec2 = egui::vec2(1600.0, 940.0);
+pub const SELECTED: u64 = 10;
 
-fn plugins() -> Vec<Box<dyn EditorPlugin>> {
+pub fn plugins() -> Vec<Box<dyn EditorPlugin>> {
     // Same list as src/main.rs.
     vec![
         Box::new(olvin_editor_console::ConsolePlugin),
@@ -211,7 +211,7 @@ fn demo_scene() -> SceneFile {
 }
 
 /// A throwaway project: the scene plus a few folders for the Assets panel.
-fn demo_project(root: &Path) {
+pub fn demo_project(root: &Path) {
     let _ = fs::remove_dir_all(root);
     let assets = root.join("assets");
     for dir in [

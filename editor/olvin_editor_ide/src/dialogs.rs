@@ -56,7 +56,10 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
             } => {
                 let what = if *folder { "New Folder" } else { "New File" };
                 ui.heading(what);
-                ui.label(RichText::new(format!("in {}/", ide.rel(dir))).color(theme::palette(ui.ctx()).muted));
+                ui.label(
+                    RichText::new(format!("in {}/", ide.rel(dir)))
+                        .color(theme::palette(ui.ctx()).muted),
+                );
                 let ok = name_field(ui, name, error, enter);
                 if buttons(ui, "Create") || ok {
                     let path = dir.join(name.trim());

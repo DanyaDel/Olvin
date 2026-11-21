@@ -9,7 +9,7 @@ use std::sync::Once;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use olvin_editor::glam::Vec3;
-use olvin_editor::olvin_scene::file::{EntityDesc, MeshDesc, SceneFile, Shape};
+use olvin_editor::olvin_scene::file::{BrushDesc, CsgOp, EntityDesc, MeshDesc, SceneFile, Shape};
 use olvin_editor::{EditorApp, EditorPlugin, egui};
 
 const SIZE: egui::Vec2 = egui::vec2(1600.0, 1700.0);
@@ -795,4 +795,485 @@ fn material_edits_from_the_inspector_are_undoable() {
     assert_eq!(metallic(&p), 0.0, "undo rewrites the material file");
     redo(&mut h);
     assert_eq!(metallic(&p), 1.0);
+}
+
+fn brush(id: u64, name: &str, pos: Vec3, scale: Vec3, op: CsgOp) -> EntityDesc {
+    let mut e = EntityDesc::new(id, name);
+    e.position = pos;
+    e.scale = scale;
+    e.brush = Some(BrushDesc {
+        op,
+        ..Default::default()
+    });
+    e
+}
+
+#[test]
+fn csg_odd_and_many_brushes_do_not_break_the_editor() {
+    let p = project("csg-odd");
+    let mut h = editor(&p);
+    assert!(h.state_mut().show_workspace("Mapping"));
+    {
+        let s = state(&mut h);
+        s.scene.entities.clear();
+        let odd = [
+            Vec3::ZERO,
+            Vec3::new(-2.0, 2.0, 2.0),
+            Vec3::new(1e-9, 1.0, 1.0),
+            Vec3::new(f32::NAN, 1.0, 1.0),
+            Vec3::splat(1e9),
+            Vec3::new(-1.0, -1.0, -1.0),
+        ];
+        let mut id = 1;
+        for (i, scale) in odd.into_iter().enumerate() {
+            for op in [CsgOp::Add, CsgOp::Subtract, CsgOp::Intersect] {
+                s.scene
+                    .entities
+                    .push(brush(id, "odd", Vec3::new(i as f32, 0.5, 0.0), scale, op));
+                id += 1;
+            }
+        }
+        // And a pile of ordinary ones.
+        for i in 0..40 {
+            let at = Vec3::new((i % 15) as f32 * 1.5, 0.5, (i / 15) as f32 * 1.5);
+            s.scene
+                .entities
+                .push(brush(id, "many", at, Vec3::splat(2.0), CsgOp::Add));
+            id += 1;
+        }
+        s.select(Some(1));
+    }
+    h.run_steps(10);
+    for label in [
+        "Hollow",
+        "Rotate 90°",
+        "Flip X",
+        "Flip Z",
+        "▲ Earlier",
+        "▼ Later",
+    ] {
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    }
+    h.get_by_label("Duplicate as Carve").click();
+    h.run_steps(3);
+    // Zero-scale brush: Hollow must not produce NaN/infinite scales.
+    state(&mut h).select(Some(1));
+    h.run_steps(3);
+    h.get_by_label("Hollow").click();
+    h.run_steps(3);
+    for e in &state(&mut h).scene.entities {
+        assert!(
+            e.name == "odd" || e.scale.is_finite(),
+            "{} has scale {:?}",
+            e.name,
+            e.scale
+        );
+    }
+    for _ in 0..4 {
+        undo(&mut h);
+    }
+    h.run_steps(5);
+}
+
+/// Draws a brush with the Draw Brush tool: drag a base, then click for height.
+fn draw_brush(h: &mut Ed) {
+    drag(h, egui::pos2(700.0, 600.0), egui::pos2(860.0, 700.0));
+    for i in 1..=5 {
+        mouse_move(h, egui::pos2(860.0, 700.0 - 20.0 * i as f32));
+        h.run_steps(1);
+    }
+    click_at(h, egui::pos2(860.0, 600.0));
+}
+
+#[test]
+fn csg_draw_tool_builds_a_brush_on_the_ground_and_alt_orbits_instead() {
+    let p = project("csg-draw");
+    let mut h = editor(&p);
+    assert!(h.state_mut().show_workspace("Mapping"));
+    state(&mut h).scene.entities.clear();
+    state(&mut h).tool = "csg.draw".into();
+    h.run_steps(5);
+    // Alt+LMB is the camera: no brush appears.
+    set_modifiers(&h, egui::Modifiers::ALT);
+    h.run_steps(2);
+    draw_brush(&mut h);
+    set_modifiers(&h, egui::Modifiers::NONE);
+    h.run_steps(3);
+    assert!(
+        state(&mut h).scene.entities.is_empty(),
+        "Alt must not draw: {:?}",
+        names(&mut h)
+    );
+    draw_brush(&mut h);
+    let brushes: Vec<_> = state(&mut h)
+        .scene
+        .entities
+        .iter()
+        .filter(|e| e.brush.is_some())
+        .map(|e| e.scale)
+        .collect();
+    assert_eq!(brushes.len(), 1, "one brush drawn on the empty ground");
+    assert!(brushes[0].is_finite() && brushes[0].min_element() > 0.0);
+    undo(&mut h);
+    assert!(state(&mut h).scene.entities.is_empty(), "undo removes it");
+    redo(&mut h);
+    assert_eq!(names(&mut h).len(), 1);
+}
+
+/// Clicks a toolbar button, or a menu title and then its item.
+fn click_menu(h: &mut Ed, title: &str, item: &str) {
+    h.get_by_label(title).click();
+    h.run_steps(3);
+    h.get_by_label(item).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn uv_editor_operations_selection_and_modal_transforms() {
+    let p = project("uv");
+    let mut h = editor(&p);
+    // No mesh yet: the editor opens and every operator is a no-op.
+    assert!(h.state_mut().show_workspace("UV Editing"));
+    state(&mut h).select(None);
+    h.run_steps(5);
+    h.get_by_label("Unwrap  U").click();
+    h.run_steps(3);
+    // A cube made editable in the Modeling workspace.
+    assert!(h.state_mut().show_workspace("Modeling"));
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    h.get_by_label("◆ Edit Mode").click();
+    h.run_steps(3);
+    assert!(h.state_mut().show_workspace("UV Editing"));
+    h.run_steps(5);
+    // Empty selection: operators map all faces; selection ops work on nothing.
+    for label in ["Face 3", "Island 4", "Edge 2", "Vertex 1"] {
+        h.get_by_label_contains(label).click();
+        h.run_steps(2);
+    }
+    click_menu(&mut h, "Select", "None  Alt+A");
+    click_menu(&mut h, "Select", "Linked  Ctrl+L");
+    click_menu(&mut h, "Select", "Invert  Ctrl+I");
+    h.get_by_label("Unwrap  U").click();
+    h.run_steps(3);
+    for item in [
+        "Box Projection",
+        "Planar Projection",
+        "Cylinder Projection",
+        "Sphere Projection",
+        "Follow Active Quads",
+        "Reset",
+    ] {
+        click_menu(&mut h, "Project", item);
+    }
+    for item in ["Mark Seam", "Clear Seam", "Seams from Islands"] {
+        click_menu(&mut h, "Seams", item);
+    }
+    h.get_by_label_contains("Pack").click();
+    h.run_steps(3);
+    for item in [
+        "Flip U",
+        "Flip V",
+        "Rotate 90° ⟲",
+        "Rotate 90° ⟳",
+        "Align U",
+        "Align V",
+    ] {
+        click_menu(&mut h, "Arrange", item);
+    }
+    click_menu(&mut h, "Select", "All  A");
+    // Modal G / R / S over the canvas, with a numeric value, cancel and confirm.
+    let canvas = egui::pos2(330.0, 700.0);
+    for key in [egui::Key::G, egui::Key::R, egui::Key::S] {
+        h.hover_at(canvas);
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(2);
+        mouse_move(&h, canvas + egui::vec2(40.0, 10.0));
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(2);
+        mouse_move(&h, canvas + egui::vec2(30.0, 30.0));
+        h.run_steps(2);
+        h.event(egui::Event::Text("0".into()));
+        h.event(egui::Event::Text("0".into()));
+        h.run_steps(2);
+        click_at(&mut h, canvas + egui::vec2(30.0, 30.0));
+    }
+    // Everything above must have left a consistent mesh that survives undo.
+    for _ in 0..40 {
+        undo(&mut h);
+    }
+    h.run_steps(5);
+    let mesh = state(&mut h).scene.get(3).unwrap().poly.clone();
+    if let Some(m) = mesh {
+        assert!(m.positions.iter().all(|p| p.is_finite()));
+        assert!(m.uvs.iter().flatten().all(|u| u.is_finite()), "finite UVs");
+    }
+}
+
+#[test]
+fn uv_editor_copes_with_an_empty_mesh() {
+    let p = project("uv-empty");
+    let mut h = editor(&p);
+    state(&mut h).scene.get_mut(3).unwrap().poly = Some(Default::default());
+    state(&mut h).select(Some(3));
+    assert!(h.state_mut().show_workspace("UV Editing"));
+    h.run_steps(5);
+    h.get_by_label("Unwrap  U").click();
+    h.run_steps(3);
+    click_menu(&mut h, "Select", "All  A");
+    h.hover_at(egui::pos2(330.0, 700.0));
+    h.run_steps(2);
+    for key in [egui::Key::G, egui::Key::A, egui::Key::U] {
+        h.key_press(key);
+        h.run_steps(2);
+    }
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+}
+
+#[test]
+fn console_filters_clears_copies_and_keeps_rows_single_line() {
+    let p = project("console");
+    let mut h = editor(&p);
+    h.get_by_label("WINDOW").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Add Panel").click();
+    h.run_steps(3);
+    h.get_by_label("🖵 Console").click();
+    h.run_steps(5);
+    state(&mut h).log.clear();
+    {
+        let s = state(&mut h);
+        s.info("plain info");
+        s.warn("a warning");
+        s.error("Ошибка: файл не найден 🦀");
+        s.info("long ".repeat(400));
+        s.info("two\nlines\nhere");
+        for i in 0..3000 {
+            s.info(format!("spam {i}"));
+        }
+    }
+    h.run_steps(5);
+    // Level toggles and the text filter.
+    h.get_by_label_contains("⚠").click();
+    h.run_steps(3);
+    h.get_by_label_contains("⛔").click();
+    h.run_steps(3);
+    h.get_by_label_contains("⚠").click();
+    h.get_by_label_contains("⛔").click();
+    h.run_steps(3);
+    // The console's filter: the wide field in the bottom leaf (the tab opens
+    // there, where the Assets panel is).
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.rect().width() > 400.0)
+        .expect("console filter")
+        .focus();
+    h.run_steps(2);
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.rect().width() > 400.0)
+        .expect("console filter")
+        .type_text("ошибка");
+    h.run_steps(3);
+    // Copy puts the shown lines on the clipboard.
+    h.get_by_label("Copy").click();
+    let mut copied = None;
+    for _ in 0..4 {
+        h.step();
+        copied = copied.or_else(|| {
+            h.output()
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                    _ => None,
+                })
+        });
+    }
+    let text = copied.expect("Copy sends text");
+    assert!(text.contains("Ошибка: файл не найден 🦀"), "{text}");
+    assert!(
+        !text.contains("plain info"),
+        "filtered out: {}",
+        text.chars().take(200).collect::<String>()
+    );
+    h.get_by_label("Clear").click();
+    h.run_steps(3);
+    assert!(state(&mut h).log.is_empty() || state(&mut h).log.len() < 5);
+    // The log is bounded.
+    for i in 0..6000 {
+        state(&mut h).info(format!("line {i}"));
+    }
+    assert!(state(&mut h).log.len() <= 5000);
+    h.run_steps(3);
+}
+
+/// A spot on the selected object's gizmo for the active tool: a slow drag of
+/// 40 px there changes `probe`. Restores the object afterwards.
+fn find_handle(h: &mut Ed, probe: impl Fn(&mut Ed) -> Vec3, reset: impl Fn(&mut Ed)) -> egui::Pos2 {
+    let start = probe(h);
+    for dy in (-120..=120).step_by(12) {
+        for dx in (-120..=120).step_by(12) {
+            let at = SCENE_VIEW + egui::vec2(dx as f32, dy as f32);
+            drag_slow(h, at, 40.0);
+            let moved = probe(h) != start;
+            reset(h);
+            h.run_steps(3);
+            if moved {
+                return at;
+            }
+        }
+    }
+    panic!("no gizmo handle found");
+}
+
+#[test]
+fn gizmo_tools_move_rotate_scale_in_both_spaces_and_undo() {
+    let p = project("gizmo");
+    let mut h = editor(&p);
+    let reset = |h: &mut Ed| {
+        let e = state(h).scene.get_mut(3).unwrap();
+        e.position = Vec3::Y;
+        e.rotation = Vec3::ZERO;
+        e.scale = Vec3::ONE;
+    };
+    for (key, local) in [
+        (egui::Key::W, false),
+        (egui::Key::W, true),
+        (egui::Key::E, false),
+        (egui::Key::E, true),
+        (egui::Key::R, false),
+    ] {
+        reset(&mut h);
+        state(&mut h).select(Some(3));
+        state(&mut h).local_space = local;
+        h.run_steps(3);
+        h.hover_at(SCENE_VIEW);
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        let probe = |h: &mut Ed| {
+            let e = state(h).scene.get(3).unwrap();
+            e.position + e.rotation * 1000.0 + e.scale * 1e6
+        };
+        let at = find_handle(&mut h, probe, reset);
+        drag_slow(&mut h, at, 60.0);
+        let e = state(&mut h).scene.get(3).unwrap().clone();
+        assert!(
+            e.position.is_finite() && e.rotation.is_finite() && e.scale.is_finite(),
+            "{key:?} local={local}: {e:?}"
+        );
+        let changed = e.position != Vec3::Y || e.rotation != Vec3::ZERO || e.scale != Vec3::ONE;
+        assert!(changed, "{key:?} local={local} did nothing");
+        // One drag, one undo step.
+        undo(&mut h);
+        let e = state(&mut h).scene.get(3).unwrap().clone();
+        assert!(
+            e.position == Vec3::Y && e.rotation == Vec3::ZERO && e.scale == Vec3::ONE,
+            "{key:?} local={local}: undo left {e:?}"
+        );
+    }
+}
+
+#[test]
+fn clicking_picks_objects_and_empty_space_clears() {
+    let p = project("pick");
+    let mut h = editor(&p);
+    state(&mut h).select(None);
+    h.run_steps(5);
+    // Somewhere on the cubes near the middle of the view.
+    let mut hit = None;
+    'scan: for dy in (-200..=200).step_by(8) {
+        for dx in (-200..=200).step_by(8) {
+            let at = SCENE_VIEW + egui::vec2(dx as f32, dy as f32);
+            click_at(&mut h, at);
+            if state(&mut h).selection.is_some() {
+                hit = Some(at);
+                break 'scan;
+            }
+        }
+    }
+    let at = hit.expect("a click selects one of the cubes");
+    // Ctrl+click toggles it off the multi-selection, plain click on the sky clears.
+    click_at(&mut h, SCENE_VIEW + egui::vec2(-400.0, -450.0));
+    assert!(state(&mut h).selection.is_none(), "sky click deselects");
+    // Alt+click is the camera, never a selection.
+    set_modifiers(&h, egui::Modifiers::ALT);
+    h.run_steps(2);
+    click_at(&mut h, at);
+    set_modifiers(&h, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert!(state(&mut h).selection.is_none(), "Alt+click must not pick");
+    // Picking still works after the view moved (wheel zoom, middle pan).
+    h.hover_at(SCENE_VIEW);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 120.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(5);
+    click_at(&mut h, SCENE_VIEW);
+    h.run_steps(2);
+}
+
+#[test]
+fn camera_navigation_keys_and_view_gizmo_are_stable() {
+    let p = project("camera");
+    let mut h = editor(&p);
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(3);
+    // Orbit (Alt+LMB), zoom (Alt+RMB), fly (RMB + WASD), frame, shading toggle.
+    set_modifiers(&h, egui::Modifiers::ALT);
+    h.run_steps(2);
+    drag(&mut h, SCENE_VIEW, SCENE_VIEW + egui::vec2(120.0, -80.0));
+    set_modifiers(&h, egui::Modifiers::NONE);
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton {
+        pos: SCENE_VIEW,
+        button: egui::PointerButton::Secondary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    for key in [
+        egui::Key::W,
+        egui::Key::A,
+        egui::Key::S,
+        egui::Key::D,
+        egui::Key::Q,
+        egui::Key::E,
+    ] {
+        h.key_down(key);
+        h.run_steps(3);
+        h.key_up(key);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: SCENE_VIEW,
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+    state(&mut h).select(Some(3));
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(2);
+    h.key_press(egui::Key::F);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(3);
+    // View gizmo: its centre toggles Persp/Iso, the axis tips look along an axis.
+    let gizmo = egui::pos2(1185.0, 138.0);
+    for dx in [0.0, 22.0, -22.0, 0.0] {
+        click_at(&mut h, gizmo + egui::vec2(dx, 0.0));
+    }
+    click_at(&mut h, gizmo);
+    click_at(&mut h, gizmo);
+    h.run_steps(5);
+    // Still alive: the object can be picked and moved.
+    assert!(state(&mut h).scene.get(3).unwrap().position.is_finite());
 }

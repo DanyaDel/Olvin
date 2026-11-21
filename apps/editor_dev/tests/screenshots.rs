@@ -579,6 +579,29 @@ fn review() {
             }
             shot_with(&project, &out.join(name), theme, Some(ws), |_| {});
         }
+        // A material assigned and the inspector scrolled to it, at two widths.
+        for (ws, at) in [
+            ("Layout", egui::pos2(1430.0, 500.0)),
+            ("UV Editing", egui::pos2(1470.0, 600.0)),
+        ] {
+            let name = format!("{theme:?}-material_{}.png", ws.replace(' ', "_")).to_lowercase();
+            if only.as_deref().is_some_and(|o| !name.contains(o)) {
+                continue;
+            }
+            shot_with(&project, &out.join(name), theme, Some(ws), |h| {
+                h.get_by_label("New").click();
+                h.run_steps(5);
+                h.event(egui::Event::PointerMoved(at));
+                h.run_steps(2);
+                h.event(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -330.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                h.run_steps(10);
+            });
+        }
         // The Code workspace with a file open (syntax colours on both themes).
         let name = format!("{theme:?}-code_open.png").to_lowercase();
         if only.as_deref().is_none_or(|o| name.contains(o)) {

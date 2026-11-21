@@ -438,8 +438,14 @@ fn material_section(
         };
         let mut changed = presets_ui(ui, m);
         changed |= material_ui(ui, m, &textures, &shaders);
-        ui.horizontal(|ui| {
-            ui.weak(format!("{rel} · shared by every object using it"));
+        // Stacked: the path and the button do not both fit a narrow panel.
+        ui.vertical(|ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("{rel} · shared by every object using it")).weak(),
+                )
+                .truncate(),
+            );
             if ui
                 .small_button("New shader")
                 .on_hover_text("shaders/<material>.wgsl from the surface shader template")

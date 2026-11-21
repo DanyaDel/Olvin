@@ -104,7 +104,11 @@ impl Problems {
                         Sense::click(),
                     );
                     if resp.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, theme::palette(ui.ctx()).surface_raised);
+                        ui.painter().rect_filled(
+                            rect,
+                            4.0,
+                            theme::palette(ui.ctx()).surface_raised,
+                        );
                     }
                     let p = ui.painter_at(rect);
                     let y = rect.center().y;

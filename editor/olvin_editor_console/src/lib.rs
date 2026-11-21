@@ -42,10 +42,15 @@ impl Panel for Console {
             count(LogLevel::Error),
         );
 
+        let mut copy_all = false;
         ui.horizontal(|ui| {
             if ui.button("Clear").clicked() {
                 state.log.clear();
             }
+            copy_all = ui
+                .button("Copy")
+                .on_hover_text("Copy the shown lines")
+                .clicked();
             ui.separator();
             ui.toggle_value(&mut self.info, format!("ℹ {n_info}"));
             ui.toggle_value(
@@ -76,6 +81,11 @@ impl Panel for Console {
             .filter(|l| filter.is_empty() || l.text.to_lowercase().contains(&filter))
             .collect();
 
+        if copy_all {
+            let text: Vec<String> = visible.iter().map(|l| format_line(l)).collect();
+            ui.ctx().copy_text(text.join("\n"));
+        }
+
         let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -93,9 +103,30 @@ impl Panel for Console {
                                 .monospace()
                                 .weak(),
                         );
-                        ui.label(RichText::new(&line.text).monospace().color(color));
+                        // One row per line (`show_rows` needs a fixed height): a long
+                        // or multi-line message is cut off, the full text is in the tooltip.
+                        let text = ui
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(&line.text).monospace().color(color),
+                                )
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(&line.text);
+                        text.context_menu(|ui| {
+                            if ui.button("Copy line").clicked() {
+                                ui.ctx().copy_text(format_line(line));
+                                ui.close();
+                            }
+                        });
                     });
                 }
             });
     }
+}
+
+/// "  12.34 text": a line as shown, for the clipboard.
+fn format_line(line: &olvin_editor::LogLine) -> String {
+    format!("{:>8.2} {}", line.time, line.text)
 }

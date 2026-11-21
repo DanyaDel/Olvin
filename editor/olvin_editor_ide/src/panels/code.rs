@@ -252,9 +252,11 @@ impl CodeEditor {
                             let glyph = if doc.dirty { "⏺" } else { "×" };
                             let x = ui
                                 .add(
-                                    egui::Button::new(RichText::new(glyph).color(theme::palette(ui.ctx()).muted))
-                                        .frame(false)
-                                        .small(),
+                                    egui::Button::new(
+                                        RichText::new(glyph).color(theme::palette(ui.ctx()).muted),
+                                    )
+                                    .frame(false)
+                                    .small(),
                                 )
                                 .on_hover_text(if doc.dirty {
                                     "Unsaved changes: close"
@@ -892,7 +894,9 @@ fn welcome(ui: &mut egui::Ui) {
             ("Ctrl+/", "Toggle Comment"),
             ("Ctrl+Tab", "Next Tab"),
         ] {
-            ui.label(RichText::new(format!("{what}   {keys}")).color(theme::palette(ui.ctx()).muted));
+            ui.label(
+                RichText::new(format!("{what}   {keys}")).color(theme::palette(ui.ctx()).muted),
+            );
         }
     });
 }

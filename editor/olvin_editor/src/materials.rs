@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::{DragValue, RichText, Slider};
 use olvin_scene::material::{MaterialDesc, SURFACE_SHADER_CONTRACT};
 
-use crate::panels::inspector::{grid, row};
+use crate::panels::inspector::{cell_width, grid, row};
 
 const RESCAN: Duration = Duration::from_secs(2);
 const IMAGE_EXT: [&str; 8] = ["png", "jpg", "jpeg", "tga", "bmp", "webp", "hdr", "exr"];
@@ -149,6 +149,11 @@ impl MaterialLibrary {
                 }
             })
             .collect();
+        let base = if base.trim_matches('_').is_empty() {
+            "material".to_owned()
+        } else {
+            base
+        };
         let mut rel = format!("materials/{base}.mat.ron");
         for n in 2.. {
             if !root.join(&rel).exists() {
@@ -200,11 +205,15 @@ fn asset_combo(
     id: &str,
     value: &mut Option<String>,
     options: &[String],
+    // Room taken by the widgets before it in the row.
+    reserve: f32,
 ) -> bool {
     let before = value.clone();
     let shown = value.as_deref().map_or("None".to_owned(), short_name);
+    // Shrinks with the panel (the arrow and padding take ~30 px).
+    let width = (cell_width(ui) - reserve - 30.0).clamp(40.0, 170.0);
     egui::ComboBox::from_id_salt(id)
-        .width(170.0)
+        .width(width)
         .selected_text(shown)
         .show_ui(ui, |ui| {
             ui.selectable_value(value, None, "None");
@@ -220,6 +229,12 @@ pub fn short_name(path: &str) -> String {
     file.trim_end_matches(".mat.ron").to_owned()
 }
 
+/// A 0..1 slider whose track shrinks so the value box stays in the cell.
+fn unit_slider(ui: &mut egui::Ui, value: &mut f32) {
+    ui.spacing_mut().slider_width = (cell_width(ui) - 62.0).clamp(24.0, 100.0);
+    ui.add(Slider::new(value, 0.0..=1.0));
+}
+
 /// The material editor: every field of a [`MaterialDesc`]. Returns true when
 /// something changed (the caller saves).
 pub fn material_ui(
@@ -232,16 +247,16 @@ pub fn material_ui(
     grid(ui, "material", |ui| {
         row(ui, "Base Color", |ui| {
             crate::widgets::color_rgba(ui, &mut m.base_color);
-            asset_combo(ui, "mat-base", &mut m.base_texture, textures);
+            asset_combo(ui, "mat-base", &mut m.base_texture, textures, 36.0);
         });
         row(ui, "Metallic", |ui| {
-            ui.add(Slider::new(&mut m.metallic, 0.0..=1.0));
+            unit_slider(ui, &mut m.metallic);
         });
         row(ui, "Roughness", |ui| {
-            ui.add(Slider::new(&mut m.roughness, 0.0..=1.0));
+            unit_slider(ui, &mut m.roughness);
         });
         row(ui, "Normal Map", |ui| {
-            asset_combo(ui, "mat-normal", &mut m.normal_texture, textures);
+            asset_combo(ui, "mat-normal", &mut m.normal_texture, textures, 56.0);
             if m.normal_texture.is_some() {
                 ui.add(
                     DragValue::new(&mut m.normal_strength)
@@ -251,11 +266,11 @@ pub fn material_ui(
             }
         });
         row(ui, "Occl/Rough/Metal", |ui| {
-            asset_combo(ui, "mat-orm", &mut m.orm_texture, textures);
+            asset_combo(ui, "mat-orm", &mut m.orm_texture, textures, 0.0);
         });
         row(ui, "Emission", |ui| {
             crate::widgets::color_rgb(ui, &mut m.emissive);
-            asset_combo(ui, "mat-emissive", &mut m.emissive_texture, textures);
+            asset_combo(ui, "mat-emissive", &mut m.emissive_texture, textures, 36.0);
         });
         row(ui, "Tiling", |ui| {
             ui.add(DragValue::new(&mut m.uv_scale[0]).speed(0.01).prefix("x "));
@@ -266,17 +281,21 @@ pub fn material_ui(
             ui.add(DragValue::new(&mut m.uv_offset[1]).speed(0.01).prefix("y "));
         });
         row(ui, "Alpha Cutoff", |ui| {
-            ui.add(Slider::new(&mut m.alpha_cutoff, 0.0..=1.0));
+            unit_slider(ui, &mut m.alpha_cutoff);
         });
-        row(ui, "Options", |ui| {
-            ui.checkbox(&mut m.triplanar, "Triplanar")
+        row(ui, "Triplanar", |ui| {
+            ui.checkbox(&mut m.triplanar, "")
                 .on_hover_text("World-space projection, no UVs needed (CSG levels)");
-            ui.checkbox(&mut m.point_filter, "Pixelated")
+        });
+        row(ui, "Pixelated", |ui| {
+            ui.checkbox(&mut m.point_filter, "")
                 .on_hover_text("Nearest filtering, no mipmaps");
-            ui.checkbox(&mut m.unlit, "Unlit");
+        });
+        row(ui, "Unlit", |ui| {
+            ui.checkbox(&mut m.unlit, "");
         });
         row(ui, "Shader", |ui| {
-            asset_combo(ui, "mat-shader", &mut m.shader, shaders);
+            asset_combo(ui, "mat-shader", &mut m.shader, shaders, 0.0);
         });
     });
     *m != before

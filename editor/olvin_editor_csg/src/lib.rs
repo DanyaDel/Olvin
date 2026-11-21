@@ -143,9 +143,10 @@ fn spawn_room(state: &mut EditorState, parent: Option<u64>) -> u64 {
 /// Adds a subtractive child that leaves walls of the configured thickness.
 pub(crate) fn hollow(state: &mut EditorState, id: u64) -> Option<u64> {
     let wall = shared(|s| s.wall);
-    let scale = state.scene.get(id)?.scale;
+    // A flat or NaN brush has no inside: dividing by its scale gave infinities.
+    let scale = state.scene.get(id)?.scale.abs().max(Vec3::splat(0.01));
     let color = state.scene.get(id)?.brush.as_ref()?.color;
-    let inner = (scale.abs() - Vec3::splat(2.0 * wall)).max(Vec3::splat(0.01)) / scale.abs();
+    let inner = (scale - Vec3::splat(2.0 * wall)).max(Vec3::splat(0.01)) / scale;
     let child = state.create(olvin_editor::NewEntity::Empty, Some(id));
     let e = state.scene.get_mut(child).unwrap();
     e.name = "Hollow".into();

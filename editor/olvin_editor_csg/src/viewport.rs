@@ -120,7 +120,11 @@ impl CsgViewport {
         shared(|s| {
             s.stats.brushes = brushes.len();
             s.stats.polygons = self.polygons.len();
-            s.stats.triangles = self.polygons.iter().map(|p| p.vertices.len() - 2).sum();
+            s.stats.triangles = self
+                .polygons
+                .iter()
+                .map(|p| p.vertices.len().saturating_sub(2))
+                .sum();
             s.stats.build_ms = ms;
         });
         self.cache_key = brushes;
@@ -208,7 +212,8 @@ impl CsgViewport {
         let pointer = ctx.response.hover_pos();
         let (pressed, released, esc, shift) = ctx.ui.input(|i| {
             (
-                i.pointer.button_pressed(PointerButton::Primary),
+                // Alt+LMB orbits the view: it must not start or finish a brush.
+                i.pointer.button_pressed(PointerButton::Primary) && !i.modifiers.alt,
                 i.pointer.button_released(PointerButton::Primary),
                 i.key_pressed(Key::Escape) || i.pointer.button_pressed(PointerButton::Secondary),
                 i.modifiers.shift,
@@ -223,8 +228,9 @@ impl CsgViewport {
             Draw::Idle => {
                 let Some(p) = pointer else { return };
                 let Some(hit) = ctx.raycast(p) else { return };
-                let plane = DrawPlane::from_hit(hit.point, hit.normal);
-                let at = plane.snap(hit.point, &ctx.snap);
+                let (point, normal) = (hit.point, hit.normal);
+                let plane = DrawPlane::from_hit(point, normal);
+                let at = plane.snap(point, &ctx.snap);
                 cross(
                     ctx.painter,
                     ctx.camera,
@@ -338,6 +344,7 @@ impl CsgViewport {
 
         if self.face.is_none()
             && ctx.response.drag_started_by(PointerButton::Primary)
+            && !ctx.ui.input(|i| i.modifiers.alt)
             && let Some((axis, sign)) = hot
             && let Some(face) = faces.iter().find(|f| f.0 == axis && f.1 == sign)
             && let Some(e) = ctx.state.scene.get(sel)
@@ -364,7 +371,12 @@ impl CsgViewport {
                 position: e.position,
                 scale: e.scale,
                 extent: m.transform_vector3(full).length(),
-                parent_inv: parent.inverse(),
+                // A parent scaled to zero has no inverse.
+                parent_inv: if parent.determinant().abs() > 1e-12 {
+                    parent.inverse()
+                } else {
+                    Mat4::IDENTITY
+                },
             });
         }
         if let Some(f) = &self.face
@@ -385,7 +397,12 @@ impl CsgViewport {
             let extent = (f.extent + delta).max(0.01);
             let applied = extent - f.extent;
             if let Some(e) = ctx.state.scene.get_mut(f.entity) {
-                e.scale[f.axis] = f.scale[f.axis] * extent / f.extent.max(1e-6);
+                // A flat brush (scale 0) has no extent to scale: set it.
+                e.scale[f.axis] = if f.extent < 1e-6 {
+                    extent
+                } else {
+                    f.scale[f.axis] * extent / f.extent
+                };
                 e.position = f.position + f.parent_inv.transform_vector3(f.dir * applied * 0.5);
             }
             ctx.painter.text(

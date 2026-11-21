@@ -121,7 +121,14 @@ mod tests {
         let text = "fn main() { let s = \"x\"; } // done";
         let tokens = tokenize(Lang::Rust, text);
         let matches: Vec<Range<usize>> = std::iter::once(3..7).collect();
-        let job = layout_job(text, &tokens, &matches, Some(0), FontId::monospace(12.0), false);
+        let job = layout_job(
+            text,
+            &tokens,
+            &matches,
+            Some(0),
+            FontId::monospace(12.0),
+            false,
+        );
         let mut at = 0;
         for s in &job.sections {
             assert_eq!(s.byte_range.start.0, at);
@@ -135,7 +142,10 @@ mod tests {
                 .find(|s| s.byte_range.start.0 == start)
                 .unwrap()
         };
-        assert_eq!(section("fn").format.color, color(Some(TokenKind::Keyword), false));
+        assert_eq!(
+            section("fn").format.color,
+            color(Some(TokenKind::Keyword), false)
+        );
         assert_eq!(section("main").format.background, CURRENT_MATCH_BG);
         assert_eq!(
             section("\"x\"").format.color,

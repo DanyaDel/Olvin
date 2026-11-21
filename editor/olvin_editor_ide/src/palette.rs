@@ -146,7 +146,9 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
                             ui.label(RichText::new(msg).color(theme::palette(ui.ctx()).muted));
                         }
                         _ if items.is_empty() => {
-                            ui.label(RichText::new("No matches").color(theme::palette(ui.ctx()).muted));
+                            ui.label(
+                                RichText::new("No matches").color(theme::palette(ui.ctx()).muted),
+                            );
                         }
                         _ => {
                             let start = p.selected.saturating_sub(ROWS - 1);
@@ -249,7 +251,8 @@ fn row_ui(
         ui.painter()
             .rect_filled(rect, 5.0, theme::ACCENT.gamma_multiply(0.45));
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 5.0, theme::palette(ui.ctx()).surface);
+        ui.painter()
+            .rect_filled(rect, 5.0, theme::palette(ui.ctx()).surface);
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
     let mut job = LayoutJob::default();
@@ -278,8 +281,11 @@ fn row_ui(
     }
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let y = rect.center().y - galley.size().y / 2.0;
-    ui.painter()
-        .galley(egui::pos2(rect.left() + 8.0, y), galley, theme::palette(ui.ctx()).text);
+    ui.painter().galley(
+        egui::pos2(rect.left() + 8.0, y),
+        galley,
+        theme::palette(ui.ctx()).text,
+    );
     if !detail.is_empty() {
         ui.painter().text(
             egui::pos2(rect.right() - 8.0, rect.center().y),

@@ -14,6 +14,8 @@ use crate::ext::Extensions;
 use crate::materials::MaterialEdits;
 
 const UNDO_LIMIT: usize = 200;
+/// Log lines kept; the oldest tenth goes when it is exceeded.
+const LOG_LIMIT: usize = 5000;
 
 /// Built-in viewport tools; elements add their own ids (e.g. `"csg.draw"`).
 pub mod tools {
@@ -246,6 +248,10 @@ impl EditorState {
             time,
             text: text.into(),
         });
+        // A long session must not grow the log (and every frame's filter) forever.
+        if self.log.len() > LOG_LIMIT {
+            self.log.drain(..LOG_LIMIT / 10);
+        }
     }
 
     pub fn info(&mut self, text: impl Into<String>) {

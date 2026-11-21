@@ -12,4 +12,4 @@ pub use build::{ArchiveFormat, BuildOptions, BuildReport};
 pub use catalog::{Catalog, EditorModule, Module, Source};
 pub use config::{ENGINE_GIT, EngineSource, GuiSettings, HubConfig};
 pub use editor::{EditorInstall, engine_fingerprint};
-pub use project::Project;
+pub use project::{Project, name_problem};

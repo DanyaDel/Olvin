@@ -80,9 +80,15 @@ impl Project {
         let binary = out.join(exe.file_name().context("the executable has no file name")?);
         fs::copy(&exe, &binary)
             .with_context(|| format!("could not copy {} to {}", exe.display(), binary.display()))?;
+        // Always there, even empty: the engine recognizes a built folder by `assets/`
+        // next to the executable (`ProjectPaths`), otherwise logs and saves would
+        // land in whatever the working directory is.
         let assets = match self.root().join("assets") {
             dir if dir.is_dir() => copy_tree(&dir, &out.join("assets"))?,
-            _ => 0,
+            _ => {
+                fs::create_dir_all(out.join("assets"))?;
+                0
+            }
         };
         let archive = options
             .archive
@@ -343,6 +349,7 @@ mod tests {
         assert!(report.binary.is_file());
         assert!(report.binary.starts_with(&report.out_dir));
         assert_eq!(report.assets, 2, "hidden files and backups are left out");
+        assert!(report.out_dir.join("assets").is_dir());
         assert!(
             report
                 .out_dir
@@ -442,6 +449,19 @@ mod tests {
         assert_eq!(report.archive.unwrap(), dir.join("out/tiny-win.zip"));
         #[cfg(unix)]
         assert!(report.out_dir.join("assets/linked/a.txt").is_file());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A project without `assets/` still gets the folder in its build, or the
+    /// engine would not recognize the build folder as the project root.
+    #[test]
+    fn build_without_assets_still_has_the_folder() {
+        let dir = temp_dir("noassets");
+        let game = tiny_game(&dir);
+        fs::remove_dir_all(game.root().join("assets")).unwrap();
+        let report = game.build(&options(&dir)).unwrap();
+        assert_eq!(report.assets, 0);
+        assert!(report.out_dir.join("assets").is_dir());
         fs::remove_dir_all(dir).unwrap();
     }
 

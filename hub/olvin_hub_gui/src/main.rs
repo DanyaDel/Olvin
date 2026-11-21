@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use anyhow::Context as _;
 use eframe::egui;
 use olvin_hub::{Catalog, EditorInstall, HubConfig, Project};
 
@@ -148,6 +149,8 @@ pub(crate) enum RowAction {
 pub(crate) struct Hub {
     catalog: Catalog,
     config: HubConfig,
+    /// Where `config` is saved instead of the real hub config (tests).
+    config_file: Option<PathBuf>,
     page: Page,
     /// When the current page was opened (`InputState::time`): page fade and
     /// the staggered entrance of rows.
@@ -198,7 +201,18 @@ impl Hub {
     fn load() -> Self {
         let (config, error) = match HubConfig::load() {
             Ok(c) => (c, None),
-            Err(e) => (HubConfig::default(), Some(format!("{e:#}"))),
+            Err(e) => {
+                // Saving a preference would overwrite the damaged file with an
+                // empty list of projects: keep the original next to it.
+                let kept = HubConfig::path().ok().and_then(|path| {
+                    let backup = path.with_extension("toml.broken");
+                    std::fs::copy(&path, &backup).ok().map(|_| backup)
+                });
+                let note = kept
+                    .map(|b| format!(" A copy is kept in {}.", b.display()))
+                    .unwrap_or_default();
+                (HubConfig::default(), Some(format!("{e:#}.{note}")))
+            }
         };
         let mut hub = Self::new(config, EditorInstall::locate().ok());
         if let Some(e) = error {
@@ -211,6 +225,7 @@ impl Hub {
         let gui = &config.gui;
         let mut hub = Self {
             catalog: Catalog::builtin(),
+            config_file: None,
             page: Page::Projects,
             page_at: 0.0,
             modal: None,
@@ -245,6 +260,14 @@ impl Hub {
         };
         hub.refresh();
         hub
+    }
+
+    /// Writes the hub config (to `config_file` when a test set one).
+    fn save_config(&self) -> anyhow::Result<()> {
+        match &self.config_file {
+            Some(path) => self.config.save_to(path),
+            None => self.config.save(),
+        }
     }
 
     fn refresh(&mut self) {
@@ -323,7 +346,7 @@ impl Hub {
             Sort::Name => "name",
         }
         .into();
-        if let Err(e) = self.config.save() {
+        if let Err(e) = self.save_config() {
             self.toast_error(format!("Could not save settings: {e:#}"));
         }
     }
@@ -357,7 +380,7 @@ impl Hub {
     fn create_project(&mut self, name: &str, location: &str, modules: &[String]) -> bool {
         let ids: Vec<&str> = modules.iter().map(String::as_str).collect();
         let result = Project::create_with(
-            &PathBuf::from(location.trim()),
+            &expand_home(location),
             name.trim(),
             &self.config.engine,
             &self.catalog,
@@ -365,7 +388,7 @@ impl Hub {
         )
         .and_then(|p| {
             self.config.register(p.root())?;
-            self.config.save()?;
+            self.save_config()?;
             Ok(p.name().to_owned())
         });
         let ok = result.is_ok();
@@ -375,9 +398,9 @@ impl Hub {
     }
 
     fn add_existing(&mut self, path: &str) -> bool {
-        let result = Project::open(path.trim()).and_then(|p| {
+        let result = Project::open(expand_home(path)).and_then(|p| {
             let added = self.config.register(p.root())?;
-            self.config.save()?;
+            self.save_config()?;
             Ok((p.name().to_owned(), added))
         });
         let ok = result.is_ok();
@@ -394,7 +417,7 @@ impl Hub {
 
     fn forget(&mut self, root: &Path) {
         self.config.forget(root);
-        let result = self.config.save();
+        let result = self.save_config();
         let name = file_name(root);
         self.report(result, |()| {
             format!("Removed {name} from the list. Files stay on disk.")
@@ -406,11 +429,14 @@ impl Hub {
         if self.game.is_some() {
             return;
         }
-        let mut cmd = Command::new("cargo");
+        let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         cmd.arg("run").current_dir(root);
         if release {
             cmd.arg("--release");
         }
+        // Its own process group: Stop must end the game, not only the cargo that started it.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         let name = file_name(root);
         match cmd.spawn() {
             Ok(child) => {
@@ -423,7 +449,7 @@ impl Hub {
 
     fn stop_game(&mut self) {
         if let Some((name, mut child)) = self.game.take() {
-            let _ = child.kill();
+            kill_tree(&mut child);
             self.toast(format!("Stopped {name}"));
         }
     }
@@ -444,7 +470,8 @@ impl Hub {
                     .build_command()
                     .stderr(Stdio::piped())
                     .stdout(Stdio::null())
-                    .spawn()?;
+                    .spawn()
+                    .context("could not start cargo")?;
                 let log = Arc::new(Mutex::new(Vec::new()));
                 let stderr = child.stderr.take().expect("stderr is piped");
                 let sink = log.clone();
@@ -647,6 +674,37 @@ impl eframe::App for Hub {
     }
 }
 
+/// A typed path: trimmed, with a leading `~` meaning the home folder (a
+/// text field is not a shell, and a folder literally named `~` is never wanted).
+pub(crate) fn expand_home(text: &str) -> PathBuf {
+    let text = text.trim();
+    let home = dirs::home_dir();
+    match (text, home) {
+        ("~", Some(home)) => home,
+        (t, Some(home)) if t.starts_with("~/") => home.join(&t[2..]),
+        _ => PathBuf::from(text),
+    }
+}
+
+/// Kills `cargo run` and the game it started.
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // The child leads its own process group (see `run_game`): `kill -- -PGID`.
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) fn file_name(root: &Path) -> String {
     root.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -720,6 +778,102 @@ mod tests {
                 "{id} off screen: {rect:?}"
             );
         }
+    }
+
+    fn temp(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("olvin-hub-gui-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn create_from_template_then_toggle_modules_and_forget() {
+        let dir = temp("create");
+        let mut hub = Hub::new(HubConfig::default(), None);
+        hub.config_file = Some(dir.join("config/config.toml"));
+        let modules: Vec<String> = TEMPLATES[1].modules.iter().map(|m| m.to_string()).collect();
+        assert!(hub.create_project("demo_game", dir.to_str().unwrap(), &modules));
+        assert_eq!(hub.rows.len(), 1);
+        assert_eq!(hub.rows[0].name, "demo_game");
+        assert!(!hub.rows[0].missing);
+        assert!(hub.rows[0].modules.iter().any(|m| m == "3D physics"));
+        // the same name twice is an error toast, not a second row
+        assert!(!hub.create_project("demo_game", dir.to_str().unwrap(), &modules));
+        assert!(hub.toasts.last().unwrap().error);
+        assert_eq!(hub.rows.len(), 1);
+        // a reserved name is refused before anything is created
+        assert!(!hub.create_project("olvin", dir.to_str().unwrap(), &modules));
+        assert!(!dir.join("olvin").exists());
+
+        // the Modules dialog installs `lua` (with `scripts`) and removes it again
+        let root = hub.rows[0].root.clone();
+        let mut project = Project::open(&root).unwrap();
+        let catalog = Catalog::builtin();
+        project.add(&catalog, "lua").unwrap();
+        project.add(&catalog, "game").unwrap();
+        project.save().unwrap();
+        hub.refresh();
+        assert!(hub.rows[0].modules.iter().any(|m| m == "Lua scripts"));
+        assert!(hub.rows[0].modules.iter().any(|m| m == "Game runtime"));
+
+        // a deleted project stays in the list, marked missing
+        std::fs::remove_dir_all(&root).unwrap();
+        hub.refresh();
+        assert!(hub.rows[0].missing);
+        hub.forget(&root);
+        assert!(hub.rows.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn adding_a_folder_that_is_not_a_project_reports_an_error() {
+        let dir = temp("add-bad");
+        let mut hub = Hub::new(HubConfig::default(), None);
+        hub.config_file = Some(dir.join("config/config.toml"));
+        assert!(!hub.add_existing(dir.to_str().unwrap()));
+        assert!(hub.toasts.last().unwrap().error);
+        assert!(!hub.add_existing("/definitely/not/here"));
+        assert!(hub.rows.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn typed_paths_expand_the_home_folder() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_home(" ~/games "), home.join("games"));
+            assert_eq!(expand_home("~"), home);
+        }
+        assert_eq!(expand_home("/a/~/b"), PathBuf::from("/a/~/b"));
+        assert_eq!(expand_home("~x"), PathBuf::from("~x"));
+    }
+
+    /// Stop must end the game cargo started, not just cargo.
+    #[cfg(unix)]
+    #[test]
+    fn stopping_kills_the_whole_process_group() {
+        let dir = temp("kill");
+        let pid_file = dir.join("grandchild.pid");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("sleep 60 & echo $! > {}; wait", pid_file.display()));
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let mut child = cmd.spawn().unwrap();
+        let grandchild = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                break pid;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        kill_tree(&mut child);
+        std::thread::sleep(Duration::from_millis(100));
+        let alive = std::path::Path::new(&format!("/proc/{grandchild}")).exists()
+            && std::fs::read_to_string(format!("/proc/{grandchild}/stat"))
+                .is_ok_and(|s| !s.contains(") Z"));
+        assert!(!alive, "the grandchild survived");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

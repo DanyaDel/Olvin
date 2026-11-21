@@ -380,7 +380,13 @@ const RESERVED: &[&str] = &[
     "dyn",
 ];
 
-fn validate_name(name: &str) -> Result<()> {
+/// Why `name` cannot be a project name (and a package name), or `None`.
+/// Empty is not a problem yet: nothing has been typed.
+pub fn name_problem(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
     let ok = name
         .chars()
         .next()
@@ -389,16 +395,26 @@ fn validate_name(name: &str) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if !ok {
-        bail!("`{name}`: use Latin letters, digits, `_` and `-`, starting with a letter");
+        return Some("Use Latin letters, digits, _ and -, starting with a letter.".into());
     }
     // Cargo refuses these as package names, or the project would depend on itself.
     let crate_name = name.replace('-', "_");
-    if RESERVED.contains(&crate_name.as_str()) {
-        bail!(
-            "`{name}` is reserved (a Rust keyword, a std crate or a dependency of the project). Pick another name"
-        );
+    RESERVED
+        .contains(&crate_name.as_str())
+        .then(|| "Reserved (a Rust keyword, a std crate or a dependency of the project).".into())
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("the project name is empty");
     }
-    Ok(())
+    if name != name.trim() {
+        bail!("`{name}`: the name has spaces at the ends");
+    }
+    match name_problem(name) {
+        Some(problem) => bail!("`{name}`: {problem}"),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

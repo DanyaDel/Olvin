@@ -4,7 +4,7 @@
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Id, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
-use olvin_hub::{Catalog, Project};
+use olvin_hub::{Catalog, Project, name_problem};
 
 use crate::ui::{self, FS_MD, FS_SM, FS_XL, Palette, RADIUS_LG, RADIUS_MD, anim};
 use crate::widgets::{Btn, Icon, bold, card_bg, mono, paint_icon, sans, since, truncated};
@@ -216,21 +216,6 @@ fn card_grid(
     }
 }
 
-fn name_error(name: &str) -> Option<&'static str> {
-    let name = name.trim();
-    if name.is_empty() {
-        return None;
-    }
-    let ok = name
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    (!ok).then_some("Use Latin letters, digits, _ and -, starting with a letter.")
-}
-
 /// Adds `id` with what it requires, or removes it with what requires it.
 fn toggle_module(catalog: &Catalog, modules: &mut Vec<String>, id: &str) {
     if modules.iter().any(|m| m == id) {
@@ -397,9 +382,9 @@ impl Hub {
                             .margin(egui::Margin::symmetric(10, 8)),
                     );
                     ui.add_space(4.0);
-                    let error = name_error(name);
-                    let line = match error {
-                        Some(e) => (e.to_owned(), p.error, sans(FS_SM)),
+                    let error = name_problem(name);
+                    let line = match &error {
+                        Some(e) => (e.clone(), p.error, sans(FS_SM)),
                         None if name.trim().is_empty() => (String::new(), p.muted, sans(FS_SM)),
                         None => (
                             format!(

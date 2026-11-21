@@ -2,6 +2,7 @@
 //! target and reads the pixels back.
 
 mod blend;
+mod edge;
 mod lighting;
 mod materials;
 mod post;

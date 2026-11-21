@@ -4,9 +4,14 @@
 //! frame [`update`] steps them in `Stage::PostUpdate`, and the
 //! [`ParticleRenderer`] draws them as camera-facing quads, one instanced
 //! draw per texture / blend run. Nothing allocates in the steady state: the
-//! particle storage is reserved up to `max_particles` and swap-removed.
+//! particle storage is reserved up to `max_particles` (at most
+//! [`MAX_RESERVED`] slots; a bigger cap just grows on demand) and swap-removed.
 
 use std::f32::consts::TAU;
+
+/// Most particle slots reserved up front: `max_particles` comes from files,
+/// and a typo must not turn into a multi-gigabyte allocation.
+pub const MAX_RESERVED: usize = 1 << 16;
 
 use glam::{Mat4, Vec3, Vec4Swizzles};
 use olvin_core::{Resources, Time};
@@ -318,7 +323,7 @@ impl ParticleEmitter {
     pub fn new(params: EmitterParams) -> Self {
         Self {
             rng: Rng::new(params.seed),
-            particles: Vec::with_capacity(params.max_particles as usize),
+            particles: Vec::with_capacity((params.max_particles as usize).min(MAX_RESERVED)),
             params,
             texture: None,
             playing: true,
@@ -367,12 +372,14 @@ impl ParticleEmitter {
 
     /// Advances by `dt` seconds. `matrix` is the emitter's world transform.
     pub fn update(&mut self, dt: f32, matrix: &Mat4) {
-        if dt <= 0.0 {
+        // `!(dt > 0.0)` also drops NaN, which would poison `time` and `carry` for good.
+        if !(dt > 0.0) {
             return;
         }
         let max = self.params.max_particles as usize;
-        if self.particles.capacity() < max {
-            self.particles.reserve(max - self.particles.len());
+        let reserved = max.min(MAX_RESERVED);
+        if self.particles.capacity() < reserved {
+            self.particles.reserve(reserved - self.particles.len());
         }
         self.step_particles(dt);
 
@@ -630,6 +637,23 @@ mod tests {
             gravity: Vec3::ZERO,
             ..Default::default()
         });
+        for _ in 0..60 {
+            e.update(1.0 / 60.0, &Mat4::IDENTITY);
+        }
+        assert!((99..=100).contains(&e.count()), "{}", e.count());
+    }
+
+    #[test]
+    fn nan_steps_and_huge_caps_are_harmless() {
+        let mut e = steady(EmitterParams {
+            rate: 100.0,
+            max_particles: u32::MAX,
+            lifetime: [10.0, 10.0],
+            gravity: Vec3::ZERO,
+            ..Default::default()
+        });
+        assert!(e.particles.capacity() <= MAX_RESERVED);
+        e.update(f32::NAN, &Mat4::IDENTITY);
         for _ in 0..60 {
             e.update(1.0 / 60.0, &Mat4::IDENTITY);
         }

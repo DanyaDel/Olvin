@@ -355,6 +355,12 @@ impl Tilemap {
         }
     }
 
+    /// The 0-based tile index of a stored value; `None` for an empty cell,
+    /// also one holding only flip flags (a hand-edited or overflowed value).
+    fn tile_index(value: u32) -> Option<u32> {
+        (value & Self::INDEX_MASK).checked_sub(1)
+    }
+
     /// The stored value of a cell (0 outside the map).
     pub fn get(&self, x: u32, y: u32) -> u32 {
         if x >= self.width || y >= self.height {
@@ -638,10 +644,8 @@ impl SpriteRenderer {
             for cy in y0..y1 {
                 for cx in x0..x1 {
                     let value = map.get(cx, cy);
-                    if value == 0 {
-                        continue;
-                    }
-                    let Some(uv) = map.tileset.uv((value & Tilemap::INDEX_MASK) - 1) else {
+                    let Some(uv) = Tilemap::tile_index(value).and_then(|i| map.tileset.uv(i))
+                    else {
                         continue;
                     };
                     let row = match map.space {
@@ -760,6 +764,25 @@ mod tests {
         let uv = set.uv(1).unwrap();
         assert!((uv[0] * 38.0 - 19.02).abs() < 1e-3, "{uv:?}");
         assert_eq!(set.uv(2), None);
+    }
+
+    #[test]
+    fn flag_only_cells_are_empty_not_an_underflow() {
+        assert_eq!(Tilemap::tile_index(0), None);
+        assert_eq!(Tilemap::tile_index(Tilemap::FLIP_X), None);
+        assert_eq!(
+            Tilemap::tile_index(Tilemap::FLIP_X | Tilemap::FLIP_Y | 1),
+            Some(0)
+        );
+        // Tile 2^29 - 1 overflows into the flag-less zero: still just empty.
+        let mut map = Tilemap::new(
+            TileSet::new(TextureHandle(0), [16, 16], [8, 8]),
+            1,
+            1,
+            Vec2::ONE,
+        );
+        map.set(0, 0, Some(Tilemap::INDEX_MASK), Tilemap::FLIP_X);
+        assert_eq!(Tilemap::tile_index(map.get(0, 0)), None);
     }
 
     #[test]

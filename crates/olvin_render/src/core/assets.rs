@@ -39,6 +39,14 @@ impl RenderCore {
         use wgpu::util::DeviceExt;
         for (handle, data) in meshes.pending.drain(..) {
             let MeshData { vertices, indices } = &data;
+            // Nothing to draw (and wgpu cannot slice a zero-size buffer): an
+            // emptied mesh leaves its slot empty, which every pass skips.
+            if vertices.is_empty() || indices.is_empty() {
+                if let Some(slot) = gpu.meshes.get_mut(handle.0 as usize) {
+                    *slot = None;
+                }
+                continue;
+            }
             let (center, radius) = data.bounding_sphere();
             let mesh = GpuMesh {
                 vertices: self

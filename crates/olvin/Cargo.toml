@@ -10,8 +10,12 @@ repository.workspace = true
 default = ["window", "render"]
 window = ["dep:olvin_window"]
 render = ["dep:olvin_render"]
-# Load .scene.ron files saved by olvin-editor.
-scene = ["render", "olvin_scene/serde", "dep:olvin_csg", "dep:olvin_assets"]
+# Load .scene.ron files saved by olvin-editor (with their glTF models and animators).
+scene = ["render", "anim", "assets", "olvin_scene/serde", "dep:olvin_csg"]
+# Skeletal animation without the renderer: Animator, AnimGraph, AnimPlugin.
+anim = ["dep:olvin_anim"]
+# Asset pipeline: .meta GUIDs, images, glTF import, AssetManager.
+assets = ["dep:olvin_assets"]
 # Colliders and rigidbodies simulated with Rapier.
 physics = ["dep:olvin_physics", "olvin_script?/physics"]
 # Unity-style behaviours in Rust (Scripts from scenes → instances).
@@ -34,6 +38,7 @@ olvin_window = { workspace = true, optional = true }
 olvin_render = { workspace = true, optional = true }
 olvin_csg = { workspace = true, optional = true }
 olvin_assets = { path = "../olvin_assets", optional = true }
+olvin_anim = { workspace = true, optional = true }
 olvin_physics = { workspace = true, optional = true }
 olvin_script = { path = "../olvin_script", optional = true, default-features = false }
 olvin_input = { path = "../olvin_input", optional = true }

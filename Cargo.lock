@@ -3232,6 +3232,7 @@ version = "0.1.0"
 dependencies = [
  "glam 0.34.3",
  "log",
+ "olvin_anim",
  "olvin_assets",
  "olvin_audio",
  "olvin_core",
@@ -5082,8 +5083,6 @@ version = "0.1.0"
 dependencies = [
  "log",
  "olvin",
- "olvin_anim",
- "olvin_assets",
  "serde",
 ]
 

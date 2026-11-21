@@ -9,12 +9,17 @@ pub use olvin_csg::{BrushShape, CsgOp};
 pub use olvin_mesh::PolyMesh;
 use serde::{Deserialize, Serialize};
 
+pub use crate::anim::{
+    AnimGraphDesc, AnimStateDesc, AnimationDesc, MotionDesc, ParamDesc, TestDesc, TransitionDesc,
+};
 pub use crate::primitives::Shape;
 use crate::{Camera, Transform};
 
 /// The version of the format this build writes. Bump it together with a new entry
-/// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases.
-pub const FORMAT_VERSION: u32 = 1;
+/// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
+/// or when an older build would silently lose data it does not know (it refuses
+/// files newer than its own version instead).
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -22,10 +27,15 @@ pub const FORMAT_VERSION: u32 = 1;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
+
+/// Version 2 adds `EntityDesc::model` (glTF models with animation). Older
+/// files have no models, so the data stays as it is; the bump makes version-1
+/// builds refuse new files instead of spawning empty objects where models were.
+fn v1_to_v2(_: &mut SceneFile) {}
 
 fn legacy_version() -> u32 {
     0
@@ -241,6 +251,9 @@ pub struct EntityDesc {
     /// `None`: plain `color` (mesh/brush colour), no textures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
+    /// glTF model instanced under this object at load (format version 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light: Option<LightDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -450,6 +463,27 @@ pub struct MeshDesc {
     pub color: [f32; 4],
 }
 
+/// A model asset placed on an object: its meshes and materials, and for a
+/// skinned model the skeleton with an animator. The object is the model's
+/// root; `collider: Mesh` on the object uses the model's triangles.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelDesc {
+    /// `.gltf` / `.glb`, relative to the project's `assets/` (like materials).
+    pub path: String,
+    /// What the skeleton plays; `None`: the rest pose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<AnimationDesc>,
+}
+
+impl ModelDesc {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            animation: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CameraDesc {
     pub fov_deg: f32,
@@ -504,6 +538,7 @@ impl EntityDesc {
             brush: None,
             poly: None,
             material: None,
+            model: None,
             light: None,
             collider: None,
             rigidbody: None,
@@ -812,8 +847,47 @@ mod tests {
         zone.is_trigger = true;
         trigger.collider = Some(zone);
 
+        let mut robot = EntityDesc::new(7, "Robot");
+        robot.model = Some(ModelDesc {
+            path: "models/robot.gltf".into(),
+            animation: Some(AnimationDesc::Inline(AnimGraphDesc {
+                states: vec![
+                    AnimStateDesc::clip("Idle", "Idle"),
+                    AnimStateDesc {
+                        name: "Walk".into(),
+                        motion: MotionDesc::Blend1D {
+                            param: "speed".into(),
+                            points: vec![(0.0, "Idle".into()), (2.0, "Walk".into())],
+                        },
+                        speed: 1.5,
+                        looping: false,
+                    },
+                ],
+                transitions: vec![TransitionDesc {
+                    from: Some("Idle".into()),
+                    to: "Walk".into(),
+                    when: vec![("speed".into(), TestDesc::Greater(0.1))],
+                    exit_time: Some(0.5),
+                    duration: 0.25,
+                }],
+                initial: "Idle".into(),
+                params: BTreeMap::from([
+                    ("speed".into(), ParamDesc::Float(0.0)),
+                    ("jump".into(), ParamDesc::Trigger),
+                ]),
+            })),
+        });
+        robot.collider = Some(ColliderDesc::new(ColliderShape::Mesh));
+        let mut dancer = EntityDesc::new(8, "Dancer");
+        dancer.model = Some(ModelDesc {
+            path: "models/dancer.glb".into(),
+            animation: Some(AnimationDesc::Graph("anim/dancer.animgraph.ron".into())),
+        });
+        let mut prop = EntityDesc::new(9, "Prop");
+        prop.model = Some(ModelDesc::new("models/crate.gltf"));
+
         SceneFile {
-            entities: vec![root, cam, player, sun, crate_, trigger],
+            entities: vec![root, cam, player, sun, crate_, trigger, robot, dancer, prop],
             environment: Environment {
                 fog: Some(FogDesc {
                     color: [0.5, 0.6, 0.7],
@@ -885,7 +959,7 @@ mod tests {
             .map(|i| scene.entities[i].id)
             .collect();
         // Обход в глубину, братья в порядке файла.
-        assert_eq!(order, vec![1, 2, 4, 3, 5, 6]);
+        assert_eq!(order, vec![1, 2, 4, 3, 5, 6, 7, 8, 9]);
         assert!(scene.active_in_hierarchy(4));
         assert!(!scene.active_in_hierarchy(5));
         assert!(
@@ -900,6 +974,7 @@ mod tests {
 
     const V0: &str = include_str!("../tests/fixtures/v0_legacy.scene.ron");
     const V1: &str = include_str!("../tests/fixtures/v1.scene.ron");
+    const V2: &str = include_str!("../tests/fixtures/v2.scene.ron");
 
     #[test]
     fn legacy_file_without_version_loads_as_current() {
@@ -915,8 +990,45 @@ mod tests {
         assert_eq!(scene.environment.shadow_distance, 40.0);
         // Старый файл при сохранении становится файлом текущей версии.
         let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
-        assert!(text.contains("version: 1"), "{text}");
+        assert!(
+            text.contains(&format!("version: {FORMAT_VERSION}")),
+            "{text}"
+        );
         assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+    }
+
+    #[test]
+    fn v1_file_migrates_to_v2_without_models() {
+        let scene = SceneFile::parse(V1).unwrap();
+        assert_eq!(scene.version, 2);
+        assert!(scene.entities.iter().all(|e| e.model.is_none()));
+        // Всё остальное — как в фикстуре v2 без нового объекта.
+        let mut v2 = SceneFile::parse(V2).unwrap();
+        v2.entities.retain(|e| e.model.is_none());
+        assert_eq!(scene, v2);
+    }
+
+    #[test]
+    fn v2_fixture_reads_models_and_animation() {
+        let scene = SceneFile::parse(V2).unwrap();
+        let robot = scene.get(4).unwrap().model.as_ref().unwrap();
+        assert_eq!(robot.path, "models/robot.gltf");
+        let Some(AnimationDesc::Inline(graph)) = &robot.animation else {
+            panic!("inline graph expected: {:?}", robot.animation);
+        };
+        assert_eq!(graph.initial, "Idle");
+        assert_eq!(graph.states.len(), 2);
+        assert!(graph.states[1].looping && graph.states[1].speed == 1.0);
+        assert_eq!(
+            graph.transitions[0].when[0],
+            ("near".into(), TestDesc::True)
+        );
+        assert_eq!(graph.params["near"], ParamDesc::Bool(false));
+        let crate_ = scene.get(5).unwrap().model.as_ref().unwrap();
+        assert_eq!(crate_.animation, None);
+        // Сборка версии 1 такой файл не открывает, а не теряет модели молча.
+        let err = SceneFile::parse_with(V2, 1, &MIGRATIONS[..1]).unwrap_err();
+        assert!(err.contains("newer"), "{err}");
     }
 
     #[test]

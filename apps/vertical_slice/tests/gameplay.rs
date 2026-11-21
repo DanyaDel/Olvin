@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
+use olvin::anim::Animator;
 use olvin::game::{SaveId, SaveSlots, State};
 use olvin::input::Input;
 use olvin::prelude::*;
-use olvin_anim::Animator;
 use vertical_slice::door::DoorState;
 use vertical_slice::hud::Hud;
 use vertical_slice::player::{Player, PlayerLook};

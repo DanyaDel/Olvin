@@ -116,6 +116,13 @@ impl EngineGpu {
 type CsgKey = (olvin::csg::BrushInput, Option<String>);
 /// A textured CSG mesh: (mesh, colour, material path).
 type CsgMesh = (MeshHandle, [f32; 4], Option<String>);
+/// A model's parts in its own space: mesh, placement, colour, material.
+type ModelPart = (
+    MeshHandle,
+    Mat4,
+    [f32; 4],
+    Option<olvin::render::MaterialHandle>,
+);
 
 /// The edited scene as an engine world, rebuilt once per frame.
 #[derive(Default)]
@@ -132,6 +139,8 @@ pub struct ScenePreview {
     /// CSG of brushes with materials (the CSG element draws the rest itself):
     /// rebuilt when the brush inputs or their materials change.
     csg: (Vec<CsgKey>, Vec<CsgMesh>),
+    /// glTF models by path, imported once (`None`: failed), drawn in bind pose.
+    models: HashMap<String, Option<Vec<ModelPart>>>,
     frame: Option<u64>,
 }
 
@@ -197,6 +206,19 @@ impl ScenePreview {
                     },
                 ));
             }
+            if let Some(model) = &e.model {
+                for (mesh, at, color, material) in self.model(&model.path).into_iter().flatten() {
+                    self.world.spawn((
+                        Transform::IDENTITY,
+                        GlobalTransform(*m * at),
+                        MeshRenderer {
+                            mesh,
+                            color: Color(color),
+                            material,
+                        },
+                    ));
+                }
+            }
             if let Some(camera) = &e.camera {
                 self.world.spawn((
                     Transform::IDENTITY,
@@ -225,6 +247,58 @@ impl ScenePreview {
                 shaders: &mut self.shaders,
             },
         )
+    }
+
+    /// A model's parts (imported on first use; static, skinned meshes in bind pose).
+    fn model(&mut self, rel: &str) -> Option<Vec<ModelPart>> {
+        if let Some(parts) = self.models.get(rel) {
+            return parts.clone();
+        }
+        let parts = self
+            .assets
+            .root()
+            .map(|r| r.to_path_buf())
+            .and_then(|root| {
+                let model = olvin_assets::import_gltf(
+                    root.join(rel),
+                    &root,
+                    &olvin_assets::ModelImport::default(),
+                )
+                .ok()?;
+                let materials: Vec<_> = model
+                    .materials
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        self.assets.inline_material(
+                            &format!("{rel}#{i}"),
+                            d,
+                            &mut Registries {
+                                textures: &mut self.textures,
+                                materials: &mut self.materials,
+                                shaders: &mut self.shaders,
+                            },
+                        )
+                    })
+                    .collect();
+                let parts = olvin::models::placements(&model)
+                    .into_iter()
+                    .map(|(i, at)| {
+                        let prim = &model.meshes[i];
+                        let material = prim.material.and_then(|m| materials.get(m).copied());
+                        let color = if material.is_some() {
+                            [1.0; 4]
+                        } else {
+                            [0.8; 4]
+                        };
+                        let mesh = self.meshes.add(olvin::models::primitive_mesh(prim));
+                        (mesh, at, color, material)
+                    })
+                    .collect();
+                Some(parts)
+            });
+        self.models.insert(rel.to_owned(), parts.clone());
+        parts
     }
 
     /// The renderer's sky for the scene's skybox (loads the panorama).
@@ -527,6 +601,13 @@ impl PlaySession {
             .insert_resource(Shaders::default())
             .insert_resource(RenderAssets::new(assets_dir.clone()))
             .insert_resource(settings_for(scene));
+        // Scene models with their animators (skinned meshes stay in bind
+        // pose: CPU skinning is part of RenderPlugin, which Play doesn't run).
+        if let Some(dir) = &assets_dir {
+            app.insert_resource(olvin_assets::AssetManager::new(dir.clone()));
+        }
+        app.add_plugin(olvin::anim::AnimPlugin)
+            .add_plugin(olvin::models::ModelPlugin);
         // Scripts (the built-in behaviours; game code isn't linked into the
         // editor) and the project's input map, fed from the Game view.
         let map = assets_dir.map(|d| olvin::input::InputMap::load_or_default(d.join("input.ron")));

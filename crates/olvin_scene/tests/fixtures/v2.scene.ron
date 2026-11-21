@@ -1,0 +1,29 @@
+// Сцена версии 2: то же, что v1, плюс объекты с моделями.
+(
+    version: 2,
+    entities: [
+        (id: 1, name: "Level", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 2, name: "Player", parent: Some(1), position: (1.0, 0.0, 2.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0), scripts: [(name: "PlayerMove", params: {"speed": "4.5"})]),
+        (id: 3, name: "Sun", position: (0.0, 5.0, 0.0), rotation: (-50.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0), light: Some((kind: Directional, color: (1.0, 0.96, 0.9), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 4, name: "Robot", parent: Some(1), position: (0.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            model: Some((
+                path: "models/robot.gltf",
+                animation: Some(Inline((
+                    initial: "Idle",
+                    params: {"near": Bool(false)},
+                    states: [
+                        (name: "Idle", motion: Clip("Idle")),
+                        (name: "Wave", motion: Clip("Wave")),
+                    ],
+                    transitions: [
+                        (from: Some("Idle"), to: "Wave", when: [("near", True)], duration: 0.25),
+                        (from: Some("Wave"), to: "Idle", when: [("near", False)], duration: 0.4),
+                    ],
+                ))),
+            ))),
+        (id: 5, name: "Crate", position: (2.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            model: Some((path: "models/crate.gltf")),
+            collider: Some((shape: Mesh, center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+    ],
+    environment: (shadow_distance: 40.0),
+)

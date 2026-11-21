@@ -114,7 +114,11 @@ impl Plugin for GamePlugin {
             // Scene spawning needs the mesh registry even without a renderer.
             .init_resource::<Meshes>()
             // RenderPlugin adds it; headless runs need it too.
-            .add_plugin(olvin_anim::AnimPlugin)
+            .add_plugin(olvin::anim::AnimPlugin)
+            // Models in the scene (the robot): built once the asset manager
+            // has imported them. Headless runs have no RenderAssets root.
+            .insert_resource(olvin::assets::AssetManager::new(c.assets.clone()))
+            .add_plugin(olvin::models::ModelPlugin)
             .add_plugin(PhysicsPlugin::default())
             .add_plugin(InputPlugin {
                 map: Some(input_map()),

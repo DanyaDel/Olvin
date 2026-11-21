@@ -18,6 +18,8 @@ pub enum AssetKind {
     Script,
     Audio,
     Prefab,
+    /// `*.animgraph.ron`: an animation state graph (`olvin_scene::anim::AnimGraphDesc`).
+    AnimGraph,
     Other,
 }
 
@@ -37,6 +39,9 @@ impl AssetKind {
         }
         if name.ends_with(".prefab.ron") {
             return AssetKind::Prefab;
+        }
+        if name.ends_with(".animgraph.ron") {
+            return AssetKind::AnimGraph;
         }
         let ext = name.rsplit_once('.').map_or("", |(_, e)| e);
         match ext {

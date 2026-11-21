@@ -6,10 +6,13 @@
 //! - [`load_image`], [`thumbnail`], [`ThumbnailCache`]: textures.
 //! - [`import_gltf`], [`model_to_entities`], [`write_materials`]: models
 //!   (meshes, materials, skins, animation clips, cameras).
+//! - [`build_graph`], [`ModelData::animator_with`]: scene animation setups
+//!   (clip names, `*.animgraph.ron`) as runtime graphs.
 //! - [`AssetWatcher`]: debounced hot-reload events.
 //! - [`AssetManager`]: counted [`Handle`]s, background loading, dependencies,
 //!   unloading of unused assets, hot reload.
 
+mod animation;
 mod manager;
 mod meta;
 mod model;
@@ -22,6 +25,7 @@ mod tests;
 
 use std::path::PathBuf;
 
+pub use animation::build_graph;
 pub use manager::{
     AnyHandle, Asset, AssetChange, AssetManager, Dependency, Handle, Job, LoadState,
 };

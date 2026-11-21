@@ -1,9 +1,15 @@
 //! Olvin: a modular game engine. Each subsystem is its own crate and plugin;
 //! this facade re-exports them and wires the default set together.
 //! Disable features (`window`, `render`) for servers, tools or custom platforms;
-//! `scene` adds loading of scenes saved by olvin-editor.
+//! `scene` adds loading of scenes saved by olvin-editor, `anim` (animation,
+//! no renderer needed) and `assets` (glTF import, asset manager) the crates
+//! behind it.
 
 pub use glam as math;
+#[cfg(feature = "anim")]
+pub use olvin_anim as anim;
+#[cfg(feature = "assets")]
+pub use olvin_assets as assets;
 #[cfg(feature = "audio")]
 pub use olvin_audio as audio;
 pub use olvin_core as core;
@@ -25,6 +31,8 @@ pub use olvin_window as window;
 
 #[cfg(feature = "scene")]
 pub use olvin_csg as csg;
+#[cfg(feature = "scene")]
+pub mod models;
 #[cfg(feature = "scene")]
 pub mod render_assets;
 #[cfg(feature = "scene")]
@@ -60,8 +68,11 @@ impl Plugin for DefaultPlugins {
         app.add_plugin(olvin_render::RenderPlugin {
             settings: self.render.settings.clone(),
         });
+        #[cfg(feature = "anim")]
+        app.add_plugin(olvin_anim::AnimPlugin);
         #[cfg(feature = "scene")]
-        app.add_plugin(render_assets::RenderAssetsPlugin);
+        app.add_plugin(render_assets::RenderAssetsPlugin)
+            .add_plugin(models::ModelPlugin);
         #[cfg(feature = "physics")]
         app.add_plugin(olvin_physics::PhysicsPlugin {
             gravity: self.physics.gravity,
@@ -85,6 +96,8 @@ impl Plugin for DefaultPlugins {
 pub mod prelude {
     pub use crate::DefaultPlugins;
     pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+    #[cfg(feature = "anim")]
+    pub use olvin_anim::{AnimGraph, AnimPlugin, Animator};
     #[cfg(feature = "audio")]
     pub use olvin_audio::{Audio, AudioListener, AudioPlugin, PlayParams};
     pub use olvin_core::{App, AppExit, Plugin, Resources, Stage, Time};

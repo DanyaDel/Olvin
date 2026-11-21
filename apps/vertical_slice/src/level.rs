@@ -1,6 +1,7 @@
 //! Loading the level: `SceneLoader` parses the scene on a worker thread
-//! (state `Loading`), then the facade spawns it and the game attaches what a
-//! scene file cannot express (game components, save ids, the robot, HUD).
+//! (state `Loading`), then the facade spawns it, its models load in the
+//! background too, and the game attaches what a scene file cannot express
+//! (game components, save ids, HUD).
 
 use olvin::game::{LoadHandle, LoadStatus, SaveId, SceneLoader, State};
 use olvin::prelude::*;
@@ -13,6 +14,9 @@ use crate::{GameState, Paths, SCENE, robot};
 
 /// The load in flight.
 pub struct LevelLoad(pub LoadHandle);
+
+/// The level is spawned; its models (the robot) are still loading.
+pub struct ModelsLoading;
 
 /// Save ids of level objects. Spawned entities do not keep their scene id,
 /// so they are matched by name (GAPS.md).
@@ -37,6 +41,14 @@ pub fn request(res: &mut Resources) {
 
 /// While `Loading`: once the scene is parsed, spawn it and start playing.
 pub fn finish_loading(res: &mut Resources) {
+    if res.get::<ModelsLoading>().is_some() {
+        if olvin::models::pending_count(res) == 0 {
+            res.remove::<ModelsLoading>();
+            setup(res);
+            res.fetch_mut::<State<GameState>>().set(GameState::Playing);
+        }
+        return;
+    }
     let Some(handle) = res.get::<LevelLoad>().map(|l| l.0) else {
         return;
     };
@@ -70,8 +82,8 @@ pub fn finish_loading(res: &mut Resources) {
     }
     let count = olvin::scene_file::spawn(res, &scene);
     log::info!("level: {count} objects");
-    setup(res);
-    res.fetch_mut::<State<GameState>>().set(GameState::Playing);
+    // Playing starts once the models are built (next frames).
+    res.insert(ModelsLoading);
 }
 
 fn find(world: &World, name: &str) -> Option<Entity> {
@@ -84,7 +96,7 @@ fn find(world: &World, name: &str) -> Option<Entity> {
 
 /// Attaches game components to the spawned level and adds the rest.
 pub fn setup(res: &mut Resources) {
-    let robot_at = {
+    {
         let mut world = res.fetch_mut::<World>();
         for (name, id) in SAVED {
             match find(&world, name) {
@@ -111,12 +123,13 @@ pub fn setup(res: &mut Resources) {
                 },
             );
         }
+        match find(&world, robot::NAME) {
+            Some(e) => {
+                let _ = world.insert_one(e, robot::Robot);
+            }
+            None => log::warn!("level has no `{}`", robot::NAME),
+        }
         hud::spawn(&mut world);
-        find(&world, "RobotSpawn").and_then(|e| world.get::<&Transform>(e).ok().map(|t| *t))
-    };
-    let assets = res.fetch::<Paths>().assets.clone();
-    if let Err(e) = robot::spawn(res, &assets, robot_at.unwrap_or_default()) {
-        log::error!("robot: {e}");
     }
     res.fetch_mut::<Audio>()
         .play_music("music/theme.wav", 0.35, true);

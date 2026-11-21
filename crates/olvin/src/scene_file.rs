@@ -37,6 +37,10 @@ pub struct AudioListener;
 /// the CSG level as static meshes with a mesh collider, and points the
 /// renderer's sun at the first directional light. Returns the entity count.
 ///
+/// Objects with a `model` get a [`PendingModel`](crate::models::PendingModel):
+/// the model loads in the background and [`ModelPlugin`](crate::models::ModelPlugin)
+/// builds it a few frames later (wait for [`models::pending_count`](crate::models::pending_count)).
+///
 /// The hierarchy is kept: `Transform` is local, `Parent` links children, and
 /// `GlobalTransform` starts at the world matrix.
 pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
@@ -125,7 +129,17 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
                 b.add(ColliderDesc::new(ColliderShape::Mesh));
             }
         }
-        if let Some(collider) = &e.collider {
+        // A model is built once its file is loaded (`models::ModelPlugin`);
+        // its Mesh Collider waits for the model's triangles.
+        let model_collider = e
+            .collider
+            .as_ref()
+            .filter(|c| c.shape == ColliderShape::Mesh && e.mesh.is_none() && e.poly.is_none())
+            .filter(|_| e.model.is_some());
+        if let Some(model) = &e.model {
+            b.add(crate::models::pending(res, model, model_collider.cloned()));
+        }
+        if let Some(collider) = e.collider.as_ref().filter(|_| model_collider.is_none()) {
             if collider.shape == ColliderShape::Mesh
                 && e.poly.is_none()
                 && let Some(mesh) = &e.mesh

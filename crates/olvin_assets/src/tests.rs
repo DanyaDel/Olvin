@@ -906,6 +906,85 @@ fn gltf_imports_skin_animation_and_camera() {
 }
 
 #[test]
+fn scene_animation_setups_resolve_clip_names() {
+    use olvin_scene::anim::*;
+    let dir = TempDir::new("anim_setup");
+    let path = write_skinned_gltf(&dir);
+    let model = import_gltf(&path, dir.path(), &ModelImport::default()).unwrap();
+
+    // No setup: rest pose, no layers.
+    assert!(
+        model
+            .animator_with(0, None, None)
+            .unwrap()
+            .layers
+            .is_empty()
+    );
+    let looping = model
+        .animator_with(0, Some(&AnimationDesc::Clip("bend".into())), None)
+        .unwrap();
+    assert_eq!(
+        looping.layers[0].graph.states[0].motion,
+        olvin_anim::Motion::Clip(0)
+    );
+    assert!(
+        model
+            .animator_with(0, Some(&AnimationDesc::Clip("nope".into())), None)
+            .unwrap_err()
+            .contains("nope")
+    );
+
+    let graph = AnimGraphDesc {
+        states: vec![
+            AnimStateDesc::clip("Rest", "bend"),
+            AnimStateDesc::clip("Bend", "bend"),
+        ],
+        transitions: vec![TransitionDesc {
+            from: None,
+            to: "Bend".into(),
+            when: vec![("go".into(), TestDesc::True)],
+            exit_time: None,
+            duration: 0.0,
+        }],
+        initial: "Bend".into(),
+        params: [("go".to_string(), ParamDesc::Bool(true))].into(),
+    };
+    let mut a = model
+        .animator_with(0, Some(&AnimationDesc::Inline(graph.clone())), None)
+        .unwrap();
+    assert_eq!(a.layers[0].state.current, 1, "initial state by name");
+    assert!(a.params.bool("go"));
+    a.update(0.5);
+    assert!(a.matrices[1] != glam::Mat4::IDENTITY, "the clip plays");
+
+    // A graph file goes through the manager like any asset.
+    std::fs::create_dir_all(dir.path().join("anim")).unwrap();
+    graph
+        .save(dir.path().join("anim/rig.animgraph.ron"))
+        .unwrap();
+    assert_eq!(
+        AssetKind::of("anim/rig.animgraph.ron"),
+        AssetKind::AnimGraph
+    );
+    let mut manager = AssetManager::new(dir.path());
+    let h = manager.load::<AnimGraphDesc>("anim/rig.animgraph.ron");
+    assert!(manager.wait_idle(Duration::from_secs(5)));
+    let file = manager.get(&h).unwrap();
+    let setup = AnimationDesc::Graph("anim/rig.animgraph.ron".into());
+    assert!(model.animator_with(0, Some(&setup), None).is_err());
+    let a = model.animator_with(0, Some(&setup), Some(&file)).unwrap();
+    assert_eq!(a.layers[0].graph.states.len(), 2);
+
+    let mut bad = graph;
+    bad.transitions[0].to = "Missing".into();
+    assert!(
+        build_graph(&bad, &model.clips)
+            .unwrap_err()
+            .contains("Missing")
+    );
+}
+
+#[test]
 fn gltf_scale_applies_to_skeleton_and_clips() {
     let dir = TempDir::new("gltf_skin_scale");
     let path = write_skinned_gltf(&dir);

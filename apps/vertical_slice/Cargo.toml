@@ -9,8 +9,5 @@ publish = false
 
 [dependencies]
 olvin = { path = "../../crates/olvin", features = ["scene", "physics", "script", "lua", "input", "audio", "game"] }
-# Not reachable through the `olvin` facade (see GAPS.md): glTF import and the Animator.
-olvin_assets = { path = "../../crates/olvin_assets" }
-olvin_anim = { path = "../../crates/olvin_anim" }
 serde.workspace = true
 log.workspace = true

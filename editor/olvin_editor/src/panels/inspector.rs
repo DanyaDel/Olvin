@@ -43,7 +43,13 @@ fn collider_is(e: &EntityDesc, f: fn(&ColliderShape) -> bool) -> bool {
     e.collider.as_ref().is_some_and(|c| f(&c.shape))
 }
 
-const BUILTINS: [Builtin; 12] = [
+const BUILTINS: [Builtin; 13] = [
+    Builtin {
+        category: "Rendering",
+        name: "Model",
+        has: |e| e.model.is_some(),
+        add: |e| e.model = Some(olvin_scene::file::ModelDesc::new("models/model.gltf")),
+    },
     Builtin {
         category: "Rendering",
         name: "Mesh Renderer",
@@ -187,6 +193,33 @@ impl Panel for Inspector {
                 if e.mesh.is_some() || e.poly.is_some() || e.brush.is_some() {
                     log = material_section(ui, e, &mut state.materials);
                 }
+                if let Some(model) = &mut e.model {
+                    section(ui, "🧍 Model", Some((&mut remove, "model")), |ui| {
+                        use olvin_scene::file::AnimationDesc;
+                        grid(ui, "model", |ui| {
+                            row(ui, "Path", |ui| {
+                                ui.text_edit_singleline(&mut model.path);
+                            });
+                            row(ui, "Animation", |ui| match &mut model.animation {
+                                None => {
+                                    if ui.button("Add clip").clicked() {
+                                        model.animation = Some(AnimationDesc::Clip(String::new()));
+                                    }
+                                }
+                                Some(AnimationDesc::Clip(name)) => {
+                                    ui.text_edit_singleline(name);
+                                }
+                                Some(AnimationDesc::Graph(path)) => {
+                                    ui.text_edit_singleline(path);
+                                }
+                                Some(AnimationDesc::Inline(g)) => {
+                                    ui.weak(format!("inline graph, {} states", g.states.len()));
+                                }
+                            });
+                        });
+                        ui.weak("The scene view shows the bind pose");
+                    });
+                }
                 if let Some(cam) = &mut e.camera {
                     section(ui, "🎥 Camera", Some((&mut remove, "camera")), |ui| {
                         grid(ui, "camera", |ui| {
@@ -279,6 +312,7 @@ impl Panel for Inspector {
                 }
                 match remove {
                     Some("mesh") => e.mesh = None,
+                    Some("model") => e.model = None,
                     Some("camera") => e.camera = None,
                     Some("light") => e.light = None,
                     Some("collider") => e.collider = None,

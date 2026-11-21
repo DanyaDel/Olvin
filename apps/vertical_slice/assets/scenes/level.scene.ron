@@ -1,9 +1,9 @@
 // Vertical slice level. Hand-written in the editor's format (olvin_scene::file).
 // Player starts in the south hall; a pressure plate opens the door in the
-// dividing wall; the robot waits in the north room (spawned by the game at
-// "RobotSpawn": scene files cannot reference glTF models yet).
+// dividing wall; the robot (a skinned glTF with an Idle/Wave graph) waits in
+// the north room.
 (
-    version: 1,
+    version: 2,
     entities: [
         (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
             light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
@@ -84,7 +84,24 @@
             light: Some((kind: Point, color: (0.3, 1.0, 0.7), intensity: 4.0, range: 7.0, spot_angle: 30.0, shadows: false))),
 
         // North room: the robot and its light.
-        (id: 60, name: "RobotSpawn", position: (0.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        // The game sets "near" while the player is within 3.5 m and turns the robot to face them.
+        (id: 60, name: "Robot", position: (0.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            model: Some((
+                path: "models/robot.gltf",
+                animation: Some(Inline((
+                    initial: "Idle",
+                    params: {"near": Bool(false)},
+                    states: [
+                        (name: "Idle", motion: Clip("Idle")),
+                        (name: "Wave", motion: Clip("Wave")),
+                    ],
+                    transitions: [
+                        (from: Some("Idle"), to: "Wave", when: [("near", True)], duration: 0.25),
+                        (from: Some("Wave"), to: "Idle", when: [("near", False)], duration: 0.4),
+                    ],
+                ))),
+            )),
+            collider: Some((shape: Capsule(radius: 0.35, height: 1.9), center: (0.0, 0.95, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
         (id: 61, name: "Room Light", position: (0.0, 3.2, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
             light: Some((kind: Point, color: (1.0, 0.8, 0.55), intensity: 6.0, range: 10.0, spot_angle: 30.0, shadows: false))),
 

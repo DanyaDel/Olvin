@@ -29,6 +29,8 @@ pub struct RenderAssets {
     shaders: HashMap<String, Watched<ShaderHandle>>,
     /// Material handle and the description it was built from.
     materials: HashMap<String, (Watched<MaterialHandle>, MaterialDesc)>,
+    /// Materials that live inside other assets (glTF models), by key.
+    inline: HashMap<String, (MaterialHandle, MaterialDesc)>,
     errors: HashMap<String, String>,
 }
 
@@ -224,6 +226,29 @@ impl RenderAssets {
         Some(handle)
     }
 
+    /// A material that is not a file of its own (a glTF model's), cached by
+    /// `key` (e.g. `models/robot.gltf#0`); rebuilt when `desc` changes.
+    pub fn inline_material(
+        &mut self,
+        key: &str,
+        desc: &MaterialDesc,
+        r: &mut Registries,
+    ) -> MaterialHandle {
+        if let Some((handle, old)) = self.inline.get(key) {
+            let (handle, same) = (*handle, old == desc);
+            if !same {
+                let material = self.build(desc, r);
+                r.materials.set(handle, material);
+                self.inline.insert(key.to_owned(), (handle, desc.clone()));
+            }
+            return handle;
+        }
+        let material = self.build(desc, r);
+        let handle = r.materials.add(material);
+        self.inline.insert(key.to_owned(), (handle, desc.clone()));
+        handle
+    }
+
     /// Re-checks a cached material's textures and shader for changes on disk.
     fn refresh_dependencies(&mut self, desc: &MaterialDesc, r: &mut Registries) {
         for (tex, srgb) in [
@@ -313,6 +338,33 @@ pub fn material_in(res: &olvin_core::Resources, rel: Option<&str>) -> Option<Mat
             shaders: &mut shaders,
         },
     )
+}
+
+/// Handles for a model's own materials (`<model>#<index>` in the cache), one
+/// per `materials`; all `None` without the render registries.
+pub fn model_materials(
+    res: &olvin_core::Resources,
+    model: &str,
+    materials: &[MaterialDesc],
+) -> Vec<Option<MaterialHandle>> {
+    let (Some(mut assets), Some(mut textures), Some(mut mats), Some(mut shaders)) = (
+        res.get_mut::<RenderAssets>(),
+        res.get_mut::<Textures>(),
+        res.get_mut::<Materials>(),
+        res.get_mut::<Shaders>(),
+    ) else {
+        return vec![None; materials.len()];
+    };
+    let mut r = Registries {
+        textures: &mut textures,
+        materials: &mut mats,
+        shaders: &mut shaders,
+    };
+    materials
+        .iter()
+        .enumerate()
+        .map(|(i, d)| Some(assets.inline_material(&format!("{model}#{i}"), d, &mut r)))
+        .collect()
 }
 
 /// Mesh data of an edited mesh with its UVs (V flipped: textures start top-left).

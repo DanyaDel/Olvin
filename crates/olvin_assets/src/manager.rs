@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
+use olvin_scene::anim::AnimGraphDesc;
 use olvin_scene::material::MaterialDesc;
 
 use crate::root::normalize;
@@ -28,7 +29,8 @@ pub enum Dependency {
 }
 
 /// A type the manager can load. Implemented for [`ImageData`] (textures),
-/// [`MaterialDesc`] (`*.mat.ron`) and [`ModelData`] (glTF).
+/// [`MaterialDesc`] (`*.mat.ron`), [`ModelData`] (glTF) and [`AnimGraphDesc`]
+/// (`*.animgraph.ron`).
 pub trait Asset: Any + Send + Sync + Sized {
     /// What the file is, for [`AssetChange`].
     const KIND: AssetKind;
@@ -92,6 +94,20 @@ impl Asset for ModelData {
             }
         }
         out
+    }
+}
+
+impl Asset for AnimGraphDesc {
+    const KIND: AssetKind = AssetKind::AnimGraph;
+
+    fn prepare(root: &AssetRoot, rel: &str) -> Result<Job<Self>, String> {
+        let path = root.resolve(rel);
+        Ok(Box::new(move || AnimGraphDesc::load(path)))
+    }
+
+    /// Clips are named, they live in the model the graph is applied to.
+    fn dependencies(&self) -> Vec<Dependency> {
+        Vec::new()
     }
 }
 

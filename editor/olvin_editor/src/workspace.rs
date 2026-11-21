@@ -119,8 +119,13 @@ impl Layout {
         if from != to && to < self.workspaces.len() {
             let ws = self.workspaces.remove(from);
             self.workspaces.insert(to, ws);
+            // The active tab keeps showing the same workspace.
             if self.active == from {
                 self.active = to;
+            } else if from < self.active && self.active <= to {
+                self.active -= 1;
+            } else if to <= self.active && self.active < from {
+                self.active += 1;
             }
         }
     }

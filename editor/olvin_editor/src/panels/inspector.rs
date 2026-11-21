@@ -300,7 +300,13 @@ impl Panel for Inspector {
                 let mut drop_script = None;
                 for (i, script) in e.scripts.iter_mut().enumerate() {
                     let mut gone = None::<&'static str>;
-                    section(ui, "📜 Script", Some((&mut gone, "script")), |ui| {
+                    // Each script keeps its own collapsed state.
+                    let title = if i == 0 {
+                        "📜 Script".to_owned()
+                    } else {
+                        format!("📜 Script {}", i + 1)
+                    };
+                    section(ui, &title, Some((&mut gone, "script")), |ui| {
                         script_ui(ui, script, i)
                     });
                     if gone.is_some() {
@@ -734,13 +740,20 @@ fn script_ui(ui: &mut egui::Ui, script: &mut ScriptDesc, index: usize) {
         .spacing([6.0, 4.0])
         .show(ui, |ui| {
             for (key, value) in script.params.iter_mut() {
-                let mut k = key.clone();
-                if ui
-                    .add(TextEdit::singleline(&mut k).desired_width(90.0))
-                    .lost_focus()
-                    && k != *key
-                {
-                    rename = Some((key.clone(), k));
+                // The key is a map key: edit a copy that lives across frames
+                // and apply it when the field loses focus.
+                let edit_id = ui.make_persistent_id(("param-key", index, key.as_str()));
+                let mut k = ui
+                    .data_mut(|d| d.get_temp::<String>(edit_id))
+                    .unwrap_or_else(|| key.clone());
+                let response = ui.add(TextEdit::singleline(&mut k).desired_width(90.0));
+                if response.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(edit_id, k.clone()));
+                } else {
+                    ui.data_mut(|d| d.remove_temp::<String>(edit_id));
+                    if response.lost_focus() && k != *key {
+                        rename = Some((key.clone(), k));
+                    }
                 }
                 ui.add(TextEdit::singleline(value).desired_width(120.0));
                 if ui.small_button("✖").clicked() {
@@ -754,6 +767,7 @@ fn script_ui(ui: &mut egui::Ui, script: &mut ScriptDesc, index: usize) {
     }
     if let Some((old, new)) = rename
         && !new.is_empty()
+        && !script.params.contains_key(&new)
         && let Some(v) = script.params.remove(&old)
     {
         script.params.insert(new, v);

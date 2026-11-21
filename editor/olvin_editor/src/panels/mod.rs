@@ -50,13 +50,14 @@ pub(crate) fn register(registry: &mut Registry) {
             title: "☀ Lighting",
             factory: || Box::<lighting::Lighting>::default(),
         })
-        .add_workspace_template(WorkspaceTemplate {
-            name: "Lighting",
-            build: lighting_layout,
-        })
+        // The first template is the workspace a fresh editor opens in.
         .add_workspace_template(WorkspaceTemplate {
             name: "Layout",
             build: scene_layout,
+        })
+        .add_workspace_template(WorkspaceTemplate {
+            name: "Lighting",
+            build: lighting_layout,
         });
 }
 

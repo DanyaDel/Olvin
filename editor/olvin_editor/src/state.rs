@@ -250,8 +250,11 @@ impl EditorState {
 
     // --- files -----------------------------------------------------------
 
+    /// Unsaved changes. While playing, the scene being edited is the one from
+    /// before Play: changes made to the running game are discarded.
     pub fn is_dirty(&self) -> bool {
-        self.scene != self.saved
+        let scene = self.play.as_ref().map_or(&self.scene, |p| &p.saved);
+        *scene != self.saved
     }
 
     /// Asks the app to open a scene; it confirms first if there are unsaved changes.
@@ -290,10 +293,17 @@ impl EditorState {
     }
 
     pub fn save_as(&mut self, path: &Path) -> bool {
-        self.commit();
-        match self.scene.save(path) {
+        // While playing, `scene` is the running game: save what Stop restores.
+        let scene = match &self.play {
+            Some(session) => session.saved.clone(),
+            None => {
+                self.commit();
+                self.scene.clone()
+            }
+        };
+        match scene.save(path) {
             Ok(()) => {
-                self.saved = self.scene.clone();
+                self.saved = scene;
                 self.scene_path = Some(path.to_path_buf());
                 self.info(format!("saved {}", path.display()));
                 true
@@ -314,7 +324,10 @@ impl EditorState {
         self.committed = scene.clone();
         self.scene = scene;
         self.scene_path = path;
+        // A running game belongs to the scene that was replaced.
+        self.play = None;
         self.selection = None;
+        self.multi.clear();
         self.preview.clear();
         self.undo.clear();
         self.redo.clear();
@@ -424,15 +437,19 @@ impl EditorState {
         }
     }
 
+    /// History is frozen while playing: everything done then is discarded by Stop.
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || self.scene != self.committed
+        self.play.is_none() && (!self.undo.is_empty() || self.scene != self.committed)
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        self.play.is_none() && !self.redo.is_empty()
     }
 
     pub fn undo(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
         self.commit();
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.committed, prev));
@@ -442,6 +459,9 @@ impl EditorState {
     }
 
     pub fn redo(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.committed, next));
             self.scene = self.committed.clone();
@@ -456,6 +476,8 @@ impl EditorState {
         {
             self.selection = None;
         }
+        let scene = &self.scene;
+        self.multi.retain(|id| scene.get(*id).is_some());
         self.scene_generation += 1;
     }
 
@@ -568,6 +590,37 @@ impl EditorState {
         self.multi.retain(|id| !doomed.contains(id));
     }
 
+    /// Deletes everything selected.
+    pub fn delete_selected(&mut self) {
+        for id in self.selected_ids() {
+            self.delete(id);
+        }
+    }
+
+    /// The selected objects whose ancestors are not selected too: acting on
+    /// them already covers the whole subtree.
+    fn selected_roots(&self) -> Vec<u64> {
+        let ids = self.selected_ids();
+        ids.iter()
+            .copied()
+            .filter(|id| !ids.iter().any(|a| self.is_descendant(*id, *a)))
+            .collect()
+    }
+
+    /// Duplicates everything selected (a selected parent brings its selected
+    /// children along once) and selects the copies.
+    pub fn duplicate_selected(&mut self) {
+        let copies: Vec<u64> = self
+            .selected_roots()
+            .into_iter()
+            .filter_map(|id| self.duplicate(id))
+            .collect();
+        if !copies.is_empty() {
+            self.selection = copies.last().copied();
+            self.multi = copies;
+        }
+    }
+
     /// Copies an entity with its children; returns the copy's id.
     pub fn duplicate(&mut self, id: u64) -> Option<u64> {
         let subtree: Vec<EntityDesc> = self
@@ -627,6 +680,9 @@ impl EditorState {
         if parent == Some(id) || parent.is_some_and(|p| self.is_descendant(p, id)) {
             return false;
         }
+        if self.scene.get(id).is_some_and(|e| e.parent == parent) {
+            return true; // already there; decomposing would only rewrite the transform
+        }
         let worlds = self.scene.world_matrices();
         let Some(&world) = worlds.get(&id) else {
             return false;
@@ -634,17 +690,20 @@ impl EditorState {
         let parent_world = parent
             .and_then(|p| worlds.get(&p).copied())
             .unwrap_or(Mat4::IDENTITY);
-        let (scale, rotation, translation) =
-            (parent_world.inverse() * world).to_scale_rotation_translation();
-        let (y, x, z) = rotation.to_euler(EulerRot::YXZ);
-
+        // A parent scaled to zero has no inverse: keep the local transform.
+        let local = (parent_world.determinant().abs() > 1e-12)
+            .then(|| (parent_world.inverse() * world).to_scale_rotation_translation())
+            .filter(|(s, r, t)| s.is_finite() && r.is_finite() && t.is_finite());
         let Some(e) = self.scene.get_mut(id) else {
             return false;
         };
         e.parent = parent;
-        e.position = translation;
-        e.rotation = Vec3::new(x, y, z).map(f32::to_degrees);
-        e.scale = scale;
+        if let Some((scale, rotation, translation)) = local {
+            let (y, x, z) = rotation.to_euler(EulerRot::YXZ);
+            e.position = translation;
+            e.rotation = Vec3::new(x, y, z).map(f32::to_degrees);
+            e.scale = scale;
+        }
         // Keep the "parents first" invariant: move the entity to the end, then its subtree.
         self.fix_order();
         true

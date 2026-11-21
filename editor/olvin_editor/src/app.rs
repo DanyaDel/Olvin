@@ -130,7 +130,7 @@ impl EditorApp {
                 redo,
                 i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::Z)),
                 i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::D)),
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::X) && i.modifiers.is_none(),
+                i.key_pressed(Key::Delete),
             )
         });
         if redo {
@@ -142,19 +142,11 @@ impl EditorApp {
         if self.state.tool_owns_keys {
             return;
         }
-        let selected = self.state.selected_ids();
-        if duplicate && !selected.is_empty() {
-            let copies: Vec<u64> = selected
-                .iter()
-                .filter_map(|id| self.state.duplicate(*id))
-                .collect();
-            self.state.multi = copies.clone();
-            self.state.selection = copies.last().copied();
+        if duplicate {
+            self.state.duplicate_selected();
         }
         if delete {
-            for id in selected {
-                self.state.delete(id);
-            }
+            self.state.delete_selected();
         }
     }
 
@@ -223,20 +215,18 @@ impl EditorApp {
                 self.state.redo();
             }
             ui.separator();
-            let sel = self.state.selection;
+            let sel = self.state.selection.is_some();
             if ui
-                .add_enabled(sel.is_some(), egui::Button::new("Duplicate     Ctrl+D"))
+                .add_enabled(sel, egui::Button::new("Duplicate     Ctrl+D"))
                 .clicked()
-                && let Some(id) = sel
             {
-                self.state.duplicate(id);
+                self.state.duplicate_selected();
             }
             if ui
-                .add_enabled(sel.is_some(), egui::Button::new("Delete           Del"))
+                .add_enabled(sel, egui::Button::new("Delete           Del"))
                 .clicked()
-                && let Some(id) = sel
             {
-                self.state.delete(id);
+                self.state.delete_selected();
             }
         });
         menu(ui, theme::menu_title("GameObject"), |ui| {
@@ -304,7 +294,10 @@ impl EditorApp {
             {
                 let edit = ui.add(TextEdit::singleline(name).desired_width(120.0));
                 edit.request_focus();
-                if edit.lost_focus() {
+                let cancel = edit.ctx.input(|i| i.key_pressed(Key::Escape));
+                if cancel {
+                    self.renaming = None;
+                } else if edit.lost_focus() {
                     if !name.trim().is_empty() {
                         self.layout.workspaces[i].name = name.trim().to_owned();
                     }
@@ -369,6 +362,10 @@ impl EditorApp {
     }
 
     fn apply_ws(&mut self, action: WsAction) {
+        // Tab indices shift under a pending rename.
+        if !matches!(action, WsAction::StartRename(_) | WsAction::Add(None)) {
+            self.renaming = None;
+        }
         match action {
             WsAction::Activate(i) => self.layout.active = i,
             WsAction::Close(i) => self.layout.close(i),

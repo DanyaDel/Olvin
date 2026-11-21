@@ -110,7 +110,7 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
         .anchor(Align2::CENTER_TOP, [0.0, 56.0])
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style())
-                .fill(theme::RAISED)
+                .fill(theme::palette(ui.ctx()).surface_raised)
                 .show(ui, |ui| {
                     ui.set_width(width);
                     let hint = match p.mode {
@@ -143,10 +143,10 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
                                 }
                                 None => format!("Type a line number between 1 and {total}"),
                             };
-                            ui.label(RichText::new(msg).color(theme::TEXT_WEAK));
+                            ui.label(RichText::new(msg).color(theme::palette(ui.ctx()).muted));
                         }
                         _ if items.is_empty() => {
-                            ui.label(RichText::new("No matches").color(theme::TEXT_WEAK));
+                            ui.label(RichText::new("No matches").color(theme::palette(ui.ctx()).muted));
                         }
                         _ => {
                             let start = p.selected.saturating_sub(ROWS - 1);
@@ -171,7 +171,7 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
                                 ui.label(
                                     RichText::new(format!("{} results", items.len()))
                                         .small()
-                                        .color(theme::TEXT_WEAK),
+                                        .color(theme::palette(ui.ctx()).muted),
                                 );
                             }
                         }
@@ -249,7 +249,7 @@ fn row_ui(
         ui.painter()
             .rect_filled(rect, 5.0, theme::ACCENT.gamma_multiply(0.45));
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 5.0, theme::SURFACE);
+        ui.painter().rect_filled(rect, 5.0, theme::palette(ui.ctx()).surface);
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
     let mut job = LayoutJob::default();
@@ -258,7 +258,7 @@ fn row_ui(
         let color = if hit {
             theme::ACCENT.gamma_multiply(1.3)
         } else {
-            theme::TEXT
+            theme::palette(ui.ctx()).text
         };
         let mut buf = [0u8; 4];
         job.append(
@@ -279,14 +279,14 @@ fn row_ui(
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let y = rect.center().y - galley.size().y / 2.0;
     ui.painter()
-        .galley(egui::pos2(rect.left() + 8.0, y), galley, theme::TEXT);
+        .galley(egui::pos2(rect.left() + 8.0, y), galley, theme::palette(ui.ctx()).text);
     if !detail.is_empty() {
         ui.painter().text(
             egui::pos2(rect.right() - 8.0, rect.center().y),
             Align2::RIGHT_CENTER,
             detail,
             egui::TextStyle::Small.resolve(ui.style()),
-            theme::TEXT_WEAK,
+            theme::palette(ui.ctx()).muted,
         );
     }
     resp

@@ -106,7 +106,7 @@ pub fn build_toolbar(ui: &mut egui::Ui, ide: &mut Ide, state: &mut EditorState) 
                     job.kind.label(),
                     job.started.elapsed().as_secs_f32()
                 ))
-                .color(theme::TEXT_WEAK),
+                .color(theme::palette(ui.ctx()).muted),
             );
         }
         (_, Some((kind, ok))) => {
@@ -216,9 +216,9 @@ impl CodeEditor {
                                 ),
                             );
                             let name_color = if active {
-                                Color32::WHITE
+                                theme::palette(ui.ctx()).text
                             } else {
-                                theme::TEXT_WEAK
+                                theme::palette(ui.ctx()).muted
                             };
                             job.append(
                                 &doc.name(),
@@ -252,7 +252,7 @@ impl CodeEditor {
                             let glyph = if doc.dirty { "⏺" } else { "×" };
                             let x = ui
                                 .add(
-                                    egui::Button::new(RichText::new(glyph).color(theme::TEXT_WEAK))
+                                    egui::Button::new(RichText::new(glyph).color(theme::palette(ui.ctx()).muted))
                                         .frame(false)
                                         .small(),
                                 )
@@ -295,7 +295,7 @@ impl CodeEditor {
         // egui's TextEdit gives focus up on Esc before `has_focus` is read.
         let mut lost = false;
         egui::Frame::new()
-            .fill(theme::RAISED)
+            .fill(theme::palette(ui.ctx()).surface_raised)
             .corner_radius(6)
             .inner_margin(egui::Margin::symmetric(6, 4))
             .show(ui, |ui| {
@@ -324,7 +324,7 @@ impl CodeEditor {
                         (Some(c), n) => format!("{} of {n}", c + 1),
                         (None, n) => format!("{n} results"),
                     };
-                    ui.label(RichText::new(count).color(theme::TEXT_WEAK));
+                    ui.label(RichText::new(count).color(theme::palette(ui.ctx()).muted));
                     if ui
                         .small_button("⬆")
                         .on_hover_text("Previous (Shift+Enter)")
@@ -658,7 +658,14 @@ impl CodeEditor {
                 &[]
             };
             let m: &[Range<usize>] = if h == find_key_hash { &matches } else { &[] };
-            let job = highlight::layout_job(text, toks, m, current, font_for_layout.clone());
+            let job = highlight::layout_job(
+                text,
+                toks,
+                m,
+                current,
+                font_for_layout.clone(),
+                !ui.visuals().dark_mode,
+            );
             ui.fonts_mut(|f| f.layout_job(job))
         };
 
@@ -713,7 +720,12 @@ impl CodeEditor {
                 if let (Some(c), true) = (cursor, resp.has_focus()) {
                     let r = galley.pos_from_cursor(c).translate(gpos.to_vec2());
                     let line = egui::Rect::from_x_y_ranges(clip.x_range(), r.y_range());
-                    bg.push(Shape::rect_filled(line, 0.0, Color32::from_white_alpha(9)));
+                    let tint = if ui.visuals().dark_mode {
+                        Color32::from_white_alpha(9)
+                    } else {
+                        Color32::from_black_alpha(10)
+                    };
+                    bg.push(Shape::rect_filled(line, 0.0, tint));
                 }
                 ui.painter().set(bg_idx, Shape::Vec(bg));
 
@@ -734,9 +746,9 @@ impl CodeEditor {
                         (i + 1).to_string(),
                         font.clone(),
                         if current {
-                            theme::TEXT
+                            theme::palette(ui.ctx()).text
                         } else {
-                            theme::TEXT_WEAK.gamma_multiply(0.7)
+                            theme::palette(ui.ctx()).muted.gamma_multiply(0.7)
                         },
                     );
                 }
@@ -868,7 +880,7 @@ fn welcome(ui: &mut egui::Ui) {
         ui.label(
             RichText::new("No file open")
                 .heading()
-                .color(theme::TEXT_WEAK),
+                .color(theme::palette(ui.ctx()).muted),
         );
         ui.add_space(10.0);
         for (keys, what) in [
@@ -880,7 +892,7 @@ fn welcome(ui: &mut egui::Ui) {
             ("Ctrl+/", "Toggle Comment"),
             ("Ctrl+Tab", "Next Tab"),
         ] {
-            ui.label(RichText::new(format!("{what}   {keys}")).color(theme::TEXT_WEAK));
+            ui.label(RichText::new(format!("{what}   {keys}")).color(theme::palette(ui.ctx()).muted));
         }
     });
 }
@@ -926,7 +938,7 @@ fn bars(ui: &mut egui::Ui, ide: &mut Ide, idx: usize, state: &mut EditorState) {
         None => {}
     }
     if let Some(why) = doc.read_only {
-        bar(ui, theme::TEXT_WEAK, &mut |ui| {
+        bar(ui, theme::palette(ui.ctx()).muted, &mut |ui| {
             ui.label(format!("🔒 {why}"));
         });
     }
@@ -935,7 +947,8 @@ fn bars(ui: &mut egui::Ui, ide: &mut Ide, idx: usize, state: &mut EditorState) {
 fn status_bar(ui: &mut egui::Ui, ide: &Ide, idx: usize, edit_id: egui::Id, markers: &[Marker]) {
     let doc = &ide.docs[idx];
     ui.horizontal(|ui| {
-        let small = |t: String| RichText::new(t).small().color(theme::TEXT_WEAK);
+        let muted = theme::palette(ui.ctx()).muted;
+        let small = |t: String| RichText::new(t).small().color(muted);
         if let Some(r) = TextEditState::load(ui.ctx(), edit_id).and_then(|s| s.cursor.char_range())
         {
             let (l, c) = text_ops::char_to_line_col(&doc.text, r.primary.index.0);

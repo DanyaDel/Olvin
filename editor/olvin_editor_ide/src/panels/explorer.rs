@@ -36,11 +36,11 @@ enum Action {
 fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
     let Some(root) = ide.root.clone() else {
         ui.add_space(8.0);
-        ui.label(RichText::new("No project open.").color(theme::TEXT_WEAK));
+        ui.label(RichText::new("No project open.").color(theme::palette(ui.ctx()).muted));
         ui.label(
             RichText::new("Start the editor with a game project folder (olvin-hub does that).")
                 .small()
-                .color(theme::TEXT_WEAK),
+                .color(theme::palette(ui.ctx()).muted),
         );
         return;
     };
@@ -111,9 +111,9 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
             let bg = if selected {
                 Some(theme::ACCENT.gamma_multiply(0.35))
             } else if is_active {
-                Some(theme::RAISED)
+                Some(theme::palette(ui.ctx()).surface_raised)
             } else if resp.hovered() {
-                Some(theme::RAISED.gamma_multiply(0.8))
+                Some(theme::palette(ui.ctx()).surface_raised.gamma_multiply(0.8))
             } else {
                 None
             };
@@ -129,7 +129,7 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
                     Align2::CENTER_CENTER,
                     if open { "⏷" } else { "⏵" },
                     egui::FontId::proportional(10.0),
-                    theme::TEXT_WEAK,
+                    theme::palette(ui.ctx()).muted,
                 );
             }
             let (glyph, color) = files::icon(e.name(), e.is_dir, open);
@@ -142,9 +142,9 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
             );
             let dirty = !e.is_dir && ide.docs.iter().any(|d| d.dirty && d.path == e.path);
             let name_color = if is_active {
-                egui::Color32::WHITE
+                theme::palette(ui.ctx()).text
             } else {
-                theme::TEXT
+                theme::palette(ui.ctx()).text
             };
             let text_rect = p.text(
                 egui::pos2(x + 31.0, y),
@@ -159,7 +159,7 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
                     Align2::LEFT_CENTER,
                     "⏺",
                     egui::FontId::proportional(10.0),
-                    theme::TEXT_WEAK,
+                    theme::palette(ui.ctx()).muted,
                 );
             }
 

@@ -579,6 +579,27 @@ fn review() {
             }
             shot_with(&project, &out.join(name), theme, Some(ws), |_| {});
         }
+        // The Code workspace with a file open (syntax colours on both themes).
+        let name = format!("{theme:?}-code_open.png").to_lowercase();
+        if only.as_deref().is_none_or(|o| name.contains(o)) {
+            shot_with(&project, &out.join(name), theme, Some("Code"), |h| {
+                for _ in 0..2 {
+                    let at = egui::pos2(70.0, 147.0);
+                    h.event(egui::Event::PointerMoved(at));
+                    h.run_steps(2);
+                    for pressed in [true, false] {
+                        h.event(egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                        h.run_steps(2);
+                    }
+                }
+                h.run_steps(10);
+            });
+        }
     }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }

@@ -87,7 +87,7 @@ impl Problems {
             } else {
                 "No problems."
             };
-            ui.label(RichText::new(msg).color(theme::TEXT_WEAK));
+            ui.label(RichText::new(msg).color(theme::palette(ui.ctx()).muted));
             return;
         }
         let mut jump = None;
@@ -104,7 +104,7 @@ impl Problems {
                         Sense::click(),
                     );
                     if resp.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, theme::RAISED);
+                        ui.painter().rect_filled(rect, 4.0, theme::palette(ui.ctx()).surface_raised);
                     }
                     let p = ui.painter_at(rect);
                     let y = rect.center().y;
@@ -121,7 +121,7 @@ impl Problems {
                         egui::Align2::RIGHT_CENTER,
                         &loc,
                         egui::TextStyle::Small.resolve(ui.style()),
-                        theme::TEXT_WEAK,
+                        theme::palette(ui.ctx()).muted,
                     );
                     let msg_clip = egui::Rect::from_min_max(
                         rect.min,
@@ -132,7 +132,7 @@ impl Problems {
                         egui::Align2::LEFT_CENTER,
                         d.summary(),
                         egui::TextStyle::Body.resolve(ui.style()),
-                        theme::TEXT,
+                        theme::palette(ui.ctx()).text,
                     );
                     let tip = match &d.code {
                         Some(c) => format!("{} [{c}]\n{loc}", d.summary()),

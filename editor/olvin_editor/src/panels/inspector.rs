@@ -527,15 +527,15 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
         ui.checkbox(&mut e.active, "")
             .on_hover_text("Active: inactive objects and their children are not spawned");
         // Leave room for the "#id" after the field.
-        let width = ui.available_width() - 38.0 - 2.0 * ui.spacing().item_spacing.x;
+        let width = cell_width(ui) - 38.0 - 2.0 * ui.spacing().item_spacing.x;
         ui.add(TextEdit::singleline(&mut e.name).desired_width(width.max(40.0)));
         ui.weak(format!("#{id}"));
     });
     ui.horizontal(|ui| {
         // Two combo boxes plus their labels: shrink with the panel, or the
         // overflow widens everything below.
-        let combo = ((ui.available_width() - 76.0 - 4.0 * ui.spacing().item_spacing.x) / 2.0)
-            .clamp(56.0, 110.0);
+        let combo =
+            ((cell_width(ui) - 76.0 - 4.0 * ui.spacing().item_spacing.x) / 2.0).clamp(56.0, 110.0);
         ui.label("Tag");
         let tag = if e.tag.is_empty() {
             "Untagged"
@@ -852,16 +852,19 @@ pub(crate) fn section(
 /// Room left to the panel's edge for a widget at the cursor of a grid cell.
 /// Not `available_width()`: a cell's room follows last frame's column width,
 /// so it keeps any overflow (and an overflowing widget grows every section
-/// below it). The clip rect is the visible panel; 18 px stay for the scroll bar and frames.
+/// below it). The clip rect is the visible panel; 26 px stay for the scroll bar, frames and
+/// the padding of drag fields.
 pub(crate) fn cell_width(ui: &egui::Ui) -> f32 {
-    (ui.clip_rect().right() - 18.0 - ui.cursor().left()).max(0.0)
+    (ui.clip_rect().right() - 26.0 - ui.cursor().left()).max(0.0)
 }
 
 pub(crate) fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
+    // Labels take less room in a narrow panel so the fields keep theirs.
+    let label_col = (cell_width(ui) * 0.3).clamp(52.0, 80.0);
     egui::Grid::new(id)
         .num_columns(2)
         .spacing([10.0, 4.0])
-        .min_col_width(80.0)
+        .min_col_width(label_col)
         .show(ui, body);
 }
 
@@ -898,17 +901,13 @@ struct Keying<'a> {
 }
 
 fn vec3_keyed(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str, k: Keying) {
-    let width = ((ui.available_width() - 3.0 * 14.0) / 3.0).clamp(40.0, 90.0);
+    let (width, letters) = vec3_fit(ui);
     let mut insert = false;
     let mut delete = false;
     let mut clear = false;
     let mut single = None;
     for (i, value) in [&mut v.x, &mut v.y, &mut v.z].into_iter().enumerate() {
-        ui.label(
-            RichText::new(["X", "Y", "Z"][i])
-                .color(theme::AXES[i])
-                .strong(),
-        );
+        axis_letter(ui, i, letters);
         let state = k
             .action
             .key_state(k.object, k.prop, i as u8, k.frame, *value);
@@ -1001,22 +1000,45 @@ fn vec3_keyed(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str, k: Keyi
     }
 }
 
-fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
-    // Three "X" labels and three fields with five gaps between them must fit
-    // the cell, or the whole section grows past the panel's edge.
+/// Width of one field of a Vector3 row, whether the X/Y/Z letters fit, and
+/// tighter spacing when the panel is narrow. The fields (and three letters,
+/// five gaps) must fit the cell, or the whole section grows past the panel's
+/// edge. A drag field is never narrower than ~34 px, so a very narrow panel
+/// drops the letters.
+fn vec3_fit(ui: &mut egui::Ui) -> (f32, bool) {
+    const FIELD_MIN: f32 = 34.0;
     let wide = ui.spacing().item_spacing.x;
-    let narrow = (cell_width(ui) - 3.0 * 11.0 - 5.0 * wide) / 3.0 < 40.0;
+    let room = cell_width(ui);
+    let narrow = (room - 3.0 * 11.0 - 5.0 * wide) / 3.0 < 40.0;
     // A narrow panel: tighter gaps, and fields may be thinner than a button.
     let gap = if narrow { 3.0 } else { wide };
     ui.spacing_mut().item_spacing.x = gap;
-    let width = ((cell_width(ui) - 3.0 * 11.0 - 5.0 * gap) / 3.0).clamp(24.0, 90.0);
+    let letters = (room - 3.0 * 11.0 - 5.0 * gap) / 3.0 >= FIELD_MIN;
+    let width = if letters {
+        (room - 3.0 * 11.0 - 5.0 * gap) / 3.0
+    } else {
+        (room - 2.0 * gap) / 3.0
+    }
+    .clamp(24.0, 90.0);
     ui.spacing_mut().interact_size.x = width.min(ui.spacing().interact_size.x);
-    for (i, value) in [&mut v.x, &mut v.y, &mut v.z].into_iter().enumerate() {
+    (width, letters)
+}
+
+/// The axis letter of a Vector3 row, or nothing in the compact layout.
+fn axis_letter(ui: &mut egui::Ui, i: usize, letters: bool) {
+    if letters {
         ui.label(
             RichText::new(["X", "Y", "Z"][i])
                 .color(theme::AXES[i])
                 .strong(),
         );
+    }
+}
+
+fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
+    let (width, letters) = vec3_fit(ui);
+    for (i, value) in [&mut v.x, &mut v.y, &mut v.z].into_iter().enumerate() {
+        axis_letter(ui, i, letters);
         ui.add_sized(
             [width, 18.0],
             DragValue::new(value)
@@ -1024,5 +1046,57 @@ fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
                 .max_decimals(3)
                 .suffix(suffix),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Vector3 row in a grid inside a panel `width` wide: its right edge.
+    fn right_edge(width: f32, keyed: bool) -> f32 {
+        let ctx = egui::Context::default();
+        let mut edge = 0.0;
+        let mut action = Action::default();
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, 200.0));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.set_clip_rect(rect);
+                    let mut v = Vec3::new(-12.5, 20.0, 0.0);
+                    grid(ui, "t", |ui| {
+                        row(ui, "Rotation", |ui| {
+                            if keyed {
+                                let k = Keying {
+                                    action: &mut action,
+                                    object: 1,
+                                    prop: Prop::Rotation,
+                                    frame: 1.0,
+                                };
+                                vec3_keyed(ui, &mut v, 0.5, "°", k);
+                            } else {
+                                vec3(ui, &mut v, 0.5, "°");
+                            }
+                        });
+                    });
+                    edge = ui.min_rect().right() - rect.left();
+                });
+            });
+            out.textures_delta.clear();
+        }
+        edge
+    }
+
+    #[test]
+    fn vector3_rows_fit_any_panel_width() {
+        for keyed in [false, true] {
+            for width in [240.0, 260.0, 280.0, 310.0, 400.0, 600.0] {
+                let edge = right_edge(width, keyed);
+                assert!(
+                    edge <= width + 0.5,
+                    "keyed={keyed}: a {width} px panel got a {edge} px row"
+                );
+            }
+        }
     }
 }

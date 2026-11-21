@@ -54,7 +54,7 @@ impl Output {
             ui.label(
                 RichText::new(format!("{} lines", ide.output.len()))
                     .small()
-                    .color(theme::TEXT_WEAK),
+                    .color(theme::palette(ui.ctx()).muted),
             );
         });
         ui.separator();
@@ -66,7 +66,7 @@ impl Output {
             .show_rows(ui, row_h, ide.output.len(), |ui, range| {
                 for line in &ide.output[range] {
                     let color = match line.kind {
-                        OutKind::Normal => theme::TEXT,
+                        OutKind::Normal => theme::palette(ui.ctx()).text,
                         OutKind::Error => ui.visuals().error_fg_color,
                         OutKind::Warning => ui.visuals().warn_fg_color,
                         OutKind::Info => theme::INFO,

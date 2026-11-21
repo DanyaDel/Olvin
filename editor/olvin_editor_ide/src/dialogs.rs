@@ -56,7 +56,7 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
             } => {
                 let what = if *folder { "New Folder" } else { "New File" };
                 ui.heading(what);
-                ui.label(RichText::new(format!("in {}/", ide.rel(dir))).color(theme::TEXT_WEAK));
+                ui.label(RichText::new(format!("in {}/", ide.rel(dir))).color(theme::palette(ui.ctx()).muted));
                 let ok = name_field(ui, name, error, enter);
                 if buttons(ui, "Create") || ok {
                     let path = dir.join(name.trim());
@@ -91,7 +91,7 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
             }
             Dialog::Rename { path, name, error } => {
                 ui.heading("Rename");
-                ui.label(RichText::new(ide.rel(path)).color(theme::TEXT_WEAK));
+                ui.label(RichText::new(ide.rel(path)).color(theme::palette(ui.ctx()).muted));
                 let ok = name_field(ui, name, error, enter);
                 if buttons(ui, "Rename") || ok {
                     let to = path.parent().unwrap_or(Path::new("")).join(name.trim());
@@ -151,7 +151,7 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
                     RichText::new(
                         "Creates assets/shaders/<name>.wgsl from the surface shader contract.",
                     )
-                    .color(theme::TEXT_WEAK),
+                    .color(theme::palette(ui.ctx()).muted),
                 );
                 let ok = name_field(ui, name, error, enter);
                 if buttons(ui, "Create") || ok {

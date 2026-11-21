@@ -370,8 +370,10 @@ fn material_section(
                 .material
                 .as_deref()
                 .map_or("Default (colour only)".to_owned(), short_name);
+            let combo = (ui.available_width() - 56.0 - 2.0 * ui.spacing().item_spacing.x)
+                .clamp(60.0, 180.0);
             egui::ComboBox::from_id_salt("material-asset")
-                .width(180.0)
+                .width(combo)
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut e.material, None, "Default (colour only)");
@@ -505,10 +507,16 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
     ui.horizontal(|ui| {
         ui.checkbox(&mut e.active, "")
             .on_hover_text("Active: inactive objects and their children are not spawned");
-        ui.add(TextEdit::singleline(&mut e.name).desired_width(ui.available_width() - 40.0));
+        // Leave room for the "#id" after the field.
+        let width = ui.available_width() - 38.0 - 2.0 * ui.spacing().item_spacing.x;
+        ui.add(TextEdit::singleline(&mut e.name).desired_width(width.max(40.0)));
         ui.weak(format!("#{id}"));
     });
     ui.horizontal(|ui| {
+        // Two combo boxes plus their labels: shrink with the panel, or the
+        // overflow widens everything below.
+        let combo = ((ui.available_width() - 76.0 - 4.0 * ui.spacing().item_spacing.x) / 2.0)
+            .clamp(56.0, 110.0);
         ui.label("Tag");
         let tag = if e.tag.is_empty() {
             "Untagged"
@@ -516,7 +524,7 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
             e.tag.as_str()
         };
         egui::ComboBox::from_id_salt("tag")
-            .width(110.0)
+            .width(combo)
             .selected_text(tag)
             .show_ui(ui, |ui| {
                 for t in TAGS {
@@ -534,7 +542,7 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("Layer {}", e.layer));
         egui::ComboBox::from_id_salt("layer")
-            .width(110.0)
+            .width(combo)
             .selected_text(layer)
             .show_ui(ui, |ui| {
                 for (i, l) in LAYERS.iter().enumerate() {
@@ -822,11 +830,19 @@ pub(crate) fn section(
     ui.add_space(4.0);
 }
 
+/// Room left to the panel's edge for a widget at the cursor of a grid cell.
+/// Not `available_width()`: a cell's room follows last frame's column width,
+/// so it keeps any overflow (and an overflowing widget grows every section
+/// below it). The clip rect is the visible panel; 18 px stay for the scroll bar and frames.
+pub(crate) fn cell_width(ui: &egui::Ui) -> f32 {
+    (ui.clip_rect().right() - 18.0 - ui.cursor().left()).max(0.0)
+}
+
 pub(crate) fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
         .num_columns(2)
         .spacing([10.0, 4.0])
-        .min_col_width(96.0)
+        .min_col_width(80.0)
         .show(ui, body);
 }
 
@@ -853,7 +869,15 @@ pub(crate) fn drag(
 }
 
 fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
-    let width = ((ui.available_width() - 3.0 * 14.0) / 3.0).clamp(40.0, 90.0);
+    // Three "X" labels and three fields with five gaps between them must fit
+    // the cell, or the whole section grows past the panel's edge.
+    let wide = ui.spacing().item_spacing.x;
+    let narrow = (cell_width(ui) - 3.0 * 11.0 - 5.0 * wide) / 3.0 < 40.0;
+    // A narrow panel: tighter gaps, and fields may be thinner than a button.
+    let gap = if narrow { 3.0 } else { wide };
+    ui.spacing_mut().item_spacing.x = gap;
+    let width = ((cell_width(ui) - 3.0 * 11.0 - 5.0 * gap) / 3.0).clamp(24.0, 90.0);
+    ui.spacing_mut().interact_size.x = width.min(ui.spacing().interact_size.x);
     for (i, value) in [&mut v.x, &mut v.y, &mut v.z].into_iter().enumerate() {
         ui.label(
             RichText::new(["X", "Y", "Z"][i])

@@ -207,12 +207,20 @@ impl Assets {
                     "New scene:"
                 });
                 let edit = ui.add(TextEdit::singleline(&mut name).desired_width(180.0));
-                edit.request_focus();
-                let submit = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Ask before focusing: request_focus() undoes "lost focus".
+                let lost = edit.lost_focus();
+                let submit = lost && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                if submit && !name.trim().is_empty() {
+                if !lost && !cancel {
+                    edit.request_focus();
+                }
+                if cancel || lost && !submit || submit && name.trim().is_empty() {
+                    keep = false;
+                } else if submit {
                     let name = name.trim().to_owned();
-                    if is_folder {
+                    if !valid_name(&name) {
+                        state.error(format!("\"{name}\" is not a valid name"));
+                    } else if is_folder {
                         if let Err(e) = std::fs::create_dir_all(dir.join(&name)) {
                             state.error(format!("could not create folder: {e}"));
                         }
@@ -225,14 +233,14 @@ impl Assets {
                         let path = dir.join(file);
                         if path.exists() {
                             state.error(format!("{} already exists", path.display()));
-                        } else if olvin_scene::file::SceneFile::default().save(&path).is_ok() {
+                        } else if let Err(e) = olvin_scene::file::SceneFile::default().save(&path) {
+                            state.error(format!("could not create scene: {e}"));
+                        } else {
                             state.request_open(path);
                         }
                     }
                     keep = false;
                     self.scanned = None;
-                } else if cancel || (edit.lost_focus() && !submit) {
-                    keep = false;
                 }
             });
             if keep {
@@ -240,6 +248,15 @@ impl Assets {
             }
         }
     }
+}
+
+/// A path that stays inside the current folder: normal components only
+/// (no `..`, no leading `/`).
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && Path::new(name)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 fn create_menu(ui: &mut egui::Ui, creating: &mut Option<(bool, String)>) {

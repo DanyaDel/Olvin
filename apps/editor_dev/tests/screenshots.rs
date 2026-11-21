@@ -441,6 +441,25 @@ fn read_back(rs: &RenderState, texture: &wgpu::Texture) -> Result<image::RgbaIma
 /// One screenshot. With `edit_mode`, the selected object is in the Modeling
 /// element's Edit Mode with every vertex selected (faces, all selected).
 fn shot(project: &Path, out: &Path, theme: ThemeKind, workspace: Option<&str>, edit_mode: bool) {
+    shot_with(project, out, theme, workspace, |harness| {
+        if edit_mode {
+            // The Modeling panel's buttons, like Tab / 3 / A in the scene view.
+            for label in ["◆ Edit Mode", "Face 3", "All  A"] {
+                harness.get_by_label(label).click();
+                harness.run_steps(2);
+            }
+        }
+    });
+}
+
+/// A screenshot after `drive` has operated the editor.
+fn shot_with(
+    project: &Path,
+    out: &Path,
+    theme: ThemeKind,
+    workspace: Option<&str>,
+    drive: impl FnOnce(&mut Harness<'_, EditorApp>),
+) {
     let project = project.to_path_buf();
     let workspace = workspace.map(str::to_owned);
     let mut harness = Harness::builder()
@@ -465,15 +484,9 @@ fn shot(project: &Path, out: &Path, theme: ThemeKind, workspace: Option<&str>, e
             app
         });
     harness.run_steps(30);
-    if edit_mode {
-        // The Modeling panel's buttons, like Tab / 3 / A in the scene view.
-        for label in ["◆ Edit Mode", "Face 3", "All  A"] {
-            harness.get_by_label(label).click();
-            harness.run_steps(2);
-        }
-        // kittest paints its pointer into the image; a screenshot has none.
-        harness.remove_cursor();
-    }
+    drive(&mut harness);
+    // kittest paints its pointer into the image; a screenshot has none.
+    harness.remove_cursor();
     // 1.5 s in all: wordmark intro, tab easing and fades settle.
     harness.run_steps(60);
     let image = harness.render().expect("wgpu render");
@@ -520,5 +533,36 @@ fn screenshots() {
         Some("Modeling"),
         true,
     );
+    let _ = fs::remove_dir_all(project.parent().unwrap());
+}
+
+/// Every workspace in every theme, for a visual review (`$OLVIN_EDITOR_REVIEW`).
+#[test]
+#[ignore = "renders PNGs with wgpu; run with --ignored"]
+fn review() {
+    let Some(out) = std::env::var_os("OLVIN_EDITOR_REVIEW").map(PathBuf::from) else {
+        return;
+    };
+    fs::create_dir_all(&out).unwrap();
+    let project = std::env::temp_dir().join(format!("olvin-editor-review-{}/yard", std::process::id()));
+    demo_project(&project);
+    let only = std::env::var("OLVIN_EDITOR_REVIEW_ONLY").ok();
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        for ws in [
+            "Layout",
+            "Lighting",
+            "Animation",
+            "Mapping",
+            "Modeling",
+            "UV Editing",
+            "Code",
+        ] {
+            let name = format!("{:?}-{}.png", theme, ws.replace(' ', "_")).to_lowercase();
+            if only.as_deref().is_some_and(|o| !name.contains(o)) {
+                continue;
+            }
+            shot_with(&project, &out.join(name), theme, Some(ws), |_| {});
+        }
+    }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }

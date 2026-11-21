@@ -218,13 +218,19 @@ impl Hierarchy {
             && *rid == id
         {
             let edit = ui.add(TextEdit::singleline(name).desired_width(160.0));
-            edit.request_focus();
-            if edit.lost_focus() {
+            // Enter or a click elsewhere ends the edit. Ask before focusing:
+            // request_focus() undoes "lost focus" within the same frame.
+            let done = edit.lost_focus();
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.renaming = None;
+            } else if done {
                 let name = name.trim().to_owned();
                 self.renaming = None;
                 if !name.is_empty() {
                     actions.push(Action::Rename(id, name));
                 }
+            } else {
+                edit.request_focus();
             }
             return;
         }

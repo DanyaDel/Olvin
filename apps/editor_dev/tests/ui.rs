@@ -69,6 +69,11 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn editor(project: &Path) -> Harness<'static, EditorApp> {
+    editor_with(project, true)
+}
+
+/// `fresh`: default workspaces and preferences instead of the saved ones.
+fn editor_with(project: &Path, fresh: bool) -> Harness<'static, EditorApp> {
     isolate_config();
     let project = project.to_path_buf();
     let mut harness = Harness::builder()
@@ -78,9 +83,11 @@ fn editor(project: &Path) -> Harness<'static, EditorApp> {
             olvin_editor::theme::apply(&cc.egui_ctx);
             let registry = olvin_editor::registry(&plugins());
             let mut app = EditorApp::new(registry, Some(project), None);
-            app.reset_layout();
-            app.state_mut().prefs = Default::default();
-            assert!(app.show_workspace("Layout"));
+            if fresh {
+                app.reset_layout();
+                app.state_mut().prefs = Default::default();
+                assert!(app.show_workspace("Layout"));
+            }
             app
         });
     harness.run_steps(5);
@@ -234,13 +241,118 @@ fn hierarchy_drag_reparent_and_undo() {
 fn hierarchy_rename_cyrillic_and_escape() {
     let p = project("hier-rename");
     let mut h = editor(&p);
-    h.get_by_label("◼ Cube").click();
-    h.run_steps(2);
-    h.get_by_label("◼ Cube").click();
-    h.run_steps(1);
-    h.get_by_label("◼ Cube").click();
+    h.get_by_label("◼ Cube").click_secondary();
     h.run_steps(3);
-    // double click via two quick clicks is flaky: use the context menu
+    h.get_by_label("Rename").click();
+    h.run_steps(3);
+    field(&h, "Cube").type_text("Ящик №1");
+    h.run_steps(2);
+    for n in h.get_all_by_role(egui::accesskit::Role::TextInput) {
+        eprintln!("field {:?}", n.accesskit_node().value());
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    for n in h.get_all_by_role(egui::accesskit::Role::TextInput) {
+        eprintln!("after enter field {:?}", n.accesskit_node().value());
+    }
+    eprintln!("name {:?}", state(&mut h).scene.get(3).unwrap().name);
+    assert_eq!(state(&mut h).scene.get(3).unwrap().name, "CubeЯщик №1");
+    // Escape cancels a rename.
+    h.get_by_label("◼ CubeЯщик №1").click_secondary();
+    h.run_steps(3);
+    h.get_by_label("Rename").click();
+    h.run_steps(3);
+    field(&h, "CubeЯщик №1").type_text("zzz");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(state(&mut h).scene.get(3).unwrap().name, "CubeЯщик №1");
+}
+
+#[test]
+fn hotkeys_do_not_fire_while_typing() {
+    let p = project("typing");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    field(&h, "Cube").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.key_press(egui::Key::X);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 3, "{:?}", names(&mut h));
+}
+
+#[test]
+fn game_object_menu_creates_and_undo_removes() {
+    let p = project("menu-create");
+    let mut h = editor(&p);
+    h.get_by_label("GAMEOBJECT").click();
+    h.run_steps(3);
+    h.get_by_label("Create Empty").click();
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 4);
+    assert_eq!(state(&mut h).selection, Some(4));
+    undo(&mut h);
+    assert_eq!(names(&mut h).len(), 3);
+    redo(&mut h);
+    assert_eq!(names(&mut h).len(), 4);
+}
+
+#[test]
+fn new_scene_asks_before_discarding_changes() {
+    let p = project("new-scene");
+    let mut h = editor(&p);
+    state(&mut h).scene.get_mut(3).unwrap().position.x = 5.0;
+    h.run_steps(3);
+    h.get_by_label("FILE").click();
+    h.run_steps(3);
+    h.get_by_label_contains("New Scene").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Unsaved Changes").is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 3);
+    h.get_by_label("FILE").click();
+    h.run_steps(3);
+    h.get_by_label_contains("New Scene").click();
+    h.run_steps(3);
+    h.get_by_label("Don't Save").click();
+    h.run_steps(3);
+    assert_eq!(names(&mut h).len(), 4, "the starter scene");
+}
+
+/// The "+" of the top bar's workspace tabs (docks have their own).
+fn workspace_plus(h: &Ed) -> egui_kittest::Node<'_> {
+    h.get_all_by_label("+")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("workspace +")
+}
+
+#[test]
+fn workspace_tabs_add_rename_close_and_persist() {
+    let p = project("tabs");
+    let mut h = editor(&p);
+    workspace_plus(&h).click();
+    h.run_steps(3);
+    h.get_by_label("Empty").click();
+    h.run_steps(3);
+    // The new workspace is in rename mode.
+    field(&h, "New").type_text("Мой воркспейс");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.query_by_label("NewМой воркспейс").is_some());
+    // Layout survives a restart.
+    eframe::App::on_exit(h.state_mut());
+    let mut h = editor_with(&p, false);
+    assert!(h.query_by_label("NewМой воркспейс").is_some());
+    // Close it from the context menu.
+    h.get_by_label("NewМой воркспейс").click_secondary();
+    h.run_steps(3);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("NewМой воркспейс").is_none());
+    assert!(h.query_by_label("Layout").is_some());
 }
 
 #[test]

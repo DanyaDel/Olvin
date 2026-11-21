@@ -102,7 +102,9 @@ impl Viewport {
         state: &mut EditorState,
         grid_step: f32,
     ) {
-        let bar_rect = rect.shrink(6.0);
+        // The toolbar wraps before the view gizmo in the top right corner.
+        let mut bar_rect = rect.shrink(6.0);
+        bar_rect.max.x = bar_rect.max.x.min(rect.right() - 108.0).max(bar_rect.min.x + 160.0);
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
         self.toolbar_bottom = egui::Frame::new()
             .fill(Color32::from_black_alpha(110))

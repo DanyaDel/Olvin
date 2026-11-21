@@ -293,15 +293,17 @@ impl EditorApp {
                 && *ri == i
             {
                 let edit = ui.add(TextEdit::singleline(name).desired_width(120.0));
-                edit.request_focus();
-                let cancel = edit.ctx.input(|i| i.key_pressed(Key::Escape));
-                if cancel {
+                // Ask before focusing: request_focus() undoes "lost focus".
+                let done = edit.lost_focus();
+                if ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.renaming = None;
-                } else if edit.lost_focus() {
+                } else if done {
                     if !name.trim().is_empty() {
                         self.layout.workspaces[i].name = name.trim().to_owned();
                     }
                     self.renaming = None;
+                } else {
+                    edit.request_focus();
                 }
                 continue;
             }

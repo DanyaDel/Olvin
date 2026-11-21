@@ -105,12 +105,12 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 ## Phase 5. Editor (P1–P2)
 
-- [~] **Undo and redo for all operations**: currently present in part of the editor. Check that dragging, the inspector, Edit Mode, CSG and UV are covered. (M) [P1] — partial: whole-scene snapshots (`commit`, `UNDO_LIMIT`) cover anything that changes the `SceneFile`; Edit Mode, CSG and UV are unchecked.
+- [x] **Undo and redo for all operations**: currently present in part of the editor. Check that dragging, the inspector, Edit Mode, CSG and UV are covered. (M) [P1] — verified by editor tests: hierarchy drag, gizmos, the inspector, materials (files roll back with the scene), Edit Mode, CSG, UV, animation; history is frozen during Play. Asset file operations (rename, move, delete) are not undoable.
 - [x] **Play Mode that does not lose edits**: what happens to the scene when playback stops matters. A snapshot of the scene at start and a rollback on stop. (M) [P1] — `start_play`/`stop_play` save and restore the scene (`PlaySession`).
 - [ ] **Prefabs in the editor**: creating, overriding, applying back. Depends on phase 1. (M) [P1]
 - [~] **Material editor**: the `*.mat.ron` contracts exist (M1), a visual editor with a preview is needed. (M) [P2] — partial: in-inspector material editor with presets; no preview.
 - [ ] **Profiler and statistics panel** (see phase 1). (S) [P2]
-- [ ] **Animation editor**: connect Animator to the runtime after phase 2. (L) [P2]
+- [x] **Animation editor**: connect Animator to the runtime after phase 2. (L) [P2] — a Blender-like animator: F-curves with Auto Clamped Bezier (Blender's maths ported), Timeline, Dope Sheet, Graph Editor, I/Alt+I and key colours in the inspector; scene format v3 (`SceneFile::animation`), played in games and Play by `olvin_anim::ActionPlayer`. Missing: auto-keying, markers, Normalize, animating anything but Transform; rotation order is YXZ, not XYZ.
 - [~] **Search in the scene and assets**, filters in the console. (S) [P2] — partial: filters in the assets panel and the console; no hierarchy search.
 - [ ] **Multi-scene**: open several scenes at once and switch between them. (M) [P3]
 - [ ] **Configurable hotkeys** (currently hard-coded). (S) [P3]

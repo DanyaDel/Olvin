@@ -35,7 +35,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 ## Phase 1. Core: what a game cannot be built without (P1)
 
-- [x] **Asset systems with handles and reference counting**: unloading unused assets, async loading, dependencies (mesh → material → texture), rebuilding on hot reload. `olvin_assets` with `.meta` and GUIDs already exists, but there is no runtime manager. (L) — done but not wired in yet: `AssetManager` (handles, refcounts, worker threads, dependencies, hot reload) is not used by the renderer or the editor.
+- [x] **Asset systems with handles and reference counting**: unloading unused assets, async loading, dependencies (mesh → material → texture), rebuilding on hot reload. `olvin_assets` with `.meta` and GUIDs already exists, but there is no runtime manager. (L) — `AssetManager` (handles, refcounts, worker threads, dependencies, hot reload); `olvin::models::ModelPlugin` loads scene models through it, renderer textures still go through `render_assets`.
 - [ ] **Prefabs**: `olvin_scene` has no notion of a prefab yet (2 mentions). Needed: save an object as a prefab, instantiate it, override fields, update all instances. (L)
 - [x] **Versioned scene format**: a version field, migrations when the format changes, a separate test on old files. (M) — `FORMAT_VERSION`, `MIGRATIONS` in `olvin_scene::file`, tests on old files.
 - [x] **Scene and state management**: loading a scene in the background, transitions between scenes (menu, game, pause), states with enter and exit. (M) — `olvin_game`: `State<S>` with enter/exit, background `SceneLoader`.
@@ -43,14 +43,14 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [x] **Events between systems**: a typed event queue (currently, it seems, done manually through resources). (S) — `Events<T>` + `EventCursor`, `App::add_event`.
 - [ ] **Parallel scheduler** (item 4 of the old plan, rayon) for systems with no resource overlap. Do it once real systems exist and profiling shows the bottleneck. (M)
 - [ ] **Profiler**: integration with tracy or puffin, a frame panel in the editor (system times, draw calls, triangles). (M)
-- [x] **Saving and loading the game** (a layer separate from scenes): component serialisation through a type registry, save slots. (M) — `olvin_game::save`: `SaveRegistry`, `SaveSlots`.
+- [x] **Saving and loading the game** (a layer separate from scenes): component serialisation through a type registry, save slots. (M) — `olvin_game::save`: `SaveRegistry`, `SaveSlots`. Since 2026-11-21 engine state registers itself (`register_engine`: `Transform`, velocities, the controller, `Behaviour::save_state`), keyed by `SceneId` by default; Lua state is not saved.
 - [ ] **Localisation**: string tables with keys and a fallback language. (S)
 
 ---
 
 ## Phase 2. Rendering up to the level of a modern engine (P1–P2)
 
-- [~] **Skeletal animation**: glTF skins are currently ignored (`olvin_assets/model.rs`, "skin ignored (static pose)"). Needed: GPU skinning, animation import, clips, playback. (L) [P1] — partial: skins and clips are imported, `SkinnedMesh` exists, but skinning runs on the CPU; the scene format and editor know nothing about animated models, and `olvin` doesn't re-export `olvin_anim`.
+- [~] **Skeletal animation**: glTF skins are currently ignored (`olvin_assets/model.rs`, "skin ignored (static pose)"). Needed: GPU skinning, animation import, clips, playback. (L) [P1] — partial: models and animators in the scene format (v2, `ModelPlugin`), the editor shows the model in its default pose; skinning runs on the CPU, models don't animate in the editor or Play.
 - [x] **Blending and animation graph** at runtime: `Animator` currently exists only in the editor. Transitions, layers, parameters, per-frame events. (L) [P2] — `olvin_anim::graph`: transitions, layers, params, clip events.
 - [ ] **Morph targets** (blend shapes) for character faces. (M) [P2]
 - [~] **Shadows**: currently one shadow map (`shadow_map`). Cascades for directional light, PCF/PCSS, soft shadows for point and spot lights. (M) [P1] — partial: sun cascades (up to 4) with PCF and Soft; no point/spot shadows, no PCSS.
@@ -62,8 +62,8 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [~] **Particles**: CPU particles first, GPU particles later. Emitters with parameters that are edited in the editor. (L) [P1] — partial: CPU `ParticleEmitter`; not in the scene format or editor, no GPU particles.
 - [ ] **Decals** and **surfaces with several material layers**. (M) [P3]
 - [ ] **Terrain**: a height map, texture layers, chunk LOD, brushes in the editor. (L) [P2]
-- [~] **2D pipeline**: sprites, atlases, tilemaps, text. Needed both for the in-game UI and for 2D games (item 7 of the old plan). (L) [P1 for UI] — partial: sprites, atlases, tilemaps, `Camera2d`; no text (no font rendering).
-- [~] **In-game UI at runtime**: currently egui works only in the editor. Needed: buttons, text, layout, gamepad focus. Separate from egui, so that a game does not pull in editor dependencies. (L) [P1] — partial: `olvin_gui`: node tree, layout, gamepad focus, `DrawList`; nothing draws it, no fonts, not re-exported by `olvin`.
+- [~] **2D pipeline**: sprites, atlases, tilemaps, text. Needed both for the in-game UI and for 2D games (item 7 of the old plan). (L) [P1 for UI] — partial: sprites, atlases, tilemaps, `Camera2d`, text (`olvin_text`: Inter with Cyrillic, a glyph atlas); no wrapping or clipping.
+- [~] **In-game UI at runtime**: currently egui works only in the editor. Needed: buttons, text, layout, gamepad focus. Separate from egui, so that a game does not pull in editor dependencies. (L) [P1] — partial: `olvin_gui` is drawn over the frame (`GuiRenderPlugin`, an overlay in `olvin_render`, works on Compat), buttons and text, gamepad focus, re-exported by `olvin`; no image nodes, text fields, sliders or scrolling, and the UI doesn't swallow input (a button click reaches the game as `Fire`).
 - [~] **Shader graph**, or at least shader editing with hot reload (the IDE already has it; connect it to rendering). (L) [P3] — partial: shader hot reload is wired (`Shaders::set`); no graph.
 
 ---
@@ -71,20 +71,20 @@ Goal: what has been written is reliable, and the documentation does not lie.
 ## Phase 3. Gameplay and systems (P1–P2)
 
 - [ ] **Navigation (navmesh)**: baking from geometry, A* or funnel, agents that steer around obstacles. Nothing mentions it yet. (L) [P2]
-- [~] **Physics**: joints, collision layers and masks, sweep and shape-cast queries, continuous collision detection for fast bodies; the character already exists. (M) [P1] — partial: `spherecast`, `overlap_sphere`, CCD; no joints, layers/masks or general shape cast.
+- [~] **Physics**: joints, collision layers and masks, sweep and shape-cast queries, continuous collision detection for fast bodies; the character already exists. (M) [P1] — partial: `spherecast`, `overlap_sphere`, CCD, the controller pushes bodies and emits `ControllerHit`, `Physics::teleport`, static bodies follow their `Transform`; no joints, layers/masks or general shape cast.
 - [x] **Audio**: mixing with buses and effects (reverb, equaliser), occlusion through obstacles, streaming of long files, source priority. Currently only kira with 3D and music. (M) [P1] — buses with EQ and a reverb send, occlusion, priorities, streaming.
-- [~] **Scripts in Lua 5.4 (`mlua`, a `lua` module in the hub)**: the decision is made (fast, familiar, easy to embed). Behaviours are written as Lua tables with the same callbacks as `Behaviour`: `start`, `update`, `fixed_update`, collisions and triggers, `on_destroy`. None of this is implemented yet. (L) [P1] — partial: the runtime is done (`olvin_script::lua`), but the editor, hub and apps don't use it.
+- [~] **Scripts in Lua 5.4 (`mlua`, a `lua` module in the hub)**: the decision is made (fast, familiar, easy to embed). Behaviours are written as Lua tables with the same callbacks as `Behaviour`: `start`, `update`, `fixed_update`, collisions and triggers, `on_destroy`. None of this is implemented yet. (L) [P1] — partial: the runtime with sound, other entities, messages and the `*_xyz` fast path, a `lua` module in the hub catalog, the slice runs its door and plate in Lua; the editor doesn't load Lua, Lua state isn't saved.
   - [x] An optional `lua` feature in `olvin_script`, built with `vendored`, so that C code is not pulled in unless needed. — `lua = ["dep:mlua"]`, `lua54` + `vendored`.
   - [x] `ScriptCtx` bindings: input actions, `Transform`, `Rigidbody` (after the physics force API), `raycast`. — input, `Transform`, forces and velocity, `raycast`.
   - [~] Loading `*.lua` from the project, and hot reload without restarting the editor. — partial: `LuaScripts::load_dir`/`poll` with tests; the editor doesn't load Lua.
   - [x] Sandbox: a memory limit and an instruction-count limit per call. Script errors do not bring the frame down; they go to the console. — `LuaLimits`: memory and instruction limits, trimmed libraries, errors go to the log.
   - [~] Editor parameters (`FromParams`) for Lua scripts. — partial: the `params` schema is parsed and registered; it won't show in the inspector until the editor loads Lua.
   - [x] Benchmark: 5 000 `update` calls per frame, Lua against Rust behaviours. Record the numbers here. — `cargo bench -p olvin_script --features lua --bench lua_vs_rust`. Measured (i5-11400F, release, 5,000 entities, median of 300 frames): empty `update` — Rust 0.05 ms/frame (10 ns/call), Lua 1.2 ms (≈240 ns); "walker" (`axis2d` + `dt` + `translate`) — Rust 0.19 ms (38 ns), Lua 11.7 ms (≈2.3 µs, 70% of a 16.6 ms frame). The cost is vectors passed as tables across the Rust↔Lua boundary (`translate(vec3())` ≈1.6 µs, `axis2d` ≈0.95 µs) and garbage collection, not the interpreter or the instruction-limit hook (3–7%).
-  - [ ] Make the Rust↔Lua boundary cheaper: vectors as userdata or plain numbers (`translate_xyz`, `axis2d` returning two values), cache the `x/y/z` key strings and callback names. Target: the walker at 0.5 µs or less. (S)
+  - [x] Make the Rust↔Lua boundary cheaper: vectors as userdata or plain numbers (`translate_xyz`, `axis2d` returning two values), cache the `x/y/z` key strings and callback names. Target: the walker at 0.5 µs or less. (S) — the `*_xyz`/`axis2d_xy` fast path: the walker at 0.42 µs (was 2.3 µs), the old table API down to 1.1 µs (i5-11400F, measured under load).
   - [ ] Web: decide what happens to scripts in the browser. Does not block the native version.
   - [x] ADR (`docs/adr/`): why Lua 5.4 and not Rhai, Luau, JS, WASM, Python, C#. — `docs/adr/0001-lua-scripting.en.md`.
   - [ ] The gameplay node editor compiles to Lua. Shader nodes compile to WGSL (a separate item).
-  - [ ] Hub: the `lua` module appears in the catalogue only once the crate is ready.
+  - [x] Hub: the `lua` module appears in the catalogue only once the crate is ready. — `hub/olvin_hub/catalog.toml`: `lua` and `game` modules.
 - [ ] **Timeline and cutscenes** (sequencer): tracks for animation, sound, camera, events. (L) [P2]
 - [x] **Input**: rebinding keys at runtime, saving bindings, gamepad prompts, vibration. Action maps already exist. (S) [P1] — `rebind.rs` with autosave, `hints.rs`, `Haptics` via gilrs.
 - [ ] **Networking**: transport (UDP through `quinn` or `renet`), component replication, client-side prediction, interpolation. A separate `olvin_net` crate. (XL) [P3]
@@ -131,20 +131,20 @@ Goal: what has been written is reliable, and the documentation does not lie.
 ## Order of work (what to do first)
 
 1. **Phase 0** in full. Without CI and tests, everything after will break unnoticed.
-2. **Vertical slice**: pick one small game and build it on the current engine. Write down what was missing. That list is the real set of priorities. — done: `apps/vertical_slice` (first person, physics, a trigger with a door, 3D sound and music, Lua, an animated glTF robot, pause, F5/F9 saves), built by `olvin-hub build --release`. Gaps in detail in [`apps/vertical_slice/GAPS.md`](apps/vertical_slice/GAPS.md) (Russian), by importance:
-   - [ ] On-screen text and game UI: fonts and drawing the `olvin_gui` `DrawList` (L) — phase 2, UI and 2D.
-   - [ ] Models and animated characters in the scene format, no hand-written code (M) — phase 2, skeletal animation.
-   - [ ] Project root as a resource: asset paths not relative to the working directory (audio, input, logs, hub template) (S).
-   - [ ] Saving engine state: `Transform`, physics, behaviour state (M) — phase 1, saves.
-   - [ ] Scene object id after spawning and game components in scenes (S) — next to prefabs.
-   - [ ] Lua: sound, resources, access to other objects (M) — phase 3, Lua.
-   - [ ] Hub: `game` and `lua` catalog modules, `olvin` re-exports `olvin_assets`/`olvin_anim` (S).
-   - [ ] Character controller pushes dynamic bodies, hit callback (S) — phase 3, physics.
-   - [ ] Pause stops audio (S).
-   - [ ] A headless plugin set without window and render, `AnimPlugin` without the renderer (S).
-   - [ ] Background scene loading sets up materials from `assets/` (S).
-   - [ ] Static colliders follow their `Transform` (S).
-   - [ ] Hub build: `dist/` outside the sources or in the template's `.gitignore` (S).
+2. **Vertical slice**: pick one small game and build it on the current engine. Write down what was missing. That list is the real set of priorities. — done: `apps/vertical_slice` (first person, physics, a trigger with a door, 3D sound and music, Lua, an animated glTF robot, pause, F5/F9 saves), built by `olvin-hub build --release`. Gaps in detail in [`apps/vertical_slice/GAPS.md`](apps/vertical_slice/GAPS.md) (Russian), by importance (all closed on 2026-11-21, leftovers are in the phase items above):
+   - [x] On-screen text and game UI: fonts and drawing the `olvin_gui` `DrawList` (L) — phase 2, UI and 2D.
+   - [x] Models and animated characters in the scene format, no hand-written code (M) — phase 2, skeletal animation.
+   - [x] Project root as a resource: asset paths not relative to the working directory (audio, input, logs, hub template) (S).
+   - [x] Saving engine state: `Transform`, physics, behaviour state (M) — phase 1, saves.
+   - [x] Scene object id after spawning and game components in scenes (S) — next to prefabs.
+   - [x] Lua: sound, resources, access to other objects (M) — phase 3, Lua.
+   - [x] Hub: `game` and `lua` catalog modules, `olvin` re-exports `olvin_assets`/`olvin_anim` (S).
+   - [x] Character controller pushes dynamic bodies, hit callback (S) — phase 3, physics.
+   - [x] Pause stops audio (S).
+   - [x] A headless plugin set without window and render, `AnimPlugin` without the renderer (S).
+   - [x] Background scene loading sets up materials from `assets/` (S).
+   - [x] Static colliders follow their `Transform` (S).
+   - [x] Hub build: `dist/` outside the sources or in the template's `.gitignore` (S).
 3. After the slice, close the blockers from phases 1 and 2 (skeletal animation, UI, particles, post-processing, prefabs).
 4. Phase 4 (game build) right after the first slice, otherwise nobody can be shown the game.
 5. Phases 3, 5 and 6 in parallel, as the need appears.

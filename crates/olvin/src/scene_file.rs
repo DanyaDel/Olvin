@@ -315,6 +315,17 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
             },
         ));
     }
+    // The scene's object animation (F-curves), played by `AnimPlugin`.
+    if !scene.animation.curves.is_empty()
+        && let Some(mut player) = res.get_mut::<olvin_anim::ActionPlayer>()
+    {
+        let bases = scene
+            .entities
+            .iter()
+            .map(|e| (e.id, [e.position, e.rotation, e.scale]))
+            .collect();
+        *player = olvin_anim::ActionPlayer::new(scene.animation.clone(), bases);
+    }
     entities
 }
 
@@ -436,6 +447,33 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn scene_animation_reaches_the_player() {
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        res.insert(olvin_anim::ActionPlayer::default());
+        let mut box_ = EntityDesc::new(3, "Box");
+        box_.position = Vec3::new(0.0, 4.0, 0.0);
+        let mut scene = SceneFile {
+            entities: vec![box_],
+            ..Default::default()
+        };
+        scene
+            .animation
+            .insert_key(3, olvin_scene::file::Prop::Location, 0, 1.0, 0.0);
+        scene
+            .animation
+            .insert_key(3, olvin_scene::file::Prop::Location, 0, 25.0, 6.0);
+        spawn(&res, &scene);
+        let mut player = res.fetch_mut::<olvin_anim::ActionPlayer>();
+        assert!(player.playing && player.looping);
+        player.frame = 25.0;
+        let t = player.transform(3).unwrap();
+        assert_eq!(t.translation, Vec3::new(6.0, 4.0, 0.0));
     }
 
     #[derive(Clone, Debug, PartialEq, serde::Deserialize)]

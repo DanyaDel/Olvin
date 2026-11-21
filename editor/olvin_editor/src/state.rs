@@ -123,6 +123,9 @@ pub struct EditorState {
     pub multi: Vec<u64>,
     /// Local-pose overrides for previews (animation scrubbing). Never saved.
     pub preview: HashMap<u64, Transform>,
+    /// The animation's current frame (Blender's `frame_current`), shared by
+    /// the timeline, the viewport's `I` key and the inspector's key colours.
+    pub anim_frame: i32,
     pub log: Vec<LogLine>,
     /// Bumped whenever `scene` is replaced wholesale (open, new, undo, redo).
     pub scene_generation: u64,
@@ -178,6 +181,7 @@ impl EditorState {
             selection: None,
             multi: Vec::new(),
             preview: HashMap::new(),
+            anim_frame: 1,
             log: Vec::new(),
             scene_generation: 0,
             frame_selection: false,
@@ -332,6 +336,18 @@ impl EditorState {
         self.undo.clear();
         self.redo.clear();
         self.scene_generation += 1;
+    }
+
+    /// Evaluates the scene's animation at `frame` into the objects without an
+    /// undo step or a dirty mark: moving the playhead is not an edit.
+    pub fn apply_animation_quietly(&mut self, frame: f32) {
+        let action = self.scene.animation.clone();
+        let clean = self.scene == self.saved;
+        self.scene.apply_action(&action, frame);
+        self.committed.apply_action(&action, frame);
+        if clean {
+            self.saved.apply_action(&action, frame);
+        }
     }
 
     // --- selection ---------------------------------------------------------

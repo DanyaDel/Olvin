@@ -746,6 +746,9 @@ impl EditorApp {
             self.request(Confirm::Open(path));
         }
         self.shortcuts(&ctx);
+        for hook in self.registry.frame_hooks() {
+            hook(&ctx, &mut self.state);
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P)))
         {
             self.toggle_play();

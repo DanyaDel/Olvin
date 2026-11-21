@@ -1,5 +1,6 @@
-use egui::{DragValue, RichText, TextEdit};
+use egui::{Color32, DragValue, RichText, TextEdit};
 use glam::Vec3;
+use olvin_scene::action::{Action, KeyState, Prop};
 use olvin_scene::file::{
     AudioSourceDesc, BodyKind, CameraDesc, CharacterControllerDesc, ColliderDesc, ColliderShape,
     EntityDesc, LightDesc, LightKind, MeshDesc, RigidbodyDesc, ScriptDesc, Shape,
@@ -149,7 +150,13 @@ impl Panel for Inspector {
         let assets = state.assets_dir();
         state.materials.refresh(assets.as_deref());
         let mut log = None;
-        let Some(e) = state.scene.get_mut(id) else {
+        let frame = state.anim_frame as f32;
+        let olvin_scene::file::SceneFile {
+            entities,
+            animation,
+            ..
+        } = &mut state.scene;
+        let Some(e) = entities.iter_mut().find(|e| e.id == id) else {
             return;
         };
 
@@ -161,9 +168,21 @@ impl Panel for Inspector {
 
                 section(ui, "⊹ Transform", None, |ui| {
                     grid(ui, "transform", |ui| {
-                        row(ui, "Position", |ui| vec3(ui, &mut e.position, 0.05, ""));
-                        row(ui, "Rotation", |ui| vec3(ui, &mut e.rotation, 0.5, "°"));
-                        row(ui, "Scale", |ui| vec3(ui, &mut e.scale, 0.02, ""));
+                        for (label, prop, value, speed, suffix) in [
+                            ("Position", Prop::Location, &mut e.position, 0.05, ""),
+                            ("Rotation", Prop::Rotation, &mut e.rotation, 0.5, "°"),
+                            ("Scale", Prop::Scale, &mut e.scale, 0.02, ""),
+                        ] {
+                            row(ui, label, |ui| {
+                                let keying = Keying {
+                                    action: &mut *animation,
+                                    object: id,
+                                    prop,
+                                    frame,
+                                };
+                                vec3_keyed(ui, value, speed, suffix, keying)
+                            });
+                        }
                     });
                 });
 
@@ -866,6 +885,120 @@ pub(crate) fn drag(
             .max_decimals(3)
             .suffix(suffix),
     );
+}
+
+/// Animation context of a vector property: Blender's field colours
+/// (yellow = key on this frame, green = animated, orange = changed since the
+/// last evaluation) and the right-click keyframe menu, `I` / `Alt+I` on hover.
+struct Keying<'a> {
+    action: &'a mut Action,
+    object: u64,
+    prop: Prop,
+    frame: f32,
+}
+
+fn vec3_keyed(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str, k: Keying) {
+    let width = ((ui.available_width() - 3.0 * 14.0) / 3.0).clamp(40.0, 90.0);
+    let mut insert = false;
+    let mut delete = false;
+    let mut clear = false;
+    let mut single = None;
+    for (i, value) in [&mut v.x, &mut v.y, &mut v.z].into_iter().enumerate() {
+        ui.label(
+            RichText::new(["X", "Y", "Z"][i])
+                .color(theme::AXES[i])
+                .strong(),
+        );
+        let state = k
+            .action
+            .key_state(k.object, k.prop, i as u8, k.frame, *value);
+        let tint = match state {
+            KeyState::None => None,
+            KeyState::Keyed => Some((Color32::from_rgb(236, 205, 58), Color32::BLACK)),
+            KeyState::Animated => Some((Color32::from_rgb(112, 178, 66), Color32::BLACK)),
+            KeyState::Changed => Some((Color32::from_rgb(222, 128, 38), Color32::BLACK)),
+        };
+        let response = ui
+            .scope(|ui| {
+                if let Some((fill, text)) = tint {
+                    let w = &mut ui.visuals_mut().widgets;
+                    for style in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                        style.weak_bg_fill = fill;
+                        style.bg_fill = fill;
+                        style.fg_stroke.color = text;
+                    }
+                    ui.visuals_mut().override_text_color = Some(text);
+                }
+                ui.add_sized(
+                    [width, 18.0],
+                    DragValue::new(value)
+                        .speed(speed)
+                        .max_decimals(3)
+                        .suffix(suffix),
+                )
+            })
+            .inner;
+        if response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
+            ui.input(|input| {
+                if input.key_pressed(egui::Key::I) && input.modifiers.is_none() {
+                    insert = true;
+                }
+                if input.key_pressed(egui::Key::I)
+                    && input.modifiers.matches_exact(egui::Modifiers::ALT)
+                {
+                    delete = true;
+                }
+            });
+        }
+        response.context_menu(|ui| {
+            if ui.button("Insert Keyframes  (I)").clicked() {
+                insert = true;
+                ui.close();
+            }
+            if ui.button("Insert Single Keyframe").clicked() {
+                single = Some(i);
+                ui.close();
+            }
+            let on_key = state == KeyState::Keyed;
+            if ui
+                .add_enabled(on_key, egui::Button::new("Delete Keyframes  (Alt+I)"))
+                .clicked()
+            {
+                delete = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state != KeyState::None,
+                    egui::Button::new("Clear Keyframes"),
+                )
+                .clicked()
+            {
+                clear = true;
+                ui.close();
+            }
+        });
+    }
+    let Keying {
+        action,
+        object,
+        prop,
+        frame,
+    } = k;
+    if insert {
+        action.insert_vec3(object, prop, frame, *v);
+    }
+    if let Some(i) = single {
+        action.insert_key(object, prop, i as u8, frame, v[i]);
+    }
+    if delete {
+        action.delete_keys_at(object, Some(prop), frame);
+    }
+    if clear {
+        action
+            .curves
+            .retain(|c| !(c.object == object && c.prop == prop));
+    }
 }
 
 fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {

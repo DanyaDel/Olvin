@@ -9,6 +9,7 @@ pub use olvin_csg::{BrushShape, CsgOp};
 pub use olvin_mesh::PolyMesh;
 use serde::{Deserialize, Serialize};
 
+pub use crate::action::{Action, FCurve, Interp, Prop};
 pub use crate::anim::{
     AnimGraphDesc, AnimStateDesc, AnimationDesc, MotionDesc, ParamDesc, TestDesc, TransitionDesc,
 };
@@ -19,7 +20,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -27,7 +28,7 @@ pub const FORMAT_VERSION: u32 = 2;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
@@ -36,6 +37,54 @@ fn v0_to_v1(_: &mut SceneFile) {}
 /// files have no models, so the data stays as it is; the bump makes version-1
 /// builds refuse new files instead of spawning empty objects where models were.
 fn v1_to_v2(_: &mut SceneFile) {}
+
+/// Version 3 adds `SceneFile::animation` (Blender-style F-curves). The old
+/// timeline kept its clip in `extensions["animator"]` (seconds, per-object
+/// position/rotation/scale keys); it becomes F-curves at 24 fps with linear
+/// keys, as the old sampler interpolated, and the extension is dropped.
+fn v2_to_v3(scene: &mut SceneFile) {
+    let Some(text) = scene.extensions.remove("animator") else {
+        return;
+    };
+    let Ok(clip) = ron::from_str::<LegacyClip>(&text) else {
+        return;
+    };
+    let fps = scene.animation.fps;
+    let frame_of = |t: f32| (1.0 + t * fps).round();
+    scene.animation.frame_end = scene.animation.frame_end.max(frame_of(clip.length) as i32);
+    for (object, keys) in clip.tracks {
+        for key in keys {
+            let frame = frame_of(key.t);
+            for (prop, v) in [
+                (Prop::Location, key.position),
+                (Prop::Rotation, key.rotation),
+                (Prop::Scale, key.scale),
+            ] {
+                scene.animation.insert_vec3(object, prop, frame, v);
+            }
+        }
+    }
+    for c in &mut scene.animation.curves {
+        for k in &mut c.keys {
+            k.interp = Interp::Linear;
+        }
+    }
+}
+
+/// The timeline clip of format versions 1 and 2.
+#[derive(Deserialize)]
+struct LegacyClip {
+    length: f32,
+    tracks: BTreeMap<u64, Vec<LegacyKey>>,
+}
+
+#[derive(Deserialize)]
+struct LegacyKey {
+    t: f32,
+    position: Vec3,
+    rotation: Vec3,
+    scale: Vec3,
+}
 
 fn legacy_version() -> u32 {
     0
@@ -51,7 +100,10 @@ pub struct SceneFile {
     /// Lighting of the whole scene (Unity's Lighting window).
     #[serde(default, skip_serializing_if = "Environment::is_default")]
     pub environment: Environment,
-    /// Data owned by editor plugins (e.g. animation clips), keyed by plugin id.
+    /// Object animation: F-curves of the objects' transforms.
+    #[serde(default, skip_serializing_if = "Action::is_default")]
+    pub animation: Action,
+    /// Data owned by editor plugins, keyed by plugin id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, String>,
 }
@@ -62,6 +114,7 @@ impl Default for SceneFile {
             version: FORMAT_VERSION,
             entities: Vec::new(),
             environment: Environment::default(),
+            animation: Action::default(),
             extensions: BTreeMap::new(),
         }
     }
@@ -678,6 +731,59 @@ impl SceneFile {
         std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
+    /// Writes every animated channel's value at `frame` into the objects
+    /// (Blender evaluates the animation into the properties).
+    pub fn apply_animation(&mut self, frame: f32) {
+        let action = std::mem::take(&mut self.animation);
+        self.apply_action(&action, frame);
+        self.animation = action;
+    }
+
+    /// [`SceneFile::apply_animation`] with another action's curves.
+    pub fn apply_action(&mut self, action: &Action, frame: f32) {
+        for c in &action.curves {
+            let (Some(v), Some(e)) = (c.eval(frame), self.get_mut(c.object)) else {
+                continue;
+            };
+            let target = match c.prop {
+                Prop::Location => &mut e.position,
+                Prop::Rotation => &mut e.rotation,
+                Prop::Scale => &mut e.scale,
+            };
+            if let Some(slot) = target.as_mut().get_mut(c.index as usize) {
+                *slot = v;
+            }
+        }
+    }
+
+    /// The transform property `prop` of object `id`.
+    pub fn prop_value(&self, id: u64, prop: Prop) -> Option<Vec3> {
+        let e = self.get(id)?;
+        Some(match prop {
+            Prop::Location => e.position,
+            Prop::Rotation => e.rotation,
+            Prop::Scale => e.scale,
+        })
+    }
+
+    /// Keys `props` of object `id` at `frame` with the current values (`I`).
+    /// Returns how many channels were keyed.
+    pub fn insert_keys(
+        &mut self,
+        id: u64,
+        frame: f32,
+        channels: crate::action::KeyChannels,
+    ) -> usize {
+        let mut n = 0;
+        for prop in Prop::ALL.into_iter().filter(|p| channels.includes(*p)) {
+            if let Some(v) = self.prop_value(id, prop) {
+                self.animation.insert_vec3(id, prop, frame, v);
+                n += 3;
+            }
+        }
+        n
+    }
+
     pub fn get(&self, id: u64) -> Option<&EntityDesc> {
         self.entities.iter().find(|e| e.id == id)
     }
@@ -1017,12 +1123,56 @@ mod tests {
     #[test]
     fn v1_file_migrates_to_v2_without_models() {
         let scene = SceneFile::parse(V1).unwrap();
-        assert_eq!(scene.version, 2);
+        assert_eq!(scene.version, FORMAT_VERSION);
         assert!(scene.entities.iter().all(|e| e.model.is_none()));
         // Всё остальное — как в фикстуре v2 без нового объекта.
         let mut v2 = SceneFile::parse(V2).unwrap();
         v2.entities.retain(|e| e.model.is_none());
         assert_eq!(scene, v2);
+    }
+
+    #[test]
+    fn v2_timeline_clip_becomes_fcurves() {
+        let text = r#"(version: 2,
+            entities: [(id: 5, name: "Box", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0))],
+            extensions: {"animator": "(length: 2.0, tracks: {5: [(t: 0.0, position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)), (t: 1.0, position: (3.0, 0.0, 0.0), rotation: (0.0, 90.0, 0.0), scale: (1.0, 1.0, 1.0))]})", "other": "x"})"#;
+        let scene = SceneFile::parse(text).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        assert!(!scene.extensions.contains_key("animator"));
+        assert!(scene.extensions.contains_key("other"));
+        let x = scene.animation.curve(5, Prop::Location, 0).unwrap();
+        // Seconds became frames at 24 fps, frame 1 is time zero.
+        let frames: Vec<f32> = x.keys.iter().map(|k| k.frame).collect();
+        assert_eq!(frames, [1.0, 25.0]);
+        assert_eq!(x.keys[1].value, 3.0);
+        assert!(x.keys.iter().all(|k| k.interp == Interp::Linear));
+        assert_eq!(scene.animation.curves.len(), 9);
+        assert_eq!(scene.animation.eval(5, Prop::Rotation, 1, 13.0), Some(45.0));
+        assert_eq!(scene.animation.frame_end, 250);
+        // Saved and loaded again: the same animation, without the selection.
+        let mut again = SceneFile::parse(&ron::to_string(&scene).unwrap()).unwrap();
+        again.animation.select_all(false);
+        assert_eq!(again.animation, scene.animation);
+    }
+
+    #[test]
+    fn animation_is_evaluated_into_objects() {
+        let mut scene = SceneFile {
+            entities: vec![EntityDesc::new(1, "A"), EntityDesc::new(2, "B")],
+            ..Default::default()
+        };
+        scene.animation.insert_key(1, Prop::Location, 2, 1.0, 0.0);
+        scene.animation.insert_key(1, Prop::Location, 2, 11.0, 10.0);
+        scene.animation.insert_key(1, Prop::Scale, 0, 1.0, 1.0);
+        scene.get_mut(1).unwrap().position.x = 7.0;
+        scene.apply_animation(1.0);
+        let a = scene.get(1).unwrap();
+        assert_eq!((a.position.x, a.position.z, a.scale.x), (7.0, 0.0, 1.0));
+        scene.apply_animation(6.0);
+        assert!((scene.get(1).unwrap().position.z - 5.0).abs() < 1e-4);
+        assert_eq!(scene.get(2).unwrap().position, Vec3::ZERO);
+        assert_eq!(scene.insert_keys(2, 3.0, Default::default()), 9);
+        assert_eq!(scene.animation.objects(), [1, 2]);
     }
 
     #[test]

@@ -9,4 +9,5 @@ repository.workspace = true
 [dependencies]
 olvin_core.workspace = true
 olvin_ecs.workspace = true
+olvin_scene.workspace = true
 glam.workspace = true

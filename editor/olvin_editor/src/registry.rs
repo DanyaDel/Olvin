@@ -50,7 +50,11 @@ pub struct Registry {
     viewport_extensions: Vec<fn() -> Box<dyn ViewportExtension>>,
     components: Vec<ComponentEditor>,
     create_items: Vec<CreateItem>,
+    frame_hooks: Vec<FrameHook>,
 }
+
+/// Runs once per editor frame before the panels (global shortcuts, playback).
+pub type FrameHook = fn(&egui::Context, &mut EditorState);
 
 impl Registry {
     pub fn add_panel(&mut self, kind: PanelKind) -> &mut Self {
@@ -76,6 +80,16 @@ impl Registry {
     pub fn add_component(&mut self, component: ComponentEditor) -> &mut Self {
         self.components.push(component);
         self
+    }
+
+    /// `hook` runs every frame before the panels are drawn.
+    pub fn add_frame_hook(&mut self, hook: FrameHook) -> &mut Self {
+        self.frame_hooks.push(hook);
+        self
+    }
+
+    pub(crate) fn frame_hooks(&self) -> &[FrameHook] {
+        &self.frame_hooks
     }
 
     pub fn add_create_item(&mut self, item: CreateItem) -> &mut Self {

@@ -106,6 +106,27 @@ impl Viewport {
         if pressed(egui::Key::F) {
             state.frame_selection = true;
         }
+        // Blender: I keys Location, Rotation and Scale of the selection at
+        // the current frame, Alt+I removes the keys on that frame.
+        let alt_i = ui.input(|i| {
+            i.key_pressed(egui::Key::I) && i.modifiers.matches_exact(egui::Modifiers::ALT)
+        });
+        if pressed(egui::Key::I) || alt_i {
+            let frame = state.anim_frame as f32;
+            let ids = state.selected_ids();
+            let mut count = 0;
+            for id in &ids {
+                count += if alt_i {
+                    state.scene.animation.delete_keys_at(*id, None, frame)
+                } else {
+                    state.scene.insert_keys(*id, frame, Default::default())
+                };
+            }
+            if count > 0 {
+                let verb = if alt_i { "deleted" } else { "inserted" };
+                state.info(format!("{verb} {count} keys at frame {}", state.anim_frame));
+            }
+        }
     }
 
     /// Unity scene-view controls: MMB pan, Alt+LMB orbit, Alt+RMB zoom,

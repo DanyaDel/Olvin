@@ -3259,6 +3259,7 @@ dependencies = [
  "glam 0.34.3",
  "olvin_core",
  "olvin_ecs",
+ "olvin_scene",
 ]
 
 [[package]]

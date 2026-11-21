@@ -138,6 +138,8 @@ impl Plugin for AnimPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(EcsPlugin)
             .init_resource::<Events<AnimationEvent>>()
+            .init_resource::<crate::object::ActionPlayer>()
+            .add_system(Stage::Update, crate::object::update)
             .add_system(Stage::Update, |res| {
                 let dt = res.get::<Time>().map_or(0.0, |t| t.delta());
                 let mut fired = Vec::new();

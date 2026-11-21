@@ -331,3 +331,60 @@ fn plugin_advances_animators_and_sends_events() {
         .collect();
     assert_eq!(names, [(e, "foot")]);
 }
+
+#[test]
+fn action_player_animates_scene_objects_and_loops() {
+    use olvin_scene::action::{Action, Prop};
+    use olvin_scene::{SceneId, Transform};
+
+    let mut action = Action::default();
+    action.frame_end = 25; // 24 frames = one second at 24 fps
+    action.insert_key(5, Prop::Location, 0, 1.0, 0.0);
+    action.insert_key(5, Prop::Location, 0, 25.0, 10.0);
+    action.insert_key(5, Prop::Rotation, 1, 1.0, 0.0);
+    action.insert_key(5, Prop::Rotation, 1, 25.0, 90.0);
+    let base = [Vec3::new(0.0, 2.0, 0.0), Vec3::ZERO, Vec3::ONE];
+
+    let mut app = App::new();
+    app.add_plugin(AnimPlugin);
+    let (animated, other) = {
+        let mut world = app.resources.fetch_mut::<World>();
+        (
+            world.spawn((SceneId(5), Transform::IDENTITY)),
+            world.spawn((SceneId(6), Transform::from_xyz(1.0, 1.0, 1.0))),
+        )
+    };
+    *app.resources.fetch_mut::<ActionPlayer>() =
+        ActionPlayer::new(action, [(5, base)].into_iter().collect());
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(0.5));
+    app.update();
+    let get = |e| *app.resources.fetch::<World>().get::<&Transform>(e).unwrap();
+    // Half a second = frame 13, the middle of a symmetric ease: x = 5.
+    let t = get(animated);
+    assert!((t.translation.x - 5.0).abs() < 1e-3, "{:?}", t.translation);
+    assert_eq!(
+        t.translation.y, 2.0,
+        "channels without curves keep the base"
+    );
+    let (yaw, _, _) = t.rotation.to_euler(glam::EulerRot::YXZ);
+    assert!((yaw.to_degrees() - 45.0).abs() < 1e-2);
+    assert_eq!(get(other).translation, Vec3::splat(1.0), "not animated");
+    // Another 0.75 s wraps around: 1.25 s of a 1 s loop = frame 7.
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(0.75));
+    app.update();
+    let f = app.resources.fetch::<ActionPlayer>().frame;
+    assert!((f - 7.0).abs() < 1e-3, "{f}");
+    // Not looping: stops on the last frame.
+    {
+        let mut p = app.resources.fetch_mut::<ActionPlayer>();
+        p.looping = false;
+        p.frame = 24.0;
+    }
+    app.update();
+    let p = app.resources.fetch::<ActionPlayer>();
+    assert_eq!((p.frame, p.playing), (25.0, false));
+}

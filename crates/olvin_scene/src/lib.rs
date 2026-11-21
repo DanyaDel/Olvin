@@ -1,5 +1,6 @@
 //! Engine-agnostic scene components. Plain data: no GPU, no window, no ECS dependency.
 
+pub mod action;
 #[cfg(feature = "serde")]
 pub mod anim;
 #[cfg(feature = "serde")]

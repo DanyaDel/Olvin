@@ -17,7 +17,9 @@ pub mod widgets;
 mod workspace;
 
 pub use app::EditorApp;
-pub use registry::{EditorPlugin, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate};
+pub use registry::{
+    EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
+};
 pub use render::{DEPTH_FORMAT, MSAA};
 pub use state::{EditorState, LogLevel, LogLine, NewEntity, SnapSettings, tools};
 pub use workspace::Tab;

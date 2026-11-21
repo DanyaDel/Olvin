@@ -128,10 +128,18 @@ impl Default for Gui {
     }
 }
 
-/// Inserts [`Gui`] and `Events<UiEvent>`. Needs `olvin_input::InputPlugin`
-/// (without it the UI simply sees no input). Input is handled in
-/// `PreUpdate` (so game systems in `Update` read this frame's clicks) and the
-/// layout and draw list are rebuilt in `PostUpdate`, after the game changed the tree.
+/// Inserts [`Gui`] and `Events<UiEvent>`. Needs `olvin_input::InputPlugin`,
+/// added before this plugin (without it the UI simply sees no input).
+///
+/// Input is handled in `Stage::First`, right behind `update_actions`, so
+/// everything after (physics steps in `PreUpdate`, game systems in `Update`)
+/// reads this frame's clicks and already sees what the UI swallowed: while
+/// the pointer is over a button or panel (or a press that began there is
+/// held), every action bound to a mouse button reads idle; while a widget is
+/// focused by keys or the pad, actions sharing a control with the navigation,
+/// accept, next and prev actions do (`Move` on WASD, `Jump` on Space). Cancel
+/// stays visible, it only emits [`UiEvent::Cancel`] and Escape also pauses.
+/// The layout and draw list are rebuilt in `PostUpdate`, after the game changed the tree.
 #[derive(Default)]
 pub struct GuiPlugin;
 
@@ -140,7 +148,7 @@ impl Plugin for GuiPlugin {
         app.init_resource::<Gui>()
             .add_event::<UiEvent>()
             .add_system(Stage::Startup, bind_actions)
-            .add_system(Stage::PreUpdate, gui_input)
+            .add_system(Stage::First, gui_input)
             .add_system(Stage::PostUpdate, gui_layout);
     }
 }
@@ -175,9 +183,47 @@ fn gui_input(res: &mut Resources) {
         input.pointer_released = i.mouse_just_released(MouseButton::Left);
     }
     gui.ui.update(&input);
+    swallow_input(res, gui);
     if !gui.ui.events().is_empty() {
         res.fetch_mut::<olvin_core::Events<UiEvent>>()
             .send_batch(gui.ui.events().iter().cloned());
+    }
+}
+
+/// Makes the actions the UI just used read idle for the game.
+fn swallow_input(res: &Resources, gui: &Gui) {
+    let (pointer, keys) = (gui.ui.pointer_captured(), gui.ui.keyboard_captured());
+    if !pointer && !keys {
+        return;
+    }
+    let (Some(map), Some(mut state)) = (res.get::<InputMap>(), res.get_mut::<ActionState>()) else {
+        return;
+    };
+    let n = &gui.actions;
+    let ui_actions = [
+        n.navigate.as_str(),
+        n.accept.as_str(),
+        n.cancel.as_str(),
+        n.next.as_str(),
+        n.prev.as_str(),
+    ];
+    let mut names: Vec<&str> = Vec::new();
+    if pointer {
+        names.extend(map.actions_using(|b| matches!(b, Binding::Mouse(_)), &ui_actions));
+    }
+    if keys {
+        // What the UI's own navigation reads (cancel stays with the game).
+        let used: Vec<&Binding> = [&n.navigate, &n.accept, &n.next, &n.prev]
+            .into_iter()
+            .filter_map(|a| map.actions.get(a))
+            .flatten()
+            .flat_map(Binding::leaves)
+            .filter(|b| !matches!(b, Binding::Mouse(_)))
+            .collect();
+        names.extend(map.actions_using(|b| used.contains(&b), &ui_actions));
+    }
+    for name in names {
+        state.consume(name);
     }
 }
 

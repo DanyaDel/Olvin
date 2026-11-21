@@ -1,6 +1,6 @@
 //! Per-frame action values with press/release edges.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 use olvin_window::Input;
@@ -23,6 +23,10 @@ pub struct ActionValue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionState {
     actions: HashMap<String, ActionValue>,
+    /// Actions a UI layer swallowed this frame; they read idle. Edges keep
+    /// tracking the real devices underneath, so releasing the cursor from a
+    /// widget does not turn a held button into a fresh press.
+    consumed: HashSet<String>,
     /// Cursor position in physical pixels.
     pub mouse_position: Vec2,
     /// Raw mouse movement this frame in pixels (+Y down, like the screen).
@@ -40,6 +44,7 @@ impl Default for ActionState {
     fn default() -> Self {
         Self {
             actions: HashMap::new(),
+            consumed: HashSet::new(),
             mouse_position: Vec2::ZERO,
             mouse_delta: Vec2::ZERO,
             scroll: Vec2::ZERO,
@@ -59,6 +64,7 @@ impl ActionState {
             deadzone: map.deadzone,
             threshold: map.press_threshold,
         };
+        self.consumed.clear();
         self.mouse_position = input.cursor;
         self.mouse_delta = input.mouse_delta;
         self.scroll = input.scroll;
@@ -104,8 +110,24 @@ impl ActionState {
         }
     }
 
+    /// The action this frame; idle when unknown or [consumed](Self::consume).
     pub fn get(&self, action: &str) -> ActionValue {
+        if self.consumed.contains(action) {
+            return ActionValue::default();
+        }
         self.actions.get(action).copied().unwrap_or_default()
+    }
+
+    /// Makes `action` read idle until the next [`update`](Self::update): the
+    /// input was handled elsewhere (a click on an in-game button must not also
+    /// be `Fire`). Call it after the devices were read (`Stage::First`,
+    /// behind `update_actions`) and before gameplay systems run.
+    pub fn consume(&mut self, action: &str) {
+        self.consumed.insert(action.to_owned());
+    }
+
+    pub fn is_consumed(&self, action: &str) -> bool {
+        self.consumed.contains(action)
     }
 
     pub fn pressed(&self, action: &str) -> bool {
@@ -137,6 +159,9 @@ impl ActionState {
     }
 
     pub fn actions(&self) -> impl Iterator<Item = (&str, &ActionValue)> {
-        self.actions.iter().map(|(k, v)| (k.as_str(), v))
+        self.actions
+            .iter()
+            .filter(|(k, _)| !self.consumed.contains(k.as_str()))
+            .map(|(k, v)| (k.as_str(), v))
     }
 }

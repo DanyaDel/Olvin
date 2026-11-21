@@ -108,6 +108,17 @@ impl Default for InputMap {
 }
 
 impl InputMap {
+    /// Names of the actions (other than `except`) with a binding that has a
+    /// control `pred` accepts. Lets a UI layer find what to swallow.
+    pub fn actions_using(&self, pred: impl Fn(&Binding) -> bool, except: &[&str]) -> Vec<&str> {
+        self.actions
+            .iter()
+            .filter(|(name, _)| !except.contains(&name.as_str()))
+            .filter(|(_, bindings)| bindings.iter().any(|b| b.leaves().into_iter().any(&pred)))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     pub fn empty() -> Self {
         Self {
             actions: BTreeMap::new(),

@@ -173,6 +173,40 @@ impl Binding {
         }
     }
 
+    /// The physical controls this binding is made of: itself, or the parts of
+    /// a composite (modifiers of a chord included).
+    pub fn leaves(&self) -> Vec<&Binding> {
+        let mut out = Vec::new();
+        self.collect_leaves(&mut out);
+        out
+    }
+
+    fn collect_leaves<'a>(&'a self, out: &mut Vec<&'a Binding>) {
+        match self {
+            Self::Axis1D { negative, positive } => {
+                negative.collect_leaves(out);
+                positive.collect_leaves(out);
+            }
+            Self::Axis2D {
+                up,
+                down,
+                left,
+                right,
+            } => {
+                for b in [up, down, left, right] {
+                    b.collect_leaves(out);
+                }
+            }
+            Self::Chord { modifiers, binding } => {
+                for b in modifiers {
+                    b.collect_leaves(out);
+                }
+                binding.collect_leaves(out);
+            }
+            leaf => out.push(leaf),
+        }
+    }
+
     /// Current value from raw device state.
     pub fn value(&self, raw: &Raw) -> Vec2 {
         let button = |down: bool| if down { Vec2::X } else { Vec2::ZERO };

@@ -428,3 +428,157 @@ impl EventsReader {
         ev.read(&mut self.0).cloned().collect()
     }
 }
+
+/// App with the default map, a column of two buttons and a bare game action reader.
+fn captured_app() -> App {
+    let mut app = App::new();
+    app.add_plugin(olvin_input::InputPlugin {
+        map: Some(InputMap::default()),
+    });
+    app.add_plugin(GuiPlugin);
+    {
+        let mut gui = app.resources.fetch_mut::<Gui>();
+        gui.viewport = VIEW;
+        gui.measure = Box::new(Fixed);
+        let root = gui.ui.root();
+        let col = gui
+            .ui
+            .add(root, Node::panel().column().gap(10.0).centered());
+        gui.ui.add(col, Node::button("Play").name("play"));
+        gui.ui.add(col, Node::button("Quit").name("quit"));
+    }
+    app.startup();
+    app.update(); // layout
+    app
+}
+
+fn game_sees(app: &App, action: &str) -> (bool, bool) {
+    let a = app.resources.fetch::<olvin_input::ActionState>();
+    (a.pressed(action), a.just_pressed(action))
+}
+
+#[test]
+fn clicking_a_button_does_not_fire() {
+    let mut app = captured_app();
+    let play = app.resources.fetch::<Gui>().ui.find("play").unwrap();
+    let at = app.resources.fetch::<Gui>().ui.rect(play).center();
+    app.resources.fetch_mut::<Input>().cursor = at;
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, true);
+    let mut cursor = EventsReader::default();
+    app.update();
+    assert_eq!(game_sees(&app, "Fire"), (false, false));
+    app.update(); // still held
+    assert_eq!(game_sees(&app, "Fire"), (false, false));
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, false);
+    app.update();
+    assert!(
+        cursor
+            .take(&app)
+            .iter()
+            .any(|e| matches!(e, UiEvent::Click { name: Some(n), .. } if n == "play"))
+    );
+    assert_eq!(game_sees(&app, "Fire"), (false, false));
+}
+
+#[test]
+fn clicking_empty_space_still_fires() {
+    let mut app = captured_app();
+    app.resources.fetch_mut::<Input>().cursor = Vec2::new(5.0, 5.0);
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, true);
+    app.update();
+    assert_eq!(game_sees(&app, "Fire"), (true, true));
+    // dragging onto a button mid-hold keeps the game's press
+    let quit = app.resources.fetch::<Gui>().ui.find("quit").unwrap();
+    let at = app.resources.fetch::<Gui>().ui.rect(quit).center();
+    app.resources.fetch_mut::<Input>().cursor = at;
+    app.update();
+    assert_eq!(game_sees(&app, "Fire"), (true, false));
+}
+
+#[test]
+fn a_press_that_began_on_the_ui_stays_captured_when_dragged_off() {
+    let mut app = captured_app();
+    let play = app.resources.fetch::<Gui>().ui.find("play").unwrap();
+    let at = app.resources.fetch::<Gui>().ui.rect(play).center();
+    app.resources.fetch_mut::<Input>().cursor = at;
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, true);
+    app.update();
+    app.resources.fetch_mut::<Input>().cursor = Vec2::new(5.0, 5.0);
+    app.update();
+    assert_eq!(game_sees(&app, "Fire"), (false, false));
+    app.resources
+        .fetch_mut::<Input>()
+        .set_button(MouseButton::Left, false);
+    app.update();
+    app.update();
+    assert_eq!(game_sees(&app, "Fire"), (false, false));
+}
+
+#[test]
+fn focus_navigation_keys_do_not_leak_to_the_game() {
+    let mut app = captured_app();
+    // no focus yet: arrows move the player
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::ArrowDown, true);
+    app.update();
+    let focused = app.resources.fetch::<Gui>().ui.focused();
+    assert!(focused.is_some());
+    // the step that focused the menu is the UI's
+    assert_eq!(
+        app.resources
+            .fetch::<olvin_input::ActionState>()
+            .axis2d("Move"),
+        Vec2::ZERO
+    );
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::ArrowDown, false);
+    // Space confirms the focused button and is not a Jump
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::Space, true);
+    app.update();
+    assert_eq!(game_sees(&app, "Jump"), (false, false));
+    // Escape is still the game's Pause (and the UI's Cancel)
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::Escape, true);
+    app.update();
+    assert_eq!(game_sees(&app, "Pause"), (true, true));
+}
+
+#[test]
+fn without_focus_the_game_keeps_its_keys() {
+    let mut app = captured_app();
+    // Jump on Space: nothing is focused, so nothing is swallowed
+    app.resources
+        .fetch_mut::<Input>()
+        .set_key(KeyCode::Space, true);
+    app.update();
+    assert_eq!(game_sees(&app, "Jump"), (true, true));
+}
+
+#[test]
+fn consumed_actions_keep_real_edges() {
+    let mut state = olvin_input::ActionState::default();
+    let map = InputMap::default();
+    let mut input = Input::default();
+    let pads = olvin_input::GamepadState::default();
+    input.set_button(MouseButton::Left, true);
+    state.update(&map, &input, &pads);
+    state.consume("Fire");
+    assert!(!state.pressed("Fire") && !state.just_pressed("Fire"));
+    assert!(state.actions().all(|(n, _)| n != "Fire"));
+    // next frame, not consumed: held, not a fresh press
+    state.update(&map, &input, &pads);
+    assert!(state.pressed("Fire") && !state.just_pressed("Fire"));
+}

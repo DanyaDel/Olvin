@@ -54,6 +54,9 @@ pub struct Ui {
     hover: Option<NodeId>,
     pressed: Option<NodeId>,
     last_pointer: Option<Vec2>,
+    /// Where the current pointer press began: on the UI (`Some(true)`) or in the game.
+    grab: Option<bool>,
+    pointer_captured: bool,
     events: Vec<UiEvent>,
 }
 
@@ -74,6 +77,8 @@ impl Ui {
             hover: None,
             pressed: None,
             last_pointer: None,
+            grab: None,
+            pointer_captured: false,
             events: Vec::new(),
         }
     }
@@ -89,6 +94,8 @@ impl Ui {
         self.focus = None;
         self.hover = None;
         self.pressed = None;
+        self.grab = None;
+        self.pointer_captured = false;
         self.events.clear();
     }
 
@@ -183,6 +190,29 @@ impl Ui {
 
     pub fn hovered(&self) -> Option<NodeId> {
         self.hover
+    }
+
+    /// The pointer belongs to the UI this frame (as of the last [`Ui::update`]):
+    /// it is over a button or a panel with a background, or a press that began
+    /// on the UI is still held. The game should not treat that click as its own.
+    pub fn pointer_captured(&self) -> bool {
+        self.pointer_captured
+    }
+
+    /// Navigation keys and buttons belong to the UI: a widget is focused.
+    /// (A menu eats arrows, WASD and Space/Enter; the first navigation step
+    /// focuses the first button, so a HUD with buttons should not bind its
+    /// navigation action to gameplay keys.)
+    pub fn keyboard_captured(&self) -> bool {
+        self.focus.is_some()
+    }
+
+    /// Is there UI under `p`: a button, or a panel/label with a background
+    /// (the root never counts)? Transparent containers let clicks through.
+    pub fn covers(&self, p: Vec2) -> bool {
+        self.nodes.iter().skip(1).any(|n| {
+            n.alive && n.shown && (n.is_button() || n.background.is_some()) && n.rect.contains(p)
+        })
     }
 
     /// Can this node take focus and clicks right now (button, enabled, shown by the last layout)?
@@ -342,6 +372,9 @@ impl Ui {
             self.focus_prev();
         }
 
+        if input.pointer_pressed {
+            self.grab = Some(input.pointer.is_some_and(|p| self.covers(p)));
+        }
         if input.pointer_pressed
             && let Some(h) = self.hover
         {
@@ -350,6 +383,13 @@ impl Ui {
         }
         if input.accept_pressed && self.focus.is_some() {
             self.pressed = self.focus;
+        }
+        self.pointer_captured = match self.grab {
+            Some(on_ui) => on_ui,
+            None => input.pointer.is_some_and(|p| self.covers(p)),
+        };
+        if input.pointer_released {
+            self.grab = None;
         }
         if input.pointer_released {
             if self.pressed.is_some() && self.pressed == self.hover {

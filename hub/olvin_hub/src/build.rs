@@ -56,6 +56,8 @@ pub struct BuildReport {
     /// Files copied from `assets/`.
     pub assets: usize,
     pub archive: Option<PathBuf>,
+    /// `/dist` was appended to the project's `.gitignore` (see [`Project::build`]).
+    pub gitignore_updated: bool,
 }
 
 impl Project {
@@ -66,11 +68,14 @@ impl Project {
 
     /// Builds the game with cargo, then copies the executable and `assets/` to
     /// the output folder (and packs it, if asked). Cargo's own output goes to
-    /// the terminal.
+    /// the terminal. The default folder is inside the project, so a project
+    /// `.gitignore` that doesn't know `dist` gets `/dist` added (projects made
+    /// before the template had it); no `.gitignore`, nothing is written.
     pub fn build(&self, options: &BuildOptions) -> Result<BuildReport> {
         let exe = self.cargo_build(options)?;
         let out = options.out.clone().unwrap_or_else(|| self.dist_dir());
         prepare_out(&out)?;
+        let gitignore_updated = options.out.is_none() && ignore_dist(self.root())?;
 
         let binary = out.join(exe.file_name().context("the executable has no file name")?);
         fs::copy(&exe, &binary)
@@ -88,6 +93,7 @@ impl Project {
             binary,
             assets,
             archive,
+            gitignore_updated,
         })
     }
 
@@ -136,6 +142,31 @@ fn artifact_of(line: &str, manifest: &Path) -> Option<PathBuf> {
     (is_bin && same)
         .then(|| PathBuf::from(msg["executable"].as_str().unwrap_or_default()))
         .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Appends `/dist` to `<root>/.gitignore` unless a line already covers it.
+fn ignore_dist(root: &Path) -> Result<bool> {
+    let path = root.join(".gitignore");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let covered = text.lines().map(str::trim).any(|l| {
+        matches!(
+            l,
+            "dist" | "dist/" | "/dist" | "/dist/" | "dist/*" | "/dist/*"
+        )
+    });
+    if covered {
+        return Ok(false);
+    }
+    let sep = if text.is_empty() || text.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    fs::write(&path, format!("{text}{sep}/dist\n"))
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(true)
 }
 
 /// An empty folder, or one a previous build made (it is cleared).
@@ -279,6 +310,7 @@ mod tests {
         fs::write(root.join("assets/icon.png"), [1, 2, 3]).unwrap();
         fs::write(root.join("assets/.hidden"), "x").unwrap();
         fs::write(root.join("assets/notes.txt~"), "x").unwrap();
+        fs::write(root.join(".gitignore"), "/target\n/logs").unwrap();
         Project::open(root).unwrap()
     }
 
@@ -300,6 +332,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(report.out_dir, game.dist_dir());
+        assert!(report.gitignore_updated, "an old template's .gitignore");
+        assert_eq!(
+            fs::read_to_string(game.root().join(".gitignore")).unwrap(),
+            "/target\n/logs\n/dist\n"
+        );
         assert!(report.binary.is_file());
         assert!(report.binary.starts_with(&report.out_dir));
         assert_eq!(report.assets, 2, "hidden files and backups are left out");
@@ -319,7 +356,7 @@ mod tests {
 
         // A second build replaces the folder, dropping stale files.
         fs::write(report.out_dir.join("stale.txt"), "x").unwrap();
-        game.build(&options(&dir)).unwrap();
+        assert!(!game.build(&options(&dir)).unwrap().gitignore_updated);
         assert!(!report.out_dir.join("stale.txt").exists());
         fs::remove_dir_all(dir).unwrap();
     }

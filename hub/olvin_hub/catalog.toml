@@ -68,6 +68,23 @@ kind = "olvin"
 feature = "audio"
 
 [[module]]
+id = "lua"
+name = "Lua scripts"
+category = "Gameplay"
+description = "Lua 5.4 behaviours next to the Rust ones: assets/scripts/*.lua, hot reload, sandbox and limits; Lua is built in, no system library"
+kind = "olvin"
+feature = "lua"
+requires = ["scripts"]
+
+[[module]]
+id = "game"
+name = "Game runtime"
+category = "Gameplay"
+description = "Game states with enter/exit hooks, scene loading in the background, save slots"
+kind = "olvin"
+feature = "game"
+
+[[module]]
 id = "gltf"
 name = "glTF loading"
 category = "Assets"

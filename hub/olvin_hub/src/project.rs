@@ -333,6 +333,54 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// `lua` and `game` are facade features: they land in `olvin.features`
+    /// (lua with the `script` it needs), and the template ignores build output.
+    #[test]
+    fn lua_and_game_modules_wire_facade_features() {
+        let dir = temp_dir("lua-game");
+        let catalog = Catalog::builtin();
+        let engine = EngineSource::default();
+        let mut p = Project::create_with(&dir, "g", &engine, &catalog, &["physics"]).unwrap();
+        assert_eq!(p.add(&catalog, "lua").unwrap(), ["scripts", "lua"]);
+        assert_eq!(p.add(&catalog, "game").unwrap(), ["game"]);
+        assert!(
+            p.remove(&catalog, "scripts", false).is_err(),
+            "lua needs it"
+        );
+        p.save().unwrap();
+
+        let reopened = Project::open(p.root()).unwrap();
+        assert_eq!(
+            reopened.olvin_features(),
+            ["physics", "script", "lua", "game"]
+        );
+        let text = fs::read_to_string(p.root().join("Cargo.toml")).unwrap();
+        assert!(
+            text.contains(r#"features = ["physics", "script", "lua", "game"]"#),
+            "{text}"
+        );
+        let ignore = fs::read_to_string(p.root().join(".gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l == "/dist"), "{ignore}");
+        // Headless template (no window/render/scenes), still not tied to the working dir.
+        let main = fs::read_to_string(p.root().join("src/main.rs")).unwrap();
+        assert!(main.contains("HeadlessPlugins"), "{main}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Every `kind = "olvin"` module names a real feature of the facade.
+    #[test]
+    fn olvin_modules_are_facade_features() {
+        let manifest: toml::Table = include_str!("../../../crates/olvin/Cargo.toml")
+            .parse()
+            .unwrap();
+        let features = manifest["features"].as_table().unwrap();
+        for m in &Catalog::builtin().modules {
+            if let Source::Olvin { feature } = &m.source {
+                assert!(features.contains_key(feature), "{}: no `{feature}`", m.id);
+            }
+        }
+    }
+
     #[test]
     fn edits_preserve_user_formatting() {
         let dir = temp_dir("format");

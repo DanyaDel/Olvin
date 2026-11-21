@@ -29,7 +29,8 @@ pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
     let main = if graphical { MAIN_RS } else { HEADLESS_RS };
     [
         ("src/main.rs", main.replace("{name}", name)),
-        (".gitignore", "/target\n/logs\n".into()),
+        // `olvin-hub build` puts the game into dist/ (see `Project::dist_dir`).
+        (".gitignore", GITIGNORE.into()),
         (
             "README.md",
             format!(
@@ -40,12 +41,17 @@ pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
     ]
 }
 
+/// Build output, logs and save slots are not sources.
+pub const GITIGNORE: &str = "/target\n/dist\n/logs\n/saves\n";
+
 const MAIN_RS: &str = r#"use olvin::prelude::*;
 
 struct Spin(f32);
 
 fn main() {
     // Log to stderr and logs/game.log; panic reports go to logs/crash-*.txt.
+    // Paths are relative to the project folder (`ProjectPaths`: the exe's
+    // folder after `olvin-hub build`, the crate under cargo), not the working directory.
     olvin::core::Logging::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
         .file("logs/game.log")
         .init();
@@ -67,7 +73,8 @@ fn main() {
 
 fn setup(res: &mut Resources) {
     // The scene saved in olvin-editor, if there is one.
-    match olvin::scene_file::load(res, "assets/scenes/main.scene.ron") {
+    let scene = res.fetch::<ProjectPaths>().asset("scenes/main.scene.ron");
+    match olvin::scene_file::load(res, scene) {
         Ok(count) => log::info!("scene loaded: {count} objects"),
         Err(err) => {
             log::info!("no editor scene ({err}), showing a cube");
@@ -94,14 +101,16 @@ fn spin(res: &mut Resources) {
 }
 "#;
 
-const HEADLESS_RS: &str = r#"//! Headless Olvin app: core + ECS, no window. Add modules with olvin-hub.
+const HEADLESS_RS: &str = r#"//! Headless Olvin app: every enabled module without a window or GPU.
+//! Add modules with olvin-hub.
 
 use olvin::prelude::*;
 
 fn main() {
+    // logs/ inside the project folder, wherever the game is started from.
     olvin::core::Logging::new("info").file("logs/game.log").init();
     let mut app = App::new();
-    app.add_plugin(olvin::ecs::EcsPlugin).add_system(Stage::Update, |res| {
+    app.add_plugin(HeadlessPlugins::default()).add_system(Stage::Update, |res| {
         if res.fetch::<Time>().frame() >= 3 {
             println!("{name}: headless app is running");
             res.fetch_mut::<AppExit>().requested = true;

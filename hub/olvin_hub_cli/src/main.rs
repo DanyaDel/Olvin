@@ -249,6 +249,9 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(archive) = report.archive {
                 println!("archive: {}", archive.display());
             }
+            if report.gitignore_updated {
+                println!("added /dist to .gitignore");
+            }
         }
         Cmd::Projects => {
             if config.projects.is_empty() {

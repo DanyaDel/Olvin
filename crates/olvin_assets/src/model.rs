@@ -493,7 +493,9 @@ pub fn import_gltf(
         .collect();
     let world_of = |mut i: usize| {
         let mut m = local[i];
-        while let Some(&p) = parent_of.get(&i) {
+        // The bound stops a (malformed) parent cycle from spinning forever.
+        for _ in 0..local.len() {
+            let Some(&p) = parent_of.get(&i) else { break };
             m = local[p] * m;
             i = p;
         }

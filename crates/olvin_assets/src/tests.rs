@@ -1103,3 +1103,35 @@ fn gltf_rotated_texture_transform_is_baked_and_occlusion_merged() {
     assert!(dir.path().join(format!("{orm}.meta")).is_file());
     assert!(model.extracted_textures.contains(&orm));
 }
+
+/// An asset whose decoder panics, like a crate choking on a corrupt file.
+struct Exploding;
+
+impl Asset for Exploding {
+    const KIND: AssetKind = AssetKind::Other;
+
+    fn prepare(_: &AssetRoot, _: &str) -> Result<Job<Self>, String> {
+        Ok(Box::new(|| panic!("corrupt")))
+    }
+
+    fn dependencies(&self) -> Vec<Dependency> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_panicking_loader_fails_the_asset_and_keeps_the_worker() {
+    let dir = TempDir::new("mgr_panic");
+    dir.write("a.png", &png_bytes(2, 2));
+    let mut mgr = AssetManager::with_workers(dir.path(), 1);
+    let bad = mgr.load::<Exploding>("boom");
+    assert!(mgr.wait_idle(WAIT), "a panic must not leave it loading");
+    match mgr.state(&bad) {
+        LoadState::Failed(e) => assert!(e.contains("corrupt"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    // The single worker survived.
+    let ok = mgr.load::<ImageData>("a.png");
+    assert!(mgr.wait_idle(WAIT));
+    assert_eq!(mgr.state(&ok), LoadState::Ready);
+}

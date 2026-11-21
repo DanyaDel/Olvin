@@ -566,7 +566,17 @@ impl AssetManager {
                 let tx = self.result_tx.clone();
                 let key = key.clone();
                 let task: Task = Box::new(move || {
-                    let result = job();
+                    // A decoder that panics on a corrupt file must not kill
+                    // the worker (and leave the asset loading forever).
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))
+                        .unwrap_or_else(|panic| {
+                            let what = panic
+                                .downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| panic.downcast_ref::<String>().cloned())
+                                .unwrap_or_default();
+                            Err(format!("loader panicked: {what}"))
+                        });
                     let _ = tx.send(Done {
                         key,
                         generation,

@@ -34,6 +34,12 @@ impl JointPose {
 impl From<Mat4> for JointPose {
     fn from(m: Mat4) -> Self {
         let (scale, rotation, translation) = m.to_scale_rotation_translation();
+        // A zero scale makes glam return a NaN rotation.
+        let rotation = if rotation.is_finite() {
+            rotation
+        } else {
+            Quat::IDENTITY
+        };
         Self {
             translation,
             rotation,

@@ -51,7 +51,7 @@ impl ActionPlayer {
 
     /// Moves time on by `dt` seconds.
     pub fn advance(&mut self, dt: f32) {
-        if !self.playing {
+        if !self.playing || !dt.is_finite() {
             return;
         }
         let (start, end) = (self.action.frame_start as f32, self.action.frame_end as f32);

@@ -91,6 +91,8 @@ impl Animator {
     pub fn update(&mut self, dt: f32) {
         self.events.clear();
         let dt = dt * self.speed;
+        // A NaN step would poison every layer's time for good.
+        let dt = if dt.is_finite() { dt } else { 0.0 };
         for l in &mut self.layers {
             l.state.update(
                 &l.graph,

@@ -391,3 +391,24 @@ fn action_player_animates_scene_objects_and_loops() {
     let p = app.resources.fetch::<ActionPlayer>();
     assert_eq!((p.frame, p.playing), (25.0, false));
 }
+
+#[test]
+fn nan_time_does_not_panic_and_nan_steps_are_ignored() {
+    let c = move_x(10, 2.0, 1.0);
+    assert_eq!(c.sample(f32::NAN), Some(c.values[0]));
+
+    let sk = Arc::new(arm());
+    let clips: Arc<[Clip]> = vec![Clip::new("walk", vec![move_x(10, 2.0, 1.0)])].into();
+    let mut a = Animator::looping(sk, clips, 0);
+    a.update(0.25);
+    a.update(f32::NAN);
+    a.update(0.25);
+    assert!((a.pose.joints[0].translation.x - 1.0).abs() < 1e-5);
+    assert!(a.matrices.iter().all(|m| m.is_finite()));
+}
+
+#[test]
+fn zero_scale_matrix_gives_a_finite_joint_pose() {
+    let p = JointPose::from(Mat4::from_scale(Vec3::ZERO));
+    assert!(p.rotation.is_finite());
+}

@@ -47,7 +47,8 @@ impl Channel {
                 self.values[i]
             }
         };
-        if n == 1 || time <= self.times[0] {
+        // NaN compares false everywhere below and would underflow `hi - 1`.
+        if n == 1 || time.is_nan() || time <= self.times[0] {
             return Some(key(0));
         }
         if time >= self.times[n - 1] {

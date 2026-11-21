@@ -25,6 +25,8 @@ mod uv;
 mod walk;
 
 #[cfg(test)]
+mod fuzz;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod uv_tests;

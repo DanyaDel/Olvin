@@ -199,3 +199,21 @@ fn white_uv_samples_full_coverage() {
     assert_eq!(&rgba[..4], &[255, 255, 255, 255]);
     assert_eq!(&rgba[rgba.len() - 4..], &[255, 255, 255, 0]);
 }
+
+#[test]
+fn absurd_sizes_do_not_panic_or_wipe_the_atlas() {
+    let font = Font::builtin();
+    let mut atlas = GlyphAtlas::default();
+    let mut out = Vec::new();
+    layout(&font, &mut atlas, "Wg", 20.0, Vec2::ZERO, HAlign::Left, &mut out);
+    let _ = atlas.take_stale();
+    let cached = atlas.len();
+    for size in [0.0, -5.0, f32::NAN, f32::INFINITY, 1e4, 1e9] {
+        out.clear();
+        let s = layout(&font, &mut atlas, "Wg\nЯ", size, Vec2::ZERO, HAlign::Left, &mut out);
+        assert!(!s.x.is_nan(), "size {size}");
+        // A glyph that can never fit is skipped; the others stay cached.
+        assert!(!atlas.take_stale(), "size {size} restarted the atlas");
+        assert!(atlas.len() >= cached);
+    }
+}

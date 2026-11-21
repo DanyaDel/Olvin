@@ -669,4 +669,42 @@ mod tests {
             assert!(Plane::from_points(&p.vertices).n.dot(p.normal) > 0.99);
         }
     }
+
+    #[test]
+    fn degenerate_brushes_are_skipped_not_fatal() {
+        let brush = |shape, transform, vertices, faces| BrushInput {
+            id: 1,
+            shape,
+            op: CsgOp::Add,
+            transform,
+            color: [1.0; 4],
+            vertices,
+            faces,
+        };
+        let nan = Mat4::from_translation(Vec3::NAN);
+        let flat = Mat4::from_scale(Vec3::new(1.0, 0.0, 1.0));
+        let cases = [
+            brush(BrushShape::Box, nan, None, None),
+            brush(BrushShape::Box, flat, None, None),
+            brush(BrushShape::Box, Mat4::from_scale(Vec3::splat(f32::INFINITY)), None, None),
+            brush(BrushShape::Cylinder { sides: 0 }, Mat4::IDENTITY, None, None),
+            brush(BrushShape::Stairs { steps: 0 }, Mat4::IDENTITY, None, None),
+            brush(BrushShape::Stairs { steps: u32::MAX }, Mat4::IDENTITY, None, None),
+            brush(BrushShape::Pyramid { sides: u32::MAX }, Mat4::IDENTITY, None, None),
+            brush(BrushShape::Box, Mat4::IDENTITY, Some(vec![]), None),
+            brush(BrushShape::Box, Mat4::IDENTITY, Some(vec![Vec3::ZERO; 2]), None),
+            brush(BrushShape::Box, Mat4::IDENTITY, Some(vec![Vec3::NAN; 8]), None),
+            brush(BrushShape::Box, Mat4::IDENTITY, None, Some(vec![])),
+            brush(BrushShape::Box, Mat4::IDENTITY, None, Some(vec![vec![Vec3::ZERO]; 5])),
+            brush(BrushShape::Box, Mat4::IDENTITY, None, Some(vec![vec![Vec3::ZERO, Vec3::X]; 5])),
+        ];
+        for (i, c) in cases.iter().enumerate() {
+            let _ = build(std::slice::from_ref(c));
+            let _ = brush_edges(c);
+            // Next to a healthy brush too.
+            let good = brush(BrushShape::Box, Mat4::IDENTITY, None, None);
+            let polys = build(&[good, c.clone()]);
+            assert!(polys.iter().all(|p| p.vertices.iter().all(|v| v.is_finite())), "case {i}");
+        }
+    }
 }

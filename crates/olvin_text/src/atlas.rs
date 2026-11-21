@@ -194,6 +194,12 @@ impl GlyphAtlas {
             self.glyphs.insert(key, None);
             return None;
         }
+        // Too big for the atlas at any size: skip it. Starting over could not
+        // help and would wipe every other glyph on every use.
+        if w.saturating_add(PAD) > self.width || h.saturating_add(PAD) > self.max_height {
+            self.glyphs.insert(key, None);
+            return None;
+        }
         let rect = match self.allocate(w, h) {
             Some(r) => r,
             None => {

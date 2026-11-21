@@ -195,6 +195,14 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
     if modal.should_close() {
         outcome = Outcome::Close;
     }
+    if matches!(outcome, Outcome::Close) {
+        // The Enter that confirmed must not reach the editor that just got
+        // focus (it would type a newline into the new file).
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+        // The dialog had the keyboard; hand it back so Ctrl+S / Ctrl+W work.
+        // Two passes later: the closed modal still blocks focus changes.
+        ide.refocus_in = 2;
+    }
     if matches!(outcome, Outcome::Keep) && ide.dialog.is_none() {
         ide.dialog = Some(dialog);
     }

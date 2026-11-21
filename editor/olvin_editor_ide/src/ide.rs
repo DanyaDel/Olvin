@@ -191,6 +191,8 @@ pub struct Ide {
     pub requests: VecDeque<EditorRequest>,
     pub dialog: Option<dialogs::Dialog>,
     pub palette: Option<palette::Palette>,
+    /// Passes until the keyboard goes back to the code (a dialog closed).
+    pub refocus_in: u8,
     last_pass: Option<u64>,
 }
 
@@ -206,6 +208,12 @@ impl Ide {
         }
         self.last_pass = Some(pass);
 
+        if self.refocus_in > 0 {
+            self.refocus_in -= 1;
+            if self.refocus_in == 0 && self.active.is_some() {
+                self.requests.push_back(EditorRequest::Focus);
+            }
+        }
         if self.root != state.project {
             self.set_root(state.project.clone());
         }

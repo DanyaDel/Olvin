@@ -240,12 +240,13 @@ fn demo_project(root: &Path) {
 /// egui's wgpu painter as eframe sets it up for the editor: MSAA colour,
 /// depth, resolved into a texture we read back. kittest's own renderer has
 /// neither, and the scene view's pipelines need both.
-struct EditorRenderer {
+pub struct EditorRenderer {
     render_state: RenderState,
 }
 
 impl EditorRenderer {
-    fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         let options = egui_wgpu::RendererOptions {
             msaa_samples: olvin_editor::MSAA,
             depth_stencil_format: Some(olvin_editor::DEPTH_FORMAT),

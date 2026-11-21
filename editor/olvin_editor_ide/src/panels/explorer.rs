@@ -94,7 +94,14 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
         let offset = idx as f32 * (ROW + spacing) - ui.available_height() / 2.0;
         scroll = scroll.vertical_scroll_offset(offset.max(0.0));
     }
-    let output = scroll.show_rows(ui, ROW, rows.len(), |ui, range| {
+    // Registered before the rows so they stay on top: a widget added later
+    // would swallow their clicks.
+    let empty = ui.interact(
+        ui.available_rect_before_wrap(),
+        ui.id().with("explorer_bg"),
+        Sense::click(),
+    );
+    scroll.show_rows(ui, ROW, rows.len(), |ui, range| {
         for e in &rows[range] {
             let open = e.is_dir && ide.expanded.contains(&e.path);
             let width = ui.available_width();
@@ -175,11 +182,6 @@ fn draw(ui: &mut egui::Ui, state: &mut EditorState, ide: &mut Ide) {
     });
 
     // Right click on empty space: create in the root.
-    let empty = ui.interact(
-        output.inner_rect,
-        ui.id().with("explorer_bg"),
-        Sense::click(),
-    );
     empty.context_menu(|ui| {
         if ui.button("New File…").clicked() {
             actions.push(Action::Dialog(Dialog::New {

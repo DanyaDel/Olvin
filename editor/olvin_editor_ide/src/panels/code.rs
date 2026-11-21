@@ -157,6 +157,10 @@ impl CodeEditor {
         bars(ui, ide, idx, state);
         if self.find.open {
             self.find_bar(ui, ide, idx);
+            if !self.find.open {
+                // Esc or × in the bar: back to the text.
+                ide.requests.push_back(EditorRequest::Focus);
+            }
         }
         let status_id = ui.id().with("ide_code_status");
         let markers = ide.markers(&ide.docs[idx]);
@@ -288,6 +292,8 @@ impl CodeEditor {
         let mut replace_one = false;
         let mut replace_all = false;
         let mut focused = false;
+        // egui's TextEdit gives focus up on Esc before `has_focus` is read.
+        let mut lost = false;
         egui::Frame::new()
             .fill(theme::RAISED)
             .corner_radius(6)
@@ -303,6 +309,7 @@ impl CodeEditor {
                         q.request_focus();
                     }
                     focused |= q.has_focus();
+                    lost |= q.lost_focus();
                     if q.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         go = Some(ui.input(|i| i.modifiers.shift));
                         q.request_focus();
@@ -342,6 +349,7 @@ impl CodeEditor {
                                 .desired_width(200.0),
                         );
                         focused |= r.has_focus();
+                        lost |= r.lost_focus();
                         let read_only = doc.read_only.is_some();
                         ui.add_enabled_ui(!read_only, |ui| {
                             replace_one = ui.button("Replace").clicked();
@@ -350,10 +358,10 @@ impl CodeEditor {
                     });
                 }
             });
+        if (focused || lost) && ui.input(|i| i.key_pressed(Key::Escape)) {
+            f.open = false;
+        }
         if focused {
-            if ui.input(|i| i.key_pressed(Key::Escape)) {
-                f.open = false;
-            }
             ui.ctx()
                 .plugin_or_default::<KeyRouter>()
                 .lock()

@@ -138,6 +138,7 @@ pub fn icon(name: &str, is_dir: bool, open: bool) -> (&'static str, Color32) {
         "rs" => ("📜", Color32::from_rgb(222, 120, 70)),
         "wgsl" => ("💎", Color32::from_rgb(86, 212, 190)),
         "ron" => ("⚙", Color32::from_rgb(180, 160, 230)),
+        "lua" => ("☾", Color32::from_rgb(90, 140, 230)),
         "toml" | "lock" => ("⚙", Color32::from_rgb(150, 160, 175)),
         "md" | "txt" => ("📝", Color32::from_rgb(140, 180, 255)),
         "png" | "jpg" | "jpeg" | "ktx2" | "dds" | "tga" | "bmp" | "hdr" | "exr" | "webp" => {

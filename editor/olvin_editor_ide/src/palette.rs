@@ -183,8 +183,12 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
         && ctx
             .input(|i| i.pointer.interact_pos())
             .is_some_and(|pos| !area.response.rect.contains(pos));
-    if escape || clicked_outside {
-        return; // closed
+    if clicked_outside {
+        return; // closed, focus goes where the click went
+    }
+    if escape {
+        refocus(ide);
+        return;
     }
     let chosen = clicked.or(enter.then_some(p.selected));
     match (p.mode, chosen) {
@@ -194,11 +198,16 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
             {
                 doc.goto = Some(text_ops::line_col_to_char(&doc.text, line, col));
                 ide.requests.push_back(crate::ide::EditorRequest::Focus);
+            } else {
+                refocus(ide);
             }
         }
         (Mode::Commands, Some(row)) if row < items.len() => {
             if let Item::Command(c) = items[row].0 {
                 ide.run(c, state);
+                if ide.palette.is_none() {
+                    refocus(ide);
+                }
             }
         }
         (Mode::Files, Some(row)) if row < items.len() => {
@@ -213,6 +222,14 @@ pub fn show(ide: &mut Ide, ctx: &egui::Context, state: &mut EditorState) {
                 ide.palette = Some(p);
             }
         }
+    }
+}
+
+/// The palette had the keyboard; give it back to the code, or Ctrl+S and
+/// friends would go to the scene.
+fn refocus(ide: &mut Ide) {
+    if ide.active.is_some() {
+        ide.requests.push_back(crate::ide::EditorRequest::Focus);
     }
 }
 

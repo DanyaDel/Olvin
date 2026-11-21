@@ -1,5 +1,5 @@
-//! Small hand-written tokenizers for syntax highlighting: Rust, WGSL, RON,
-//! TOML and Markdown. They only find the interesting spans (keywords,
+//! Small hand-written tokenizers for syntax highlighting: Rust, WGSL, Lua,
+//! RON, TOML and Markdown. They only find the interesting spans (keywords,
 //! strings...); everything else is plain text. Spans are byte ranges that
 //! always fall on char boundaries.
 
@@ -9,6 +9,7 @@ use std::path::Path;
 pub enum Lang {
     Rust,
     Wgsl,
+    Lua,
     Ron,
     Toml,
     Markdown,
@@ -24,6 +25,7 @@ impl Lang {
         match ext.as_str() {
             "rs" => Self::Rust,
             "wgsl" => Self::Wgsl,
+            "lua" => Self::Lua,
             "ron" => Self::Ron,
             "toml" => Self::Toml,
             "md" | "markdown" => Self::Markdown,
@@ -36,6 +38,7 @@ impl Lang {
         match self {
             Self::Rust => "Rust",
             Self::Wgsl => "WGSL",
+            Self::Lua => "Lua",
             Self::Ron => "RON",
             Self::Toml => "TOML",
             Self::Markdown => "Markdown",
@@ -47,6 +50,7 @@ impl Lang {
     pub fn line_comment(self) -> Option<&'static str> {
         match self {
             Self::Rust | Self::Wgsl | Self::Ron => Some("//"),
+            Self::Lua => Some("--"),
             Self::Toml => Some("#"),
             Self::Markdown | Self::Plain => None,
         }
@@ -85,6 +89,7 @@ pub fn tokenize(lang: Lang, text: &str) -> Vec<Token> {
         Lang::Rust => CLike::new(&RUST, text).run(),
         Lang::Wgsl => CLike::new(&WGSL, text).run(),
         Lang::Ron => CLike::new(&RON, text).run(),
+        Lang::Lua => lua(text),
         Lang::Toml => toml(text),
         Lang::Markdown => markdown(text),
         Lang::Plain => Vec::new(),
@@ -496,6 +501,109 @@ impl<'a> CLike<'a> {
     }
 }
 
+// --- Lua ------------------------------------------------------------------
+
+const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
+    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+];
+
+/// `[[`, `[=[`... at `i`: the level and the index after the opener.
+fn lua_long_open(s: &[u8], i: usize) -> Option<(usize, usize)> {
+    if s.get(i) != Some(&b'[') {
+        return None;
+    }
+    let mut j = i + 1;
+    while s.get(j) == Some(&b'=') {
+        j += 1;
+    }
+    (s.get(j) == Some(&b'[')).then_some((j - i - 1, j + 1))
+}
+
+/// End of a long bracket body that started with `level` `=`s.
+fn lua_long_end(s: &[u8], mut i: usize, level: usize) -> usize {
+    while i < s.len() {
+        if s[i] == b']' {
+            let mut j = i + 1;
+            while s.get(j) == Some(&b'=') {
+                j += 1;
+            }
+            if j - i - 1 == level && s.get(j) == Some(&b']') {
+                return j + 1;
+            }
+        }
+        i += 1;
+    }
+    s.len()
+}
+
+fn lua(text: &str) -> Vec<Token> {
+    let s = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut push = |start: usize, end: usize, kind| {
+        if end > start {
+            out.push(Token { start, end, kind });
+        }
+    };
+    while i < s.len() {
+        let start = i;
+        match s[i] {
+            b'-' if s.get(i + 1) == Some(&b'-') => {
+                i += 2;
+                if let Some((level, body)) = lua_long_open(s, i) {
+                    i = lua_long_end(s, body, level);
+                } else {
+                    while i < s.len() && s[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                push(start, i, TokenKind::Comment);
+            }
+            b'[' if lua_long_open(s, i).is_some() => {
+                let (level, body) = lua_long_open(s, i).unwrap_or((0, i + 1));
+                i = lua_long_end(s, body, level);
+                push(start, i, TokenKind::String);
+            }
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < s.len() && s[i] != q && s[i] != b'\n' {
+                    i += if s[i] == b'\\' { 2 } else { 1 };
+                }
+                i = (i + 1).min(s.len());
+                while i < s.len() && !text.is_char_boundary(i) {
+                    i += 1;
+                }
+                push(start, i, TokenKind::String);
+            }
+            b'0'..=b'9' => {
+                while i < s.len() && (s[i].is_ascii_alphanumeric() || s[i] == b'.') {
+                    i += 1;
+                }
+                push(start, i, TokenKind::Number);
+            }
+            c if is_ident_start(c) => {
+                while i < s.len() && is_ident(s[i]) {
+                    i += 1;
+                }
+                let word = &text[start..i];
+                let kind = if LUA_KEYWORDS.contains(&word) {
+                    Some(TokenKind::Keyword)
+                } else if matches!(s.get(i), Some(b'(' | b'"' | b'\'' | b'{')) {
+                    Some(TokenKind::Function)
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    push(start, i, kind);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 // --- TOML -----------------------------------------------------------------
 
 fn toml(text: &str) -> Vec<Token> {
@@ -757,6 +865,26 @@ mod tests {
 
     fn has(tokens: &[(&str, TokenKind)], text: &str, kind: TokenKind) -> bool {
         tokens.iter().any(|&(t, k)| t == text && k == kind)
+    }
+
+    #[test]
+    fn lua_tokens() {
+        assert_eq!(Lang::from_path(Path::new("scripts/player.lua")), Lang::Lua);
+        let src = "-- note\nlocal speed = 4.5 --[[ block\nstill ]] \nfunction update(dt)\n  print(\"hi\\\"x\", [==[raw]]]==])\n  if not nil then return 'a' end\nend\n";
+        let t = kinds(Lang::Lua, src);
+        assert!(has(&t, "-- note", TokenKind::Comment));
+        assert!(has(&t, "--[[ block\nstill ]]", TokenKind::Comment));
+        assert!(has(&t, "local", TokenKind::Keyword));
+        assert!(has(&t, "4.5", TokenKind::Number));
+        assert!(has(&t, "update", TokenKind::Function));
+        assert!(has(&t, "print", TokenKind::Function));
+        assert!(has(&t, "\"hi\\\"x\"", TokenKind::String));
+        assert!(has(&t, "[==[raw]]]==]", TokenKind::String));
+        assert!(has(&t, "'a'", TokenKind::String));
+        assert!(has(&t, "nil", TokenKind::Keyword));
+        assert_eq!(Lang::Lua.line_comment(), Some("--"));
+        // Never splits a char.
+        tokenize(Lang::Lua, "x = \"é\\é\" -- ü [[ö");
     }
 
     #[test]

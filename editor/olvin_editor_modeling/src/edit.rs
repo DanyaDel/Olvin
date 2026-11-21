@@ -127,6 +127,12 @@ impl ViewportExtension for EditMode {
                 s.hidden.clear();
             });
         }
+        // Undo / redo swap the mesh under the selection: forget vertices it no longer has.
+        let count = mesh.positions.len() as u32;
+        shared(|s| {
+            s.verts.retain(|v| *v < count);
+            s.hidden.retain(|v| *v < count);
+        });
         let world = ctx
             .state
             .scene

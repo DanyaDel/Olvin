@@ -12,7 +12,7 @@ use olvin_editor::glam::Vec3;
 use olvin_editor::olvin_scene::file::{EntityDesc, MeshDesc, SceneFile, Shape};
 use olvin_editor::{EditorApp, EditorPlugin, egui};
 
-const SIZE: egui::Vec2 = egui::vec2(1600.0, 940.0);
+const SIZE: egui::Vec2 = egui::vec2(1600.0, 1700.0);
 
 fn plugins() -> Vec<Box<dyn EditorPlugin>> {
     vec![
@@ -379,4 +379,59 @@ fn script_param_key_can_be_renamed() {
     h.run_steps(3);
     let params = state(&mut h).scene.get(3).unwrap().scripts[0].params.clone();
     assert!(params.contains_key("rate"), "{params:?}");
+}
+
+fn faces(h: &mut Ed, id: u64) -> usize {
+    state(h)
+        .scene
+        .get(id)
+        .and_then(|e| e.poly.as_ref())
+        .map_or(0, |p| p.faces.len())
+}
+
+#[test]
+fn edit_mode_operations_undo_and_redo() {
+    let p = project("edit-undo");
+    let mut h = editor(&p);
+    assert!(h.state_mut().show_workspace("Modeling"));
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    h.get_by_label("◆ Edit Mode").click();
+    h.run_steps(3);
+    assert_eq!(faces(&mut h, 3), 6, "converted to a six-face poly");
+    h.get_by_label("All  A").click();
+    h.run_steps(3);
+    h.get_by_label("Subdivide").click();
+    h.run_steps(3);
+    assert_eq!(faces(&mut h, 3), 24);
+    h.get_by_label("Flip Normals").click();
+    h.run_steps(3);
+    undo(&mut h);
+    assert_eq!(faces(&mut h, 3), 24, "undo of Flip keeps the subdivision");
+    undo(&mut h);
+    assert_eq!(faces(&mut h, 3), 6, "undo of Subdivide");
+    // The vertex selection outlived the mesh it indexed; frames still run.
+    h.run_steps(5);
+    h.run_steps(3);
+    let node = h.get_by_label_contains("vertices selected");
+    let selected = node.accesskit_node().value().expect("label text");
+    let count: usize = selected.split(' ').next().unwrap().parse().unwrap();
+    assert!(count <= 8, "selection pruned to the cube's 8 vertices: {selected}");
+    h.get_by_label("None  Alt+A").click();
+    h.run_steps(3);
+    h.get_by_label("All  A").click();
+    h.run_steps(3);
+    h.get_by_label("Delete  X").click();
+    h.run_steps(3);
+    assert_eq!(faces(&mut h, 3), 0, "everything deleted");
+    undo(&mut h);
+    assert_eq!(faces(&mut h, 3), 6);
+    redo(&mut h);
+    redo(&mut h);
+    h.run_steps(5);
+    undo(&mut h);
+    undo(&mut h);
+    undo(&mut h);
+    assert!(state(&mut h).scene.get(3).unwrap().poly.is_none(), "back to the plain cube");
+    h.run_steps(5);
 }

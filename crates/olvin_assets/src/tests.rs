@@ -117,6 +117,29 @@ fn meta_created_and_guid_survives_move() {
 }
 
 #[test]
+fn resolve_never_leaves_the_assets_folder() {
+    let dir = TempDir::new("resolve");
+    let root = AssetRoot::new(dir.path());
+    let base = dir.path().to_path_buf();
+    assert_eq!(root.resolve("tex/a.png"), base.join("tex").join("a.png"));
+    assert_eq!(
+        root.resolve("tex\\.\\a.png"),
+        base.join("tex").join("a.png")
+    );
+    assert_eq!(root.resolve("tex/../b.png"), base.join("b.png"));
+    assert_eq!(
+        root.resolve("../../etc/passwd"),
+        base.join("etc").join("passwd")
+    );
+    assert_eq!(root.resolve("/etc/passwd"), base.join("etc").join("passwd"));
+    assert_eq!(
+        root.resolve("C:/Windows/x.dll"),
+        base.join("Windows").join("x.dll")
+    );
+    assert_eq!(root.resolve(".."), base);
+}
+
+#[test]
 fn paths_and_kinds() {
     let dir = TempDir::new("kinds");
     for f in [

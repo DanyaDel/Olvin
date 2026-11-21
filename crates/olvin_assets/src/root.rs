@@ -85,15 +85,24 @@ impl AssetRoot {
         &self.root
     }
 
-    /// `assets/` + relative path (forward or back slashes).
+    /// `assets/` + relative path (forward or back slashes). Never leaves
+    /// `assets/`: `..` goes up only inside it, and drive or absolute parts
+    /// (`C:`) are dropped, so a path from a scene or a script can't reach
+    /// other files.
     pub fn resolve(&self, rel: &str) -> PathBuf {
-        let mut p = self.root.clone();
-        for part in rel
-            .split(['/', '\\'])
-            .filter(|s| !s.is_empty() && *s != ".")
-        {
-            p.push(part);
+        let mut parts: Vec<&str> = Vec::new();
+        for part in rel.split(['/', '\\']) {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                p if p.contains(':') => {}
+                p => parts.push(p),
+            }
         }
+        let mut p = self.root.clone();
+        p.extend(parts);
         p
     }
 

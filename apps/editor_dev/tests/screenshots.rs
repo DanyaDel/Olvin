@@ -544,7 +544,8 @@ fn review() {
         return;
     };
     fs::create_dir_all(&out).unwrap();
-    let project = std::env::temp_dir().join(format!("olvin-editor-review-{}/yard", std::process::id()));
+    let project =
+        std::env::temp_dir().join(format!("olvin-editor-review-{}/yard", std::process::id()));
     demo_project(&project);
     let only = std::env::var("OLVIN_EDITOR_REVIEW_ONLY").ok();
     for theme in [ThemeKind::Dark, ThemeKind::Light] {

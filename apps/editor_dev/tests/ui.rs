@@ -219,7 +219,10 @@ fn field<'a>(h: &'a Ed, value: &'a str) -> egui_kittest::Node<'a> {
 }
 
 fn redo(h: &mut Ed) {
-    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::Z,
+    );
     h.run_steps(3);
 }
 
@@ -361,11 +364,14 @@ fn script_param_key_can_be_renamed() {
     let mut h = editor(&p);
     {
         let s = state(&mut h);
-        s.scene.get_mut(3).unwrap().scripts.push(olvin_editor::olvin_scene::file::ScriptDesc {
-            name: "Spin".into(),
-            params: [("speed".to_owned(), "1".to_owned())].into_iter().collect(),
-            ..Default::default()
-        });
+        s.scene
+            .get_mut(3)
+            .unwrap()
+            .scripts
+            .push(olvin_editor::olvin_scene::file::ScriptDesc {
+                name: "Spin".into(),
+                params: [("speed".to_owned(), "1".to_owned())].into_iter().collect(),
+            });
         s.select(Some(3));
     }
     h.run_steps(5);
@@ -377,7 +383,9 @@ fn script_param_key_can_be_renamed() {
     // Commit by leaving the field.
     h.get_by_label("Behaviour").click();
     h.run_steps(3);
-    let params = state(&mut h).scene.get(3).unwrap().scripts[0].params.clone();
+    let params = state(&mut h).scene.get(3).unwrap().scripts[0]
+        .params
+        .clone();
     assert!(params.contains_key("rate"), "{params:?}");
 }
 
@@ -416,7 +424,10 @@ fn edit_mode_operations_undo_and_redo() {
     let node = h.get_by_label_contains("vertices selected");
     let selected = node.accesskit_node().value().expect("label text");
     let count: usize = selected.split(' ').next().unwrap().parse().unwrap();
-    assert!(count <= 8, "selection pruned to the cube's 8 vertices: {selected}");
+    assert!(
+        count <= 8,
+        "selection pruned to the cube's 8 vertices: {selected}"
+    );
     h.get_by_label("None  Alt+A").click();
     h.run_steps(3);
     h.get_by_label("All  A").click();
@@ -432,6 +443,9 @@ fn edit_mode_operations_undo_and_redo() {
     undo(&mut h);
     undo(&mut h);
     undo(&mut h);
-    assert!(state(&mut h).scene.get(3).unwrap().poly.is_none(), "back to the plain cube");
+    assert!(
+        state(&mut h).scene.get(3).unwrap().poly.is_none(),
+        "back to the plain cube"
+    );
     h.run_steps(5);
 }

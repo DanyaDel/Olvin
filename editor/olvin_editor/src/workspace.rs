@@ -136,3 +136,38 @@ impl Layout {
             .flat_map(|w| w.dock.iter_all_tabs().map(|(_, t)| t.id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout(n: usize, active: usize) -> Layout {
+        Layout {
+            workspaces: (0..n)
+                .map(|i| Workspace {
+                    name: i.to_string(),
+                    dock: DockState::new(Vec::new()),
+                })
+                .collect(),
+            active,
+            next_tab: 0,
+        }
+    }
+
+    #[test]
+    fn moving_tabs_keeps_the_active_workspace() {
+        for from in 0..4 {
+            for to in 0..4 {
+                for active in 0..4 {
+                    let mut l = layout(4, active);
+                    l.move_workspace(from, to);
+                    assert_eq!(
+                        l.workspaces[l.active].name,
+                        active.to_string(),
+                        "move {from}->{to} active {active}"
+                    );
+                }
+            }
+        }
+    }
+}

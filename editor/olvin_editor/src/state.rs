@@ -862,4 +862,28 @@ mod tests {
         s.selection = Some(ids[3]);
         assert_eq!(s.selected_ids(), vec![ids[3]]);
     }
+
+    #[test]
+    fn reparent_is_safe_and_history_is_frozen_while_playing() {
+        let mut s = state();
+        let a = s.create(NewEntity::Empty, None);
+        let b = s.create(NewEntity::Empty, None);
+        s.scene.get_mut(a).unwrap().scale = Vec3::ZERO;
+        s.scene.get_mut(b).unwrap().position = Vec3::new(1.0, 2.0, 3.0);
+        // A parent scaled to zero has no inverse: no NaN, local transform kept.
+        assert!(s.reparent(b, Some(a)));
+        assert_eq!(s.scene.get(b).unwrap().position, Vec3::new(1.0, 2.0, 3.0));
+        // Same parent again changes nothing.
+        let before = s.scene.clone();
+        assert!(s.reparent(b, Some(a)));
+        assert_eq!(s.scene, before);
+
+        s.end_frame(false);
+        s.start_play();
+        assert!(!s.can_undo() && !s.can_redo());
+        s.undo();
+        assert!(s.scene.get(b).is_some(), "undo is ignored while playing");
+        s.stop_play();
+        assert!(s.can_undo());
+    }
 }

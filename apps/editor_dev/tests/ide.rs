@@ -75,6 +75,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn harness(project: &Path) -> H {
+    shots::isolate_config();
     let project = project.to_path_buf();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1400.0, 860.0))

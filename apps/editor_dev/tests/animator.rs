@@ -40,6 +40,7 @@ fn project() -> PathBuf {
 fn editor(workspace: &str) -> Harness<'static, EditorApp> {
     let project = project();
     let workspace = workspace.to_owned();
+    common::isolate_config();
     let mut harness = Harness::builder()
         .with_size(SIZE)
         .with_pixels_per_point(1.0)

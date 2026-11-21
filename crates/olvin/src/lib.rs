@@ -118,6 +118,8 @@ pub struct HeadlessPlugins {
     pub audio: olvin_audio::AudioPlugin,
 }
 
+// Derivable without the `audio` feature; with it, audio starts disabled.
+#[allow(clippy::derivable_impls)]
 impl Default for HeadlessPlugins {
     fn default() -> Self {
         Self {

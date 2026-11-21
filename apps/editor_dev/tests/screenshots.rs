@@ -12,6 +12,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use eframe::egui_wgpu::{self, RenderState, ScreenDescriptor, wgpu};
 use egui_kittest::kittest::Queryable;
@@ -26,6 +27,19 @@ use olvin_editor::{EditorApp, EditorPlugin, egui};
 
 pub const SIZE: egui::Vec2 = egui::vec2(1600.0, 940.0);
 pub const SELECTED: u64 = 10;
+
+/// Layout and preferences go to a throwaway config directory, so a test sees
+/// the editor's defaults (UI scale, theme, layout), not this machine's saved
+/// ones, and never writes them.
+pub fn isolate_config() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let dir =
+            std::env::temp_dir().join(format!("olvin-editor-test-config-{}", std::process::id()));
+        // SAFETY: set once, before any test thread creates an editor.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir) };
+    });
+}
 
 pub fn plugins() -> Vec<Box<dyn EditorPlugin>> {
     // Same list as src/main.rs.
@@ -462,6 +476,7 @@ fn shot_with(
 ) {
     let project = project.to_path_buf();
     let workspace = workspace.map(str::to_owned);
+    isolate_config();
     let mut harness = Harness::builder()
         .with_size(SIZE)
         .with_pixels_per_point(1.0)

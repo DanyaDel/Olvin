@@ -35,6 +35,8 @@ pub struct RenderStats {
     pub draw_calls: u32,
     pub instances: u32,
     pub culled: u32,
+    /// Triangles drawn by the instanced mesh draws (main + blended).
+    pub triangles: u64,
 }
 
 /// The window renderer: a [`RenderCore`] plus the surface it presents to.
@@ -136,23 +138,61 @@ impl Renderer {
         size: (u32, u32),
         settings: &RenderSettings,
     ) -> Result<(Self, RenderInfo), Box<dyn Error>> {
+        let power = if settings.low_power {
+            wgpu::PowerPreference::LowPower
+        } else {
+            wgpu::PowerPreference::HighPerformance
+        };
         // GLES needs the display connection up front (Wayland in particular).
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(handle.clone())),
-        );
-        let surface = instance.create_surface(handle)?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: if settings.low_power {
-                    wgpu::PowerPreference::LowPower
-                } else {
-                    wgpu::PowerPreference::HighPerformance
-                },
-                force_fallback_adapter: false,
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await?;
+        let open = async |backends: Option<wgpu::Backends>| {
+            let mut desc = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
+                handle.clone(),
+            ));
+            if let Some(b) = backends {
+                desc.backends = b;
+            }
+            let instance = wgpu::Instance::new(desc);
+            let surface = instance.create_surface(handle.clone())?;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: power,
+                    force_fallback_adapter: false,
+                    compatible_surface: Some(&surface),
+                    ..Default::default()
+                })
+                .await?;
+            Ok::<_, Box<dyn Error>>((surface, adapter))
+        };
+        let (mut surface, mut adapter) = open(None).await?;
+        let first = adapter.get_info();
+        let verdict = crate::gl_check::check_gl(&crate::GlCheckInput {
+            backend: first.backend,
+            vendor: first.vendor,
+            name: &first.name,
+            driver: &first.driver,
+            driver_info: &first.driver_info,
+            wayland: crate::gl_check::is_wayland(&handle),
+            backend_forced: crate::gl_check::backend_forced(),
+        });
+        match verdict {
+            crate::GlCheck::Fine => {}
+            crate::GlCheck::Warn => log::warn!("{}", crate::gl_check::warning(&first.name)),
+            crate::GlCheck::UseVulkan => {
+                log::warn!(
+                    "OpenGL on the proprietary NVIDIA driver under Wayland does not present; \
+                     switching to Vulkan"
+                );
+                match open(Some(wgpu::Backends::VULKAN)).await {
+                    Ok((s, a)) => (surface, adapter) = (s, a),
+                    Err(e) => {
+                        log::warn!(
+                            "Vulkan is not available ({e}). {}",
+                            crate::gl_check::warning(&first.name)
+                        );
+                    }
+                }
+            }
+        }
         let adapter_info = adapter.get_info();
         let info = RenderInfo {
             adapter: adapter_info.name.clone(),
@@ -245,32 +285,48 @@ impl Renderer {
         if size != (self.config.width, self.config.height) {
             self.resize(size);
         }
+        olvin_core::profile_scope!("render frame");
         let view_proj = camera_view_proj(world, size.0 as f32 / size.1 as f32);
-        let stats = match view_proj {
-            Some(view_proj) => {
-                self.core
-                    .prepare(&mut self.view, &self.gpu, world, view_proj, settings)
+        let stats = {
+            olvin_core::profile_scope!("render prepare meshes");
+            match view_proj {
+                Some(view_proj) => {
+                    self.core
+                        .prepare(&mut self.view, &self.gpu, world, view_proj, settings)
+                }
+                None => Default::default(),
             }
-            None => Default::default(),
         };
 
-        match view_proj {
-            Some(vp) => {
-                self.particles
-                    .prepare(&self.core.device, &self.core.queue, &self.gpu, world, vp);
+        let overlay_draws = {
+            olvin_core::profile_scope!("render prepare particles, sprites, overlay");
+            match view_proj {
+                Some(vp) => {
+                    self.particles.prepare(
+                        &self.core.device,
+                        &self.core.queue,
+                        &self.gpu,
+                        world,
+                        vp,
+                    );
+                }
+                None => self.particles.clear(),
             }
-            None => self.particles.clear(),
-        }
-        self.sprites
-            .prepare(&self.core.device, &self.core.queue, &self.gpu, world, size);
-        let overlay_draws = self.overlay.prepare(
-            &self.core.device,
-            &self.core.queue,
-            &self.gpu,
-            overlay,
-            size,
-        );
-        let frame = match self.surface.get_current_texture() {
+            self.sprites
+                .prepare(&self.core.device, &self.core.queue, &self.gpu, world, size);
+            self.overlay.prepare(
+                &self.core.device,
+                &self.core.queue,
+                &self.gpu,
+                overlay,
+                size,
+            )
+        };
+        let acquired = {
+            olvin_core::profile_scope!("render acquire surface");
+            self.surface.get_current_texture()
+        };
+        let frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -285,9 +341,11 @@ impl Renderer {
         let target = frame.texture.create_view(&Default::default());
         let mut encoder = self.core.device.create_command_encoder(&Default::default());
         if stats.draw_calls > 0 {
+            olvin_core::profile_scope!("render shadow pass");
             self.core
                 .render_shadows(&self.view, &self.gpu, &mut encoder);
         }
+        olvin_core::profile_scope!("render scene passes");
         if let Some(post) = &mut self.post {
             post.resize(&self.core.device, size);
             let hdr = post.hdr_view().expect("resized above");
@@ -313,8 +371,11 @@ impl Renderer {
             let mut pass = begin_overlay_pass(&mut encoder, &target);
             self.overlay.draw(&mut pass);
         }
-        self.core.queue.submit([encoder.finish()]);
-        self.core.queue.present(frame);
+        {
+            olvin_core::profile_scope!("render submit and present");
+            self.core.queue.submit([encoder.finish()]);
+            self.core.queue.present(frame);
+        }
         stats
     }
 }

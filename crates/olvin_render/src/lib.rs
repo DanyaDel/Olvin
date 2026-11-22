@@ -4,6 +4,7 @@
 
 pub mod core;
 mod frustum;
+mod gl_check;
 mod light;
 mod material;
 mod mesh;
@@ -20,6 +21,7 @@ mod texture;
 
 pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
+pub use gl_check::{GlCheck, GlCheckInput, check_gl};
 pub use light::{Light, LightKind, MAX_CASCADES, MAX_LIGHTS};
 pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};

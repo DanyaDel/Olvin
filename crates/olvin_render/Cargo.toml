@@ -17,6 +17,7 @@ olvin_scene.workspace = true
 olvin_transform.workspace = true
 olvin_anim.workspace = true
 wgpu.workspace = true
+raw-window-handle.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true

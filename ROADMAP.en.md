@@ -4,6 +4,8 @@ A document for people and AI agents. The current state is described in [ARCHITEC
 
 <p align="center"><a href="ROADMAP.md">Русский</a></p>
 
+State of the code as of 2026-11-22 (commit `0e3451e`). ROADMAP ticks are set together with the code; a mismatch is a documentation bug, please open an issue.
+
 Priority labels: **P0** fix now, **P1** needed for the first game, **P2** for "Godot/Unity-lite" level, **P3** for completeness.
 
 Marks: `[x]` done, `[~]` partial (what is left is noted at the end of the item), `[ ]` not started.

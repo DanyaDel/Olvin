@@ -2,6 +2,8 @@
 
 <p align="center"><a href="ARCHITECTURE.md">Русский</a></p>
 
+State of the code as of 2026-11-22 (commit `0e3451e`). ROADMAP ticks are set together with the code; a mismatch is a documentation bug, please open an issue.
+
 A modular game engine in Rust. Each subsystem lives in its own crate and is attached as a plugin. Subsystems talk to each other only through shared resources and do not depend on each other directly.
 
 The visual style (colours, fonts, glass, motion, copy): [STYLE.en.md](STYLE.en.md). The logo, wordmark and app icon (SVG, PNG, ICO): `assets/logo/`. The roadmap: [ROADMAP.en.md](ROADMAP.en.md).
@@ -118,7 +120,7 @@ Pure animation, no GPU or window (depends on `olvin_core`/`olvin_ecs` only for t
 - `overlay.rs`: screen overlay (in-game UI). `Overlay { quads }` is a resource where producers (`olvin_gui`) push `OverlayQuad`s every frame (a rectangle in physical pixels, uv, linear colour, texture) in paint order; `RenderPlugin` clears it in `Stage::First`. `OverlayRenderer` is a thin wrapper over `QuadBatcher` (no depth, alpha blending, linear filter, consecutive quads with one texture = one draw), `begin_overlay_pass` is a pass over the finished image (`LoadOp::Load`). `Renderer` draws it in its own pass after post-processing and tonemapping, so the UI gets neither bloom nor ACES. Plain vertex/fragment shaders only: works on the Compat tier (WebGL2/GLES3). Test: `overlay_paints_in_order_without_depth`.
 - The window `Renderer` creates a `ParticleRenderer` and a `SpriteRenderer` and draws them in the main pass after the meshes (also in the HDR chain). Not done: GPU particles, hooking up to `scene_file`/the editor (the components aren't read from scenes), sprite animation (frames over time), text rendering, 9-slice, light/shadows on sprites, stretched billboards, particle collisions and trails; the editor viewport (`EngineGpu`) doesn't draw particles or sprites.
 - `RenderSettings.scene_lights` (default true): when false, `Light` components are ignored (the editor's Solid view).
-- `mesh.wgsl`: an instanced shader within WebGL2 limits: one uniform, 7 attributes (the model matrix as 4 vec4 + colour). Hemispherical ambient, the sun with PCF 3×3 (comparison sampler, slope bias + normal offset, fade towards the edge of the distance), 16 point/spot lights (falloff `saturate(1-(d/r)^4)^2/(d²+1)`, soft cone), Blinn-Phong, fog, exposure + ACES, sRGB. `shadow.wgsl` is a depth-only pass. Shadows work on Compat (GL) too.
+- `mesh.wgsl`: an instanced shader within WebGL2 limits: one uniform, 9 attributes (vertex: position, normal, uv, tangent; instance: the model matrix as 4 vec4 + colour). Hemispherical ambient, the sun with PCF 3×3 (comparison sampler, slope bias + normal offset, fade towards the edge of the distance), 16 point/spot lights (falloff `saturate(1-(d/r)^4)^2/(d²+1)`, soft cone), GGX + height-correlated Smith + Schlick (metallic-roughness), fog, exposure + ACES, sRGB. `shadow.wgsl` is a depth-only pass. Shadows work on Compat (GL) too.
 - A mesh with no vertices/indices creates no GPU buffers (empty slot, every pass skips it); `max_particles` reserves at most `MAX_RESERVED` (65536) slots and a NaN particle step is ignored; a tile holding only flip flags is empty. Known gap: `Meshes` cannot free slots, so respawning scenes/skinned meshes grows GPU memory (the engine has no scene unloading).
 
 ## olvin_csg

@@ -146,6 +146,47 @@ fn level_loads_and_is_wired() {
 }
 
 #[test]
+fn the_crates_are_instances_of_one_prefab() {
+    let app = game("prefab");
+    let world = app.resources.fetch::<World>();
+    let color = |name: &str| {
+        let e = entity(&app, name);
+        let prefab = world
+            .get::<&olvin::scene::PrefabInstanceOf>(e)
+            .unwrap_or_else(|_| panic!("{name} is not a prefab instance"));
+        assert_eq!(prefab.0, "prefabs/crate.prefab.ron");
+        // What the prefab brings along: body, collider, the Thud script.
+        assert!(
+            world.get::<&olvin::scene_file::RigidbodyDesc>(e).is_ok(),
+            "{name}: rigidbody"
+        );
+        assert!(
+            world.get::<&olvin::scene_file::ColliderDesc>(e).is_ok(),
+            "{name}: collider"
+        );
+        assert!(
+            world.get::<&olvin::scene_file::Scripts>(e).is_ok(),
+            "{name}: script"
+        );
+        world
+            .get::<&olvin::render::MeshRenderer>(e)
+            .unwrap()
+            .color
+            .0
+    };
+    let plain = color("Crate 1");
+    assert_eq!(color("Crate 2"), plain);
+    assert_eq!(color("Crate 4"), plain);
+    assert_ne!(color("Crate 3"), plain, "the override: a lighter wood");
+    // The ball is no prefab.
+    assert!(
+        world
+            .get::<&olvin::scene::PrefabInstanceOf>(entity(&app, "Ball"))
+            .is_err()
+    );
+}
+
+#[test]
 fn walking_onto_the_plate_opens_the_door() {
     let mut app = game("plate");
     let (open, closed_y) = door(&app);

@@ -1,0 +1,11 @@
+// A pushable crate: the four crates of the level are instances of this one.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Crate", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.6, 0.42, 0.22, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 2.0, drag: 0.1, angular_drag: 0.1, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            scripts: [(name: "Thud")]),
+    ],
+)

@@ -1313,3 +1313,57 @@ fn profiler_panel_opens_and_shows_frame_time_counters_and_scopes() {
     h.run_steps(3);
     h.get_by_label_contains("Resume");
 }
+
+/// The top bar (logo, menus, workspace tabs, play controls, gear) keeps its
+/// parts apart at every window width, however many workspaces there are: the
+/// tabs scroll in the room between the menus and the play controls.
+#[test]
+fn top_bar_parts_never_overlap_at_any_width() {
+    // The "+" of the workspace tabs (docked panels have their own below it).
+    fn top_plus<'a>(h: &'a Ed) -> egui_kittest::Node<'a> {
+        h.get_all_by_label("+")
+            .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .unwrap()
+    }
+    let p = project("topbar");
+    let mut h = editor(&p);
+    // Many tabs with long names: each copy appends " (copy)".
+    for _ in 0..8 {
+        top_plus(&h).click();
+        h.run_steps(3);
+        h.get_by_label("Duplicate Current").click();
+        h.run_steps(3);
+    }
+    let last = format!("Layout{}", " (copy)".repeat(8));
+    for width in [800.0_f32, 1024.0, 1280.0, 1600.0, 1920.0] {
+        h.set_size(egui::vec2(width, 900.0));
+        h.run_steps(12);
+        let bar = h.state().top_bar_rects();
+        let at = format!("at {width} px: {bar:?}");
+        // Left to right, in order, all inside the window.
+        assert!(bar.menus_end <= bar.tabs.left() + 0.5, "menus vs tabs {at}");
+        assert!(bar.tabs.right() <= bar.play.left(), "tabs vs play {at}");
+        assert!(bar.play.right() <= bar.gear.left(), "play vs gear {at}");
+        assert!(bar.gear.right() <= width, "gear outside the window {at}");
+        assert!(bar.tabs.width() >= 100.0, "tabs strip too narrow {at}");
+        // The real widgets sit where the bar says they do.
+        for label in ["▶", "⏸", "⏭"] {
+            let r = h.get_by_label(label).rect();
+            assert!(bar.play.contains_rect(r.shrink(0.5)), "{label} {r:?} {at}");
+        }
+        let gear = h.get_by_label("⚙").rect();
+        assert!(
+            bar.gear.contains_rect(gear.shrink(0.5)),
+            "gear {gear:?} {at}"
+        );
+        let plus = top_plus(&h).rect();
+        assert!(bar.tabs.contains_rect(plus.shrink(0.5)), "+ {plus:?} {at}");
+        // The active tab was scrolled into view (these names are far wider
+        // than a narrow strip, so only part of it has to show).
+        let tab = h.get_by_label(&last).rect();
+        assert!(
+            tab.right() > bar.tabs.left() + 8.0 && tab.left() < plus.left() - 8.0,
+            "active tab {tab:?} not visible {at}"
+        );
+    }
+}

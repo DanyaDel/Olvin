@@ -16,7 +16,7 @@ pub mod theme;
 pub mod widgets;
 mod workspace;
 
-pub use app::EditorApp;
+pub use app::{EditorApp, TopBarRects};
 pub use registry::{
     EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
 };

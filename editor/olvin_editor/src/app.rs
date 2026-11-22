@@ -22,6 +22,40 @@ fn menu<R>(
         .0
 }
 
+/// Where the top bar put its parts last frame (screen points), for tests.
+/// The workspace tabs live in `tabs` and scroll inside it; `play` and `gear`
+/// never overlap it or each other.
+#[derive(Clone, Copy, Debug)]
+pub struct TopBarRects {
+    /// Right edge of the logo and menus.
+    pub menus_end: f32,
+    /// The scrolling strip of workspace tabs, with its "+" button.
+    pub tabs: egui::Rect,
+    pub play: egui::Rect,
+    pub gear: egui::Rect,
+}
+
+impl Default for TopBarRects {
+    fn default() -> Self {
+        Self {
+            menus_end: 0.0,
+            tabs: egui::Rect::NOTHING,
+            play: egui::Rect::NOTHING,
+            gear: egui::Rect::NOTHING,
+        }
+    }
+}
+
+/// Width reserved for the play controls (three 34 px buttons and padding).
+const PLAY_W: f32 = 124.0;
+/// Width reserved for the settings gear.
+const GEAR_W: f32 = 36.0;
+/// Gap between the parts of the top bar.
+const BAR_GAP: f32 = 12.0;
+/// The tabs strip never gets narrower than this; the play controls move
+/// right instead of squeezing it.
+const MIN_TABS_W: f32 = 120.0;
+
 /// Waiting for "save changes?" before doing something destructive.
 enum Confirm {
     Open(PathBuf),
@@ -51,6 +85,7 @@ pub struct EditorApp {
     allow_close: bool,
     title: String,
     tinted: bool,
+    top_bar: TopBarRects,
 }
 
 impl EditorApp {
@@ -82,6 +117,7 @@ impl EditorApp {
             allow_close: false,
             title: String::new(),
             tinted: false,
+            top_bar: TopBarRects::default(),
         }
     }
 
@@ -89,6 +125,11 @@ impl EditorApp {
     /// without a window (headless screenshots).
     pub fn state_mut(&mut self) -> &mut EditorState {
         &mut self.state
+    }
+
+    /// Where the top bar's parts were drawn last frame.
+    pub fn top_bar_rects(&self) -> TopBarRects {
+        self.top_bar
     }
 
     /// Default workspaces instead of the user's saved layout.
@@ -288,9 +329,36 @@ impl EditorApp {
         }
     }
 
-    /// Browser-like workspace tabs.
-    fn workspace_tabs(&mut self, ui: &mut egui::Ui) {
+    /// Browser-like workspace tabs. They scroll inside the room the top bar
+    /// gives them (`width`); the "+" button stays visible after them.
+    fn workspace_tabs(&mut self, ui: &mut egui::Ui, width: f32) {
         let mut action = None;
+        let count = self.layout.workspaces.len();
+        // Bring the active tab into view when it changes (a click, a new one).
+        let seen = ui.id().with("ws-seen");
+        let reveal =
+            ui.data(|d| d.get_temp::<(usize, usize)>(seen)) != Some((self.layout.active, count));
+        ui.data_mut(|d| d.insert_temp(seen, (self.layout.active, count)));
+        let plus_w = 34.0;
+        egui::ScrollArea::horizontal()
+            .id_salt("ws-tabs")
+            .max_width((width - plus_w).max(0.0))
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                self.workspace_tab_list(ui, &mut action, reveal);
+            });
+        menu(ui, "+", |ui| self.new_workspace_menu(ui)).on_hover_text("New Workspace");
+        if let Some(action) = action {
+            self.apply_ws(action);
+        }
+    }
+
+    fn workspace_tab_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        action: &mut Option<WsAction>,
+        reveal: bool,
+    ) {
         let count = self.layout.workspaces.len();
         for i in 0..count {
             if let Some((ri, name)) = &mut self.renaming
@@ -321,34 +389,37 @@ impl EditorApp {
             let tab = ui
                 .add(anim::button(ui, text, active))
                 .on_hover_text("Double-click to rename, middle-click to close");
+            if active && reveal {
+                tab.scroll_to_me(None);
+            }
             if tab.clicked() {
-                action = Some(WsAction::Activate(i));
+                *action = Some(WsAction::Activate(i));
             }
             if tab.double_clicked() {
-                action = Some(WsAction::StartRename(i));
+                *action = Some(WsAction::StartRename(i));
             }
             if tab.middle_clicked() {
-                action = Some(WsAction::Close(i));
+                *action = Some(WsAction::Close(i));
             }
             tab.context_menu(|ui| {
                 if ui.button("Rename").clicked() {
-                    action = Some(WsAction::StartRename(i));
+                    *action = Some(WsAction::StartRename(i));
                 }
                 if ui.button("Duplicate").clicked() {
-                    action = Some(WsAction::Duplicate(i));
+                    *action = Some(WsAction::Duplicate(i));
                 }
                 if i > 0 && ui.button("◀ Move Left").clicked() {
-                    action = Some(WsAction::Move(i, i - 1));
+                    *action = Some(WsAction::Move(i, i - 1));
                 }
                 if i + 1 < count && ui.button("Move Right ▶").clicked() {
-                    action = Some(WsAction::Move(i, i + 1));
+                    *action = Some(WsAction::Move(i, i + 1));
                 }
                 ui.separator();
                 if ui
                     .add_enabled(count > 1, egui::Button::new("Close"))
                     .clicked()
                 {
-                    action = Some(WsAction::Close(i));
+                    *action = Some(WsAction::Close(i));
                 }
             });
             if active
@@ -358,12 +429,8 @@ impl EditorApp {
                     .on_hover_text("Close workspace")
                     .clicked()
             {
-                action = Some(WsAction::Close(i));
+                *action = Some(WsAction::Close(i));
             }
-        }
-        menu(ui, "+", |ui| self.new_workspace_menu(ui)).on_hover_text("New Workspace");
-        if let Some(action) = action {
-            self.apply_ws(action);
         }
     }
 
@@ -818,7 +885,13 @@ impl EditorApp {
             .fill(palette.bg)
             .inner_margin(egui::Margin::symmetric(10, 6));
         egui::Panel::top("top").frame(bar).show(ui, |ui| {
-            let mut tabs_end = 0.0;
+            // Left to right: logo, menus, workspace tabs; then the play
+            // controls (centred over the window when there is room) and the
+            // gear at the right edge. The tabs get whatever lies between the
+            // menus and the play controls and scroll when there are more.
+            let bar = ui.max_rect();
+            let gear_left = bar.right() - GEAR_W;
+            let mut rects = TopBarRects::default();
             egui::MenuBar::new().ui(ui, |ui| {
                 // The wordmark, painted from the logo geometry (STYLE.md §9).
                 ui.add_space(2.0);
@@ -826,39 +899,58 @@ impl EditorApp {
                 ui.add_space(10.0);
                 self.menus(ui);
                 ui.add_space(10.0);
-                self.workspace_tabs(ui);
-                tabs_end = ui.cursor().left();
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let open = self.state.settings_page.is_some();
-                    if ui
-                        .add(anim::button(ui, RichText::new("⚙").size(16.0), open))
-                        .on_hover_text("Settings (Ctrl+,)")
-                        .clicked()
-                    {
-                        self.state.settings_page = if open {
-                            None
-                        } else {
-                            Some(crate::settings::Page::default())
-                        };
-                    }
-                });
+                let start = ui.cursor().left();
+                rects.menus_end = start;
+                let play_left = (bar.center().x - PLAY_W / 2.0)
+                    .max(start + MIN_TABS_W + BAR_GAP)
+                    .min(gear_left - BAR_GAP - PLAY_W);
+                let tabs = egui::Rect::from_min_max(
+                    egui::pos2(start, bar.top()),
+                    egui::pos2((play_left - BAR_GAP).max(start), bar.bottom()),
+                );
+                rects.tabs = tabs;
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(tabs)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| {
+                        ui.set_clip_rect(tabs.intersect(ui.clip_rect()));
+                        self.workspace_tabs(ui, tabs.width());
+                    },
+                );
+                rects.play = egui::Rect::from_min_size(
+                    egui::pos2(play_left, bar.top()),
+                    egui::vec2(PLAY_W, bar.height()),
+                );
+                rects.gear =
+                    egui::Rect::from_min_max(egui::pos2(gear_left, bar.top()), bar.right_bottom());
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(rects.play)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| self.play_controls(ui),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(rects.gear)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| {
+                        let open = self.state.settings_page.is_some();
+                        if ui
+                            .add(anim::button(ui, RichText::new("⚙").size(16.0), open))
+                            .on_hover_text("Settings (Ctrl+,)")
+                            .clicked()
+                        {
+                            self.state.settings_page = if open {
+                                None
+                            } else {
+                                Some(crate::settings::Page::default())
+                            };
+                        }
+                    },
+                );
             });
-            // Play controls centred over the window, like Unity; pushed right
-            // when the workspace tabs reach the centre so they never overlap.
-            let mut center = egui::Rect::from_center_size(
-                ui.max_rect().center(),
-                egui::vec2(124.0, ui.max_rect().height()),
-            );
-            let min_left = tabs_end + 16.0;
-            if center.left() < min_left {
-                center = center.translate(egui::vec2(min_left - center.left(), 0.0));
-            }
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(center)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                |ui| self.play_controls(ui),
-            );
+            self.top_bar = rects;
         });
         let status = egui::Frame::new()
             .fill(palette.footer)

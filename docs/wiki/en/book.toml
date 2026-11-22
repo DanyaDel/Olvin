@@ -1,0 +1,26 @@
+[book]
+title = "Olvin Wiki (en)"
+description = "Wiki движка Olvin / Olvin engine wiki"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../../../book/en"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/DanyaDel/Olvin"
+edit-url-template = "https://github.com/DanyaDel/Olvin/edit/main/docs/wiki/en/{path}"
+additional-js = ["theme/lang-switch.js"]
+additional-css = ["theme/wiki.css"]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+site-url = "/Olvin/en/"
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+expand = true

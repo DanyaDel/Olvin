@@ -1,0 +1,4 @@
+.lang-switch { padding: 0 10px; font-weight: 600; align-self: center; text-decoration: none; }
+blockquote.status, .content blockquote { border-inline-start: 4px solid var(--links); }
+.content img { max-width: 100%; height: auto; }
+.content table { width: 100%; }

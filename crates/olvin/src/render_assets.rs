@@ -32,6 +32,8 @@ pub struct RenderAssets {
     /// Materials that live inside other assets (glTF models), by key.
     inline: HashMap<String, (MaterialHandle, MaterialDesc)>,
     errors: HashMap<String, String>,
+    /// The built-in particle sprite, uploaded on first use.
+    soft_circle: Option<TextureHandle>,
 }
 
 /// The renderer registries assets are loaded into.
@@ -51,6 +53,21 @@ impl RenderAssets {
             root,
             ..Default::default()
         }
+    }
+
+    /// The sprite of a particle emitter: the texture at `rel` (sRGB), or, with
+    /// no path or a file that cannot be read, the built-in soft circle.
+    pub fn particle_texture(
+        &mut self,
+        rel: Option<&str>,
+        textures: &mut Textures,
+    ) -> TextureHandle {
+        if let Some(handle) = rel.and_then(|rel| self.texture(rel, true, textures)) {
+            return handle;
+        }
+        *self
+            .soft_circle
+            .get_or_insert_with(|| textures.add(olvin_render::soft_circle_texture()))
     }
 
     /// The project's `assets/` for a scene file inside it (`assets/scenes/x.scene.ron`).

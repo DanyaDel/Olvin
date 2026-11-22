@@ -39,6 +39,8 @@ pub use olvin_csg as csg;
 #[cfg(feature = "scene")]
 pub mod models;
 #[cfg(feature = "scene")]
+pub mod particles;
+#[cfg(feature = "scene")]
 pub mod render_assets;
 #[cfg(feature = "scene")]
 pub mod scene_file;

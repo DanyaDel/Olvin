@@ -327,6 +327,9 @@ fn spawn_entities(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
         if let Some(c) = &e.rigidbody {
             b.add(c.clone());
         }
+        if let Some(c) = &e.particles {
+            b.add(crate::particles::emitter_in(res, c));
+        }
         if let Some(c) = &e.light {
             b.add(c.clone()).add(runtime_light(c));
         }
@@ -604,6 +607,63 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn spawn_attaches_a_particle_emitter_with_its_texture_or_the_soft_circle() {
+        use olvin_render::{ParticleEmitter, Textures};
+        let dir = std::env::temp_dir().join(format!("olvin_particles_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("fx")).unwrap();
+        // A 4 x 4 uncompressed 32-bit TGA.
+        let mut tga = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 4, 0, 32, 8];
+        tga.extend([0u8, 200, 255, 255].repeat(16));
+        std::fs::write(dir.join("fx/spark.tga"), tga).unwrap();
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        res.insert(Textures::default());
+        res.insert(crate::render_assets::RenderAssets::new(Some(dir.clone())));
+
+        let mut spark = EntityDesc::new(1, "Spark");
+        spark.particles = Some(ParticleDesc {
+            texture: Some("fx/spark.tga".into()),
+            gpu: true,
+            rate: 123.0,
+            rotation: [0.0, 180.0],
+            ..Default::default()
+        });
+        let mut plain = EntityDesc::new(2, "Plain");
+        plain.particles = Some(ParticleDesc::default());
+        let mut missing = EntityDesc::new(3, "Missing");
+        missing.particles = Some(ParticleDesc {
+            texture: Some("nope.png".into()),
+            play_on_awake: false,
+            ..Default::default()
+        });
+        let scene = SceneFile {
+            entities: vec![spark, plain, missing, EntityDesc::new(4, "None")],
+            ..Default::default()
+        };
+        let entities = spawn_ids(&res, &scene);
+        let world = res.fetch::<World>();
+        assert_eq!(world.query::<&ParticleEmitter>().iter().count(), 3);
+        assert!(world.get::<&ParticleEmitter>(entities[&4]).is_err());
+        let get = |id: u64| world.get::<&ParticleEmitter>(entities[&id]).unwrap();
+        let (a, b, c) = (get(1), get(2), get(3));
+        assert!(a.params.gpu && a.params.rate == 123.0 && a.playing);
+        assert!((a.params.rotation[1] - std::f32::consts::PI).abs() < 1e-5);
+        assert_eq!(a.params.texture_path.as_deref(), Some("fx/spark.tga"));
+        // The file's texture, the built-in soft circle for no path and for a missing
+        // file (one shared sprite), and "Play On Awake" off.
+
+        assert_ne!(a.texture, b.texture);
+        assert_eq!(b.texture, c.texture);
+        assert!(!c.playing);
+        drop((a, b, c));
+        drop(get);
+        drop(world);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

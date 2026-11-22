@@ -21,7 +21,7 @@
   <img alt="Редактор Olvin" src="docs/screenshots/editor-dark.png" width="100%">
 </p>
 
-<p align="center"><a href="README.en.md">English</a></p>
+<p align="center"><a href="README.en.md">English</a> · <a href="https://danyadel.github.io/Olvin/ru/">Вики</a> · <a href="CONTRIBUTING.md">Контрибьютору</a></p>
 
 ## Что внутри
 
@@ -116,11 +116,14 @@ apps/     sandbox, script_demo, editor_dev
 assets/   логотип и шрифты
 ```
 
+- [Вики](https://danyadel.github.io/Olvin/ru/) ([исходники](docs/wiki/README.md)) — туториал «первая игра», страницы по редактору и движку, справочник Lua API, FAQ.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — что лежит в каждом крейте и как они связаны.
 - [ROADMAP.md](ROADMAP.md) — план до уровня настоящего движка.
 - [STYLE.md](STYLE.md) — цвета, шрифты, движение, тексты. Логотип: [assets/logo/README.md](assets/logo/README.md).
 
 ## Разработка
+
+Подробно: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```sh
 cargo fmt --all --check

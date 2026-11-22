@@ -21,7 +21,7 @@
   <img alt="Olvin editor" src="docs/screenshots/editor-dark.png" width="100%">
 </p>
 
-<p align="center"><a href="README.md">Русский</a></p>
+<p align="center"><a href="README.md">Русский</a> · <a href="https://danyadel.github.io/Olvin/en/">Wiki</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 ## What's inside
 
@@ -116,11 +116,14 @@ apps/     sandbox, script_demo, editor_dev
 assets/   logo and fonts
 ```
 
+- [Wiki](https://danyadel.github.io/Olvin/en/) ([sources](docs/wiki/README.md)): the first-game tutorial, editor and engine pages, the Lua API reference, FAQ.
 - [ARCHITECTURE.md](ARCHITECTURE.en.md): what each crate contains and how they fit together.
 - [ROADMAP.md](ROADMAP.en.md): the plan towards a full engine.
 - [STYLE.md](STYLE.en.md): colours, fonts, motion, copy. Logo: [assets/logo/README.md](assets/logo/README.en.md).
 
 ## Development
+
+In detail: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```sh
 cargo fmt --all --check

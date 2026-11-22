@@ -1,0 +1,18 @@
+// Сцена версии 4: то же, что v3, плюс экземпляры префабов. Дети экземпляра в
+// файле не хранятся: они берутся из префаба, а правки лежат в overrides.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Level", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 10, name: "Crate A", parent: Some(1), position: (2.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/crate.prefab.ron"))),
+        (id: 11, name: "Crate B", parent: Some(1), position: (4.0, 0.0, 0.0), rotation: (0.0, 45.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((
+                asset: "prefabs/crate.prefab.ron",
+                overrides: {"": {"tag": "\"Loot\""}, "2": {"position": "(0.0,2.5,0.0)"}},
+                removed: ["3"],
+            ))),
+        (id: 12, name: "Ribbon", parent: Some(11), position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    ],
+    environment: (shadow_distance: 40.0),
+)

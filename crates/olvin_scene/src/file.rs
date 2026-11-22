@@ -13,6 +13,7 @@ pub use crate::action::{Action, FCurve, Interp, Prop};
 pub use crate::anim::{
     AnimGraphDesc, AnimStateDesc, AnimationDesc, MotionDesc, ParamDesc, TestDesc, TransitionDesc,
 };
+pub use crate::prefab::{PrefabInstance, PrefabNode};
 pub use crate::primitives::Shape;
 use crate::{Camera, Transform};
 
@@ -20,7 +21,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -28,7 +29,7 @@ pub const FORMAT_VERSION: u32 = 3;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
@@ -70,6 +71,11 @@ fn v2_to_v3(scene: &mut SceneFile) {
         }
     }
 }
+
+/// Version 4 adds `EntityDesc::prefab` (prefab instances). Older files have
+/// none, so the data stays as it is; the bump makes version-3 builds refuse new
+/// files instead of spawning empty objects where instances were.
+fn v3_to_v4(_: &mut SceneFile) {}
 
 /// The timeline clip of format versions 1 and 2.
 #[derive(Deserialize)]
@@ -455,6 +461,13 @@ pub struct EntityDesc {
     /// when spawning and kept when the editor saves the scene.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, String>,
+    /// This object is the root of a prefab instance (format version 4): the
+    /// rest of its subtree comes from the asset, see [`crate::prefab`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab: Option<PrefabInstance>,
+    /// In an expanded scene: the instance this object is a node of. Never saved.
+    #[serde(skip)]
+    pub prefab_node: Option<PrefabNode>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -760,6 +773,8 @@ impl EntityDesc {
             audio_listener: false,
             scripts: Vec::new(),
             components: BTreeMap::new(),
+            prefab: None,
+            prefab_node: None,
         }
     }
 
@@ -1359,6 +1374,9 @@ mod tests {
     const V0: &str = include_str!("../tests/fixtures/v0_legacy.scene.ron");
     const V1: &str = include_str!("../tests/fixtures/v1.scene.ron");
     const V2: &str = include_str!("../tests/fixtures/v2.scene.ron");
+    const V3: &str = include_str!("../tests/fixtures/v3.scene.ron");
+    const V4: &str = include_str!("../tests/fixtures/v4.scene.ron");
+    const CRATE_PREFAB: &str = include_str!("../tests/fixtures/crate.prefab.ron");
 
     #[test]
     fn legacy_file_without_version_loads_as_current() {
@@ -1505,6 +1523,50 @@ mod tests {
         // Сборка версии 1 такой файл не открывает, а не теряет модели молча.
         let err = SceneFile::parse_with(V2, 1, &MIGRATIONS[..1]).unwrap_err();
         assert!(err.contains("newer"), "{err}");
+    }
+
+    #[test]
+    fn v3_file_migrates_to_v4_without_prefabs() {
+        let scene = SceneFile::parse(V3).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        assert!(scene.entities.iter().all(|e| e.prefab.is_none()));
+        assert_eq!(scene.animation.frame_end, 49);
+        assert_eq!(scene.animation.eval(5, Prop::Location, 0, 13.0), Some(2.0));
+        // A version-3 build refuses what it would silently lose.
+        let err = SceneFile::parse_with(V4, 3, &MIGRATIONS[..3]).unwrap_err();
+        assert!(err.contains("newer"), "{err}");
+    }
+
+    #[test]
+    fn v4_fixture_reads_prefab_instances() {
+        let scene = SceneFile::parse(V4).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let a = scene.get(10).unwrap().prefab.as_ref().unwrap();
+        assert!(a.is_clean() && a.asset == "prefabs/crate.prefab.ron");
+        let b = scene.get(11).unwrap().prefab.as_ref().unwrap();
+        assert_eq!(b.removed, ["3"]);
+        assert_eq!(b.overrides[""]["tag"], "\"Loot\"");
+        assert_eq!(b.overrides["2"]["position"], "(0.0,2.5,0.0)");
+        assert!(scene.get(1).unwrap().prefab.is_none());
+        // Written again, it reads back the same (and no expanded state leaks in).
+        let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        assert!(!text.contains("prefab_node"));
+        assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+
+        // The asset is a scene file of its own, and expands into the instances.
+        let asset = SceneFile::parse(CRATE_PREFAB).unwrap();
+        assert_eq!(asset.entities.len(), 3);
+        let mut scene = scene;
+        let warnings = scene.expand_prefabs(&mut |p| {
+            assert_eq!(p, "prefabs/crate.prefab.ron");
+            Ok(asset.clone())
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Level + crate A (3 nodes) + crate B (2 nodes, label removed) + the ribbon.
+        assert_eq!(scene.entities.len(), 1 + 3 + 2 + 1);
+        let lid = scene.get(crate::prefab::member_id(11, 2)).unwrap();
+        assert_eq!(lid.position, Vec3::new(0.0, 2.5, 0.0));
+        assert_eq!(scene.get(11).unwrap().tag, "Loot");
     }
 
     #[test]

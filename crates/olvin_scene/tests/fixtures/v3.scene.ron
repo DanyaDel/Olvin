@@ -1,0 +1,21 @@
+// Сцена версии 3: то же, что v2, плюс анимация объектов (F-кривые).
+(
+    version: 3,
+    entities: [
+        (id: 1, name: "Level", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 2, name: "Player", parent: Some(1), position: (1.0, 0.0, 2.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0), scripts: [(name: "PlayerMove", params: {"speed": "4.5"})]),
+        (id: 5, name: "Crate", position: (2.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            model: Some((path: "models/crate.gltf")),
+            collider: Some((shape: Mesh, center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+    ],
+    animation: (
+        frame_end: 49,
+        curves: [
+            (object: 5, prop: Location, index: 0, keys: [
+                (frame: 1.0, value: 0.0, left: (0.0, 0.0), right: (9.0, 0.0), interp: Linear),
+                (frame: 25.0, value: 4.0, left: (17.0, 4.0), right: (33.0, 4.0), interp: Linear),
+            ]),
+        ],
+    ),
+    environment: (shadow_distance: 40.0),
+)

@@ -1,0 +1,9 @@
+// Префаб: свои id, один корень и его дети.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Crate", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0), mesh: Some((shape: Cube, color: (0.6, 0.4, 0.2, 1.0)))),
+        (id: 2, name: "Lid", parent: Some(1), position: (0.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 0.2, 1.0), mesh: Some((shape: Cube, color: (0.7, 0.5, 0.3, 1.0)))),
+        (id: 3, name: "Label", parent: Some(2), position: (0.0, 0.0, 1.0), rotation: (0.0, 0.0, 0.0), scale: (0.5, 0.5, 0.1)),
+    ],
+)

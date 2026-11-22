@@ -7,6 +7,8 @@ pub mod anim;
 pub mod file;
 #[cfg(feature = "serde")]
 pub mod material;
+#[cfg(feature = "serde")]
+pub mod prefab;
 pub mod primitives;
 
 use glam::camera::rh::{proj::directx, view};
@@ -19,6 +21,12 @@ pub struct Name(pub String);
 /// Unity-style tag ("Player", "Respawn", ...).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tag(pub String);
+
+/// On the root of a spawned prefab instance (and of prefabs inside it): the
+/// prefab asset, a path relative to the project's `assets/`. Gameplay code
+/// finds instances with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrefabInstanceOf(pub String);
 
 /// Triangle geometry in the entity's local space, for mesh colliders.
 #[derive(Clone, Debug, Default)]

@@ -38,13 +38,13 @@ Goal: what has been written is reliable, and the documentation does not lie.
 ## Phase 1. Core: what a game cannot be built without (P1)
 
 - [x] **Asset systems with handles and reference counting**: unloading unused assets, async loading, dependencies (mesh → material → texture), rebuilding on hot reload. `olvin_assets` with `.meta` and GUIDs already exists, but there is no runtime manager. (L) — `AssetManager` (handles, refcounts, worker threads, dependencies, hot reload); `olvin::models::ModelPlugin` loads scene models through it, renderer textures still go through `render_assets`.
-- [ ] **Prefabs**: `olvin_scene` has no notion of a prefab yet (2 mentions). Needed: save an object as a prefab, instantiate it, override fields, update all instances. (L)
+- [x] **Prefabs**: `olvin_scene` has no notion of a prefab yet (2 mentions). Needed: save an object as a prefab, instantiate it, override fields, update all instances. (L) — scene format v4: `*.prefab.ron` (an ordinary `SceneFile`), `EntityDesc::prefab` with per-field overrides (`overrides`, `removed`), nested prefabs with a cycle guard, `scene_file::instantiate_prefab`; instances follow changes to the prefab. Overrides are per whole field, not sub-field.
 - [x] **Versioned scene format**: a version field, migrations when the format changes, a separate test on old files. (M) — `FORMAT_VERSION`, `MIGRATIONS` in `olvin_scene::file`, tests on old files.
 - [x] **Scene and state management**: loading a scene in the background, transitions between scenes (menu, game, pause), states with enter and exit. (M) — `olvin_game`: `State<S>` with enter/exit, background `SceneLoader`.
 - [x] **Time**: fixed step for physics, time scale, pause, a deterministic step for tests. `Time` exists, but without a fixed step. (S) — `olvin_core::time`: scale, pause, `step`, fixed delta.
 - [x] **Events between systems**: a typed event queue (currently, it seems, done manually through resources). (S) — `Events<T>` + `EventCursor`, `App::add_event`.
 - [ ] **Parallel scheduler** (item 4 of the old plan, rayon) for systems with no resource overlap. Do it once real systems exist and profiling shows the bottleneck. (M)
-- [ ] **Profiler**: integration with tracy or puffin, a frame panel in the editor (system times, draw calls, triangles). (M)
+- [x] **Profiler**: integration with tracy or puffin, a frame panel in the editor (system times, draw calls, triangles). (M) — puffin behind the `profile` feature (scopes on systems, stages, render, physics, scripts), `OLVIN_PROFILE_HTTP` for `puffin_viewer`; the panel is in the editor (see below).
 - [x] **Saving and loading the game** (a layer separate from scenes): component serialisation through a type registry, save slots. (M) — `olvin_game::save`: `SaveRegistry`, `SaveSlots`. Since 2026-11-21 engine state registers itself (`register_engine`: `Transform`, velocities, the controller, `Behaviour::save_state`), keyed by `SceneId` by default; Lua state is not saved.
 - [ ] **Localisation**: string tables with keys and a fallback language. (S)
 
@@ -55,9 +55,9 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [~] **Skeletal animation**: glTF skins are currently ignored (`olvin_assets/model.rs`, "skin ignored (static pose)"). Needed: GPU skinning, animation import, clips, playback. (L) [P1] — partial: models and animators in the scene format (v2, `ModelPlugin`), the editor shows the model in its default pose; skinning runs on the CPU, models don't animate in the editor or Play.
 - [x] **Blending and animation graph** at runtime: `Animator` currently exists only in the editor. Transitions, layers, parameters, per-frame events. (L) [P2] — `olvin_anim::graph`: transitions, layers, params, clip events.
 - [ ] **Morph targets** (blend shapes) for character faces. (M) [P2]
-- [~] **Shadows**: currently one shadow map (`shadow_map`). Cascades for directional light, PCF/PCSS, soft shadows for point and spot lights. (M) [P1] — partial: sun cascades (up to 4) with PCF and Soft; no point/spot shadows, no PCSS.
+- [~] **Shadows**: currently one shadow map (`shadow_map`). Cascades for directional light, PCF/PCSS, soft shadows for point and spot lights. (M) [P1] — partial: sun cascades (up to 4) with PCF/Soft/PCSS, spot shadows (up to 4) and point shadows (up to 2; 2 and 1 on Compat) through a map atlas with no cube arrays, `Light.shadows`/`shadow_bias`; PCSS is sun-only and Full-only (PCF on Compat), noisy in wide penumbras, `Light.size` has no effect on spot and point lights.
 - [ ] **Clustered lighting**: currently up to 16 sources. Grid clusters in the view volume, so that scenes with hundreds of lights do not fall over. (L) [P2]
-- [~] **Post-processing**: a separate stack of passes. Bloom, SSAO or GTAO, TAA or FXAA, colour grading through a LUT, height fog. ACES already exists. (M) [P1] — partial: HDR, bloom, exposure, ACES; no SSAO/GTAO, TAA/FXAA, LUT, height fog.
+- [~] **Post-processing**: a separate stack of passes. Bloom, SSAO or GTAO, TAA or FXAA, colour grading through a LUT, height fog. ACES already exists. (M) [P1] — partial: HDR, bloom, ACES, FXAA 3.11 (on), GTAO (off by default), colour grading (lift/gamma/gain, saturation, contrast, LUT), height fog (every tier); all but the fog are Full-only and not visible in the editor viewport (it draws inside egui's single MSAA pass); no TAA.
 - [x] **Transparency**: sorting and a separate pass for translucent objects, alpha test mask. (M) [P1] — `BlendMode` with a separate sorted pass, `alpha_cutoff`.
 - [ ] **LOD and instancing**: distance LOD, simplification through meshoptimizer (item 3 of the old plan). Compute culling and indirect draw for the Full tier. (L) [P2]
 - [ ] **Reflections and environment**: IBL from HDR (HDR/EXR loading already exists, a convolution into a cubemap is needed), reflection probes. (L) [P2]
@@ -98,7 +98,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 - [x] **Game build command**: `olvin-hub build --release` builds the game, copies the assets, packs them and produces a folder or an archive. There is no build command at all yet. (M) [P1] — `olvin-hub build --release [--archive]`, copies assets, tar.gz/zip.
 - [ ] **Asset packing**: texture compression (KTX2 with BC7 or ASTC), mesh optimisation, one archive file with a table of contents. (L) [P2]
-- [ ] **Desktop**: Windows and macOS in CI with build artefacts, not only Linux. (M) [P1]
+- [~] **Desktop**: Windows and macOS in CI with build artefacts, not only Linux. (M) [P1] — partial: a `desktop` job in `ci.yml` for Windows and macOS (tests, release builds of six binaries, zip artefacts), branch `feat-ci`; not yet run on real runners.
 - [ ] **Web**: wasm and WebGL2 (the architecture plans for it, but there is no build yet): `web-time` instead of `std::time`, asset loading over HTTP. (L) [P2]
 - [ ] **Android**: recreating the surface on suspend and resume, touch input, a build through cargo-ndk. (XL) [P3]
 - [ ] **Engine auto-update** and project version compatibility (migrations when Olvin is updated). (M) [P3]
@@ -109,9 +109,9 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 - [x] **Undo and redo for all operations**: currently present in part of the editor. Check that dragging, the inspector, Edit Mode, CSG and UV are covered. (M) [P1] — verified by editor tests: hierarchy drag, gizmos, the inspector, materials (files roll back with the scene), Edit Mode, CSG, UV, animation; history is frozen during Play. Asset file operations (rename, move, delete) are not undoable.
 - [x] **Play Mode that does not lose edits**: what happens to the scene when playback stops matters. A snapshot of the scene at start and a rollback on stop. (M) [P1] — `start_play`/`stop_play` save and restore the scene (`PlaySession`).
-- [ ] **Prefabs in the editor**: creating, overriding, applying back. Depends on phase 1. (M) [P1]
+- [x] **Prefabs in the editor**: creating, overriding, applying back. Depends on phase 1. (M) [P1] — "Create Prefab" (menu and hierarchy), dragging from the Assets panel into the scene and hierarchy, a Prefab block in the inspector (Open, Select, Revert All, Apply All, Unpack, overridden fields with revert), undo, instances follow the asset, moving and deleting assets keeps references. Viewport picking selects the node, not the instance root.
 - [~] **Material editor**: the `*.mat.ron` contracts exist (M1), a visual editor with a preview is needed. (M) [P2] — partial: in-inspector material editor with presets; no preview.
-- [ ] **Profiler and statistics panel** (see phase 1). (S) [P2]
+- [x] **Profiler and statistics panel** (see phase 1). (S) [P2] — the Profiler panel: frame graph, draw calls, instances, culled, triangles, a systems table (`olvin_editor_profiler`).
 - [x] **Animation editor**: connect Animator to the runtime after phase 2. (L) [P2] — a Blender-like animator: F-curves with Auto Clamped Bezier (Blender's maths ported), Timeline, Dope Sheet, Graph Editor, I/Alt+I and key colours in the inspector; scene format v3 (`SceneFile::animation`), played in games and Play by `olvin_anim::ActionPlayer`. Missing: auto-keying, markers, Normalize, animating anything but Transform; rotation order is YXZ, not XYZ.
 - [~] **Search in the scene and assets**, filters in the console. (S) [P2] — partial: filters in the assets panel and the console; no hierarchy search.
 - [ ] **Multi-scene**: open several scenes at once and switch between them. (M) [P3]

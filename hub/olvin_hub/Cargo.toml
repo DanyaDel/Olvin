@@ -12,6 +12,7 @@ toml.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
+olvin_library = { path = "../../crates/olvin_library" }
 serde_json = "1"
 flate2 = "1"
 tar = { version = "0.4", default-features = false }

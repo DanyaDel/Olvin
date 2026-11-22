@@ -6,7 +6,8 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use olvin_hub::{
-    ArchiveFormat, BuildOptions, Catalog, EditorInstall, EngineSource, HubConfig, Project,
+    ArchiveFormat, BuildOptions, Catalog, Category, EditorInstall, EngineSource, HubConfig,
+    OnConflict, Project, Status,
 };
 
 /// Text logo for the help header: `Olvin_` with a green underscore cursor
@@ -96,12 +97,57 @@ enum Cmd {
         #[command(subcommand)]
         command: EditorCmd,
     },
+    /// Preset library: ready prefabs, scripts, shaders and looks
+    Library {
+        #[command(subcommand)]
+        command: LibraryCmd,
+    },
     /// Show or change the engine source for new projects
     Engine {
         #[arg(long, conflicts_with = "git")]
         path: Option<PathBuf>,
         #[arg(long)]
         git: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryCmd {
+    /// Packs of the library; [x] marks the ones installed in the project
+    List {
+        /// Words that must appear in the id, name, description or tags
+        query: Vec<String>,
+        /// One category: characters, gameplay, shaders, materials, looks, prefabs, audio, misc
+        #[arg(short, long)]
+        category: Option<String>,
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+    },
+    /// Everything about one pack
+    Show {
+        id: String,
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+    },
+    /// Import a pack (and what it requires) into the project's assets/
+    Add {
+        id: String,
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+        /// On a clash with a different file: overwrite it
+        #[arg(long, conflicts_with_all = ["keep_both", "skip"])]
+        replace: bool,
+        /// On a clash: write the pack's file next to it with a -2 suffix
+        #[arg(long, conflicts_with = "skip")]
+        keep_both: bool,
+        /// On a clash: keep the project's file, import the rest
+        #[arg(long)]
+        skip: bool,
+    },
+    /// Packs installed in the project (library.lock.ron)
+    Installed {
+        #[arg(short, long)]
+        project: Option<PathBuf>,
     },
 }
 
@@ -294,6 +340,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{} was not in the list", path.display());
             }
         }
+        Cmd::Library { command } => library(command)?,
         Cmd::Editor { command } => editor(command, &catalog, &HubConfig::load()?)?,
         Cmd::Engine { path, git } => {
             let mut config = HubConfig::load()?;
@@ -308,6 +355,111 @@ fn run(cli: Cli) -> Result<()> {
                 config.save()?;
             }
             println!("engine: {}", config.engine);
+        }
+    }
+    Ok(())
+}
+
+fn library(command: LibraryCmd) -> Result<()> {
+    match command {
+        LibraryCmd::List {
+            query,
+            category,
+            project,
+        } => {
+            let project = open(project.as_deref()).ok();
+            let category = category
+                .as_deref()
+                .map(|c| Category::parse(c).with_context(|| format!("unknown category `{c}`")))
+                .transpose()?;
+            let library = olvin_hub::library_for(project.as_ref());
+            for problem in library.problems() {
+                eprintln!("warning: {problem}");
+            }
+            let rows =
+                olvin_hub::library_rows(&library, project.as_ref(), &query.join(" "), category);
+            let mut last = None;
+            for row in &rows {
+                if last != Some(row.category) {
+                    println!("{}", row.category);
+                    last = Some(row.category);
+                }
+                let mark = match &row.status {
+                    Some(Status::NotInstalled) => "[ ]",
+                    Some(_) => "[x]",
+                    None => "  -",
+                };
+                println!(
+                    "  {mark} {:<24} {:<7} {} — {}",
+                    row.id, row.version, row.name, row.description
+                );
+            }
+            if rows.is_empty() {
+                println!("No packs match.");
+            }
+            if project.is_none() {
+                println!("\n(outside a project: install marks not shown)");
+            }
+        }
+        LibraryCmd::Show { id, project } => {
+            let project = open(project.as_deref()).ok();
+            let library = olvin_hub::library_for(project.as_ref());
+            print!(
+                "{}",
+                olvin_hub::library_describe(&library, &id, project.as_ref())?
+            );
+        }
+        LibraryCmd::Add {
+            id,
+            project,
+            replace,
+            keep_both,
+            skip,
+        } => {
+            let project = open(project.as_deref())?;
+            let library = olvin_hub::library_for(Some(&project));
+            let policy = if replace {
+                OnConflict::Replace
+            } else if keep_both {
+                OnConflict::KeepBoth
+            } else if skip {
+                OnConflict::Skip
+            } else {
+                OnConflict::Abort
+            };
+            let report = olvin_hub::library_add(&library, &project, &id, policy)?;
+            for pack in &report.packs {
+                println!(
+                    "{} {}: {} added, {} replaced, {} renamed, {} identical, {} kept",
+                    pack.id,
+                    pack.version,
+                    pack.added.len(),
+                    pack.replaced.len(),
+                    pack.renamed.len(),
+                    pack.identical.len(),
+                    pack.skipped.len()
+                );
+                for (from, to) in &pack.renamed {
+                    println!("  {from} -> {to}");
+                }
+            }
+            for w in &report.warnings {
+                eprintln!("warning: {w}");
+            }
+            for (pack, notes) in &report.notes {
+                println!("\n{pack}: {notes}");
+            }
+        }
+        LibraryCmd::Installed { project } => {
+            let project = open(project.as_deref())?;
+            let packs = olvin_hub::library_installed(&project)?;
+            if packs.is_empty() {
+                println!("No packs installed. Browse them: olvin-hub library list");
+            }
+            for (id, version, explicit, files) in packs {
+                let how = if explicit { "" } else { " (dependency)" };
+                println!("{id:<24} {version:<7} {files} files{how}");
+            }
         }
     }
     Ok(())

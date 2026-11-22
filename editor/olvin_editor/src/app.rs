@@ -497,7 +497,7 @@ impl EditorApp {
         };
         let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
         ui.painter().circle_filled(dot.center(), 3.0, color);
-        ui.label(theme::caps(label).color(if play.paused { p.muted } else { p.accent }));
+        ui.label(theme::caps(ui.ctx(), label).color(if play.paused { p.muted } else { p.accent }));
         ui.separator();
     }
 
@@ -772,6 +772,7 @@ impl eframe::App for EditorApp {
 impl EditorApp {
     /// One editor frame: shortcuts, top bar, status bar, dock, windows.
     fn frame(&mut self, ui: &mut egui::Ui) {
+        olvin::core::profile_scope!("editor frame");
         let ctx = ui.ctx().clone();
 
         if ctx.input(|i| i.viewport().close_requested())

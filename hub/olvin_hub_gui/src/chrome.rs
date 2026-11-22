@@ -101,7 +101,7 @@ pub fn page_header(ui: &mut Ui, title: &str, subtitle: &str, actions: impl FnOnc
 pub fn section(ui: &mut Ui, text: &str) {
     let p = ui::palette(ui.ctx());
     ui.add_space(6.0);
-    ui.label(ui::caps(text).color(p.muted));
+    ui.label(ui::caps(ui.ctx(), text).color(p.muted));
     ui.add_space(4.0);
 }
 

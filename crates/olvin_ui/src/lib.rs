@@ -13,8 +13,6 @@
 //! olvin_ui::logo::wordmark(ui, 18.0);
 //! ```
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-
 use egui::{
     Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, RichText, Shadow,
     Stroke, TextStyle, Visuals,
@@ -286,6 +284,7 @@ impl ThemeKind {
         }
     }
 
+    #[cfg(test)]
     fn from_u8(v: u8) -> Self {
         Self::ALL.get(v as usize).copied().unwrap_or_default()
     }
@@ -312,11 +311,6 @@ fn motion_id() -> Id {
     Id::new("olvin_ui::reduce_motion")
 }
 
-/// Last applied theme, process-wide, for helpers without a context
-/// ([`caps`]). One UI per process in practice; the context copy wins.
-static LAST_KIND: AtomicU8 = AtomicU8::new(0);
-static LAST_REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
-
 /// The palette [`apply`] installed, or [`Palette::DARK`] before that.
 pub fn palette(ctx: &egui::Context) -> Palette {
     ctx.data(|d| d.get_temp::<Current>(current_id()))
@@ -331,23 +325,16 @@ pub fn kind(ctx: &egui::Context) -> ThemeKind {
         .kind
 }
 
-/// The palette of the last [`apply`] anywhere in the process, for code that
-/// has no context at hand. Prefer [`palette`].
-pub fn last_palette() -> Palette {
-    ThemeKind::from_u8(LAST_KIND.load(Ordering::Relaxed)).palette()
-}
-
 /// STYLE.md §7 "reduce motion": no transitions, no blinking cursor. Also
 /// sets egui's own `animation_time` (menu fade-in, collapsing headers) to 0.
 pub fn set_reduce_motion(ctx: &egui::Context, on: bool) {
     ctx.data_mut(|d| d.insert_temp(motion_id(), on));
-    LAST_REDUCE_MOTION.store(on, Ordering::Relaxed);
     ctx.all_styles_mut(|s| s.animation_time = animation_time(on));
 }
 
 pub fn reduce_motion(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(motion_id()))
-        .unwrap_or_else(|| LAST_REDUCE_MOTION.load(Ordering::Relaxed))
+        .unwrap_or(false)
 }
 
 /// egui's built-in fades (popups, windows, collapsing): a quick ease-out.
@@ -421,13 +408,13 @@ pub fn fonts() -> FontDefinitions {
 // --- Text helpers ---
 
 /// `--fs-xs` label: UPPERCASE, bold, 0.06em tracking, `--text-2` of the
-/// current theme. Panel section headings.
-pub fn caps(text: &str) -> RichText {
+/// theme of `ctx`. Panel section headings.
+pub fn caps(ctx: &egui::Context, text: &str) -> RichText {
     RichText::new(text.to_uppercase())
         .size(FS_XS)
         .family(bold())
         .extra_letter_spacing(FS_XS * 0.06)
-        .color(last_palette().text_2)
+        .color(palette(ctx).text_2)
 }
 
 /// `--fs-lg` main menu item: bold, UPPERCASE.
@@ -516,7 +503,6 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     }
     let p = kind.palette();
     ctx.data_mut(|d| d.insert_temp(current_id(), Current { kind, palette: p }));
-    LAST_KIND.store(kind as u8, Ordering::Relaxed);
 
     // Same visuals whatever egui thinks the system theme is.
     let v = visuals(&p);
@@ -660,6 +646,18 @@ mod tests {
         );
         set_reduce_motion(&ctx, false);
         assert!(ctx.global_style().animation_time > 0.0);
+    }
+
+    #[test]
+    fn contexts_do_not_share_theme_or_motion() {
+        let a = egui::Context::default();
+        let b = egui::Context::default();
+        apply(&a, ThemeKind::Light);
+        set_reduce_motion(&a, true);
+        assert_eq!(kind(&b), ThemeKind::Dark);
+        assert!(!reduce_motion(&b));
+        assert_eq!(palette(&b), Palette::DARK);
+        assert_eq!(palette(&a), Palette::LIGHT);
     }
 
     #[test]

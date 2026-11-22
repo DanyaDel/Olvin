@@ -104,7 +104,7 @@ fn title(ui: &mut Ui, title: &str, subtitle: &str) -> bool {
 fn caps(ui: &mut Ui, text: &str) {
     let p = ui::palette(ui.ctx());
     ui.add_space(4.0);
-    ui.label(ui::caps(text).color(p.muted));
+    ui.label(ui::caps(ui.ctx(), text).color(p.muted));
     ui.add_space(2.0);
 }
 

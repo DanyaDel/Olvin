@@ -53,7 +53,7 @@ fn sample(ui: &mut egui::Ui, kind: ThemeKind) {
                 .corner_radius(olvin_ui::RADIUS_MD)
                 .inner_margin(Margin::same(12))
                 .show(ui, |ui| {
-                    ui.label(olvin_ui::caps("Transform"));
+                    ui.label(olvin_ui::caps(ui.ctx(), "Transform"));
                     ui.label(RichText::new(kind.label()).heading());
                     ui.label("Main text: the quick brown fox.");
                     ui.weak("Muted: secondary labels.");

@@ -833,7 +833,7 @@ pub(crate) fn section(
             );
             ui.horizontal(|ui| {
                 open.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-                ui.label(theme::caps(title));
+                ui.label(theme::caps(ui.ctx(), title));
                 if let Some((slot, key)) = remove {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui

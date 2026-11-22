@@ -1,8 +1,8 @@
 //! Post-processing on the HDR frame (Full tier): the scene is drawn into an
 //! `Rgba16Float` target without tonemapping, then a short chain of
 //! fullscreen passes adds bloom, applies exposure and the tonemapper, and
-//! writes the surface. Compat hardware skips all of this and tonemaps in the
-//! mesh shader.
+//! writes the surface (through FXAA when it is on). Compat hardware skips all
+//! of this and tonemaps in the mesh shader.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -10,6 +10,22 @@ use crate::{RenderSettings, Tonemapping};
 
 /// What the scene is drawn into before post-processing.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// Post-processing switches of [`RenderSettings`]. Like bloom, they need the
+/// chain of [`RenderTier::Full`](crate::RenderTier::Full) in the window
+/// renderer and are ignored elsewhere.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PostSettings {
+    /// FXAA 3.11 on the tonemapped image: smooths aliased edges for the cost
+    /// of one extra fullscreen pass.
+    pub fxaa: bool,
+}
+
+impl Default for PostSettings {
+    fn default() -> Self {
+        Self { fxaa: true }
+    }
+}
 
 /// Uniform of post.wgsl (three vec4).
 #[repr(C)]
@@ -36,6 +52,9 @@ struct Targets {
     blur_h: wgpu::BindGroup,
     blur_v: wgpu::BindGroup,
     composite: wgpu::BindGroup,
+    /// Tonemapped frame in the output's format, input of FXAA.
+    ldr: wgpu::TextureView,
+    fxaa: wgpu::BindGroup,
 }
 
 /// The HDR target and the bloom / tonemap passes. Owned by the window
@@ -47,12 +66,14 @@ pub struct PostProcess {
     down: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
+    fxaa: wgpu::RenderPipeline,
     /// Parameter buffers: main (composite, bright-pass), horizontal and
     /// vertical blur.
     main: wgpu::Buffer,
     horizontal: wgpu::Buffer,
     vertical: wgpu::Buffer,
     encode_srgb: bool,
+    output: wgpu::TextureFormat,
     targets: Option<Targets>,
 }
 
@@ -131,6 +152,7 @@ impl PostProcess {
             down: pipeline("fs_down", HDR_FORMAT),
             blur: pipeline("fs_blur", HDR_FORMAT),
             composite: pipeline("fs_composite", output),
+            fxaa: pipeline("fs_fxaa", output),
             main: uniform("post params"),
             horizontal: uniform("post blur h"),
             vertical: uniform("post blur v"),
@@ -144,6 +166,7 @@ impl PostProcess {
             }),
             layout,
             encode_srgb: !output.is_srgb(),
+            output,
             targets: None,
         }
     }
@@ -155,7 +178,7 @@ impl PostProcess {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
-        let target = |label, (w, h): (u32, u32)| {
+        let target = |label, format, (w, h): (u32, u32)| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -167,17 +190,18 @@ impl PostProcess {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: HDR_FORMAT,
+                    format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 })
                 .create_view(&Default::default())
         };
-        let hdr = target("post hdr", size);
-        let half = target("post half", (size.0 / 2, size.1 / 2));
-        let quarter = target("post quarter", (size.0 / 4, size.1 / 4));
-        let quarter_blur = target("post quarter blur", (size.0 / 4, size.1 / 4));
+        let hdr = target("post hdr", HDR_FORMAT, size);
+        let half = target("post half", HDR_FORMAT, (size.0 / 2, size.1 / 2));
+        let quarter = target("post quarter", HDR_FORMAT, (size.0 / 4, size.1 / 4));
+        let quarter_blur = target("post quarter blur", HDR_FORMAT, (size.0 / 4, size.1 / 4));
+        let ldr = target("post ldr", self.output, size);
         let bind =
             |params: &wgpu::Buffer, source: &wgpu::TextureView, bloom: &wgpu::TextureView| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -211,6 +235,8 @@ impl PostProcess {
             blur_h: bind(&self.horizontal, &quarter, &half),
             blur_v: bind(&self.vertical, &quarter_blur, &half),
             composite: bind(&self.main, &hdr, &quarter),
+            fxaa: bind(&self.main, &ldr, &quarter),
+            ldr,
             half,
             quarter,
             quarter_blur,
@@ -224,7 +250,8 @@ impl PostProcess {
     }
 
     /// Records the chain from the HDR frame into `output`. Bloom runs when
-    /// `settings.bloom` is set; exposure and the tonemapper always.
+    /// `settings.bloom` is set, FXAA when `settings.post.fxaa` is; exposure
+    /// and the tonemapper always.
     pub fn run(
         &self,
         queue: &wgpu::Queue,
@@ -269,7 +296,12 @@ impl PostProcess {
             pass(encoder, &t.quarter_blur, &self.blur, &t.blur_h);
             pass(encoder, &t.quarter, &self.blur, &t.blur_v);
         }
-        pass(encoder, output, &self.composite, &t.composite);
+        if settings.post.fxaa {
+            pass(encoder, &t.ldr, &self.composite, &t.composite);
+            pass(encoder, output, &self.fxaa, &t.fxaa);
+        } else {
+            pass(encoder, output, &self.composite, &t.composite);
+        }
     }
 }
 

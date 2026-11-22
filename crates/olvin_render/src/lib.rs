@@ -33,7 +33,7 @@ pub use particles::{
     Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
     update_emitters,
 };
-pub use post::{HDR_FORMAT, PostProcess};
+pub use post::{HDR_FORMAT, PostProcess, PostSettings};
 pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
 pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
@@ -194,6 +194,8 @@ pub struct RenderSettings {
     /// Bloom; needs the post-processing chain of [`RenderTier::Full`] in the
     /// window renderer, ignored elsewhere.
     pub bloom: Option<Bloom>,
+    /// FXAA and the other post-processing passes (Full tier, window renderer).
+    pub post: PostSettings,
     /// How far from the camera the sun's shadows reach (metres).
     pub shadow_distance: f32,
     /// Shadow map resolution (square); clamped to the device's limit.
@@ -236,6 +238,7 @@ impl Default for RenderSettings {
             tonemapping: Tonemapping::Aces,
             fog: None,
             bloom: None,
+            post: PostSettings::default(),
             shadow_distance: 60.0,
             shadow_map_size: 2048,
             shadow_cascades: 4,

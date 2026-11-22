@@ -2,9 +2,35 @@
 
 use super::*;
 
-/// An emissive 8.0 square in the middle of a black frame, through the
-/// HDR target and the post chain; returns the output's RGB at (x, y).
-fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] + use<>> {
+/// A frame through the HDR target and the post chain.
+struct Frame {
+    pixels: Vec<u8>,
+}
+
+impl Frame {
+    fn at(&self, x: u32, y: u32) -> [u8; 3] {
+        let i = ((y * SIZE + x) * 4) as usize;
+        [self.pixels[i], self.pixels[i + 1], self.pixels[i + 2]]
+    }
+
+    /// Pixels that are neither black nor white (soft edges).
+    fn grey_pixels(&self) -> usize {
+        (0..SIZE * SIZE)
+            .filter(|i| {
+                let l = self.at(i % SIZE, i / SIZE)[0];
+                (40..215).contains(&l)
+            })
+            .count()
+    }
+}
+
+/// Draws the world `build` makes (the camera included) the way the window
+/// renderer does on the Full tier, and reads the output back. `None` without
+/// a GPU.
+fn post_world(
+    settings: &RenderSettings,
+    build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
+) -> Option<Frame> {
     let (device, queue) = device()?;
     let mut core = RenderCore::new(
         device.clone(),
@@ -22,19 +48,8 @@ fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] 
         Materials::default(),
     );
     let (mut textures, mut shaders) = (Textures::default(), Shaders::default());
-    let quad = meshes.add(MeshData::plane(1.0));
-    let glow = materials.add(Material {
-        base_color: Color::BLACK,
-        emissive: [8.0; 3],
-        unlit: true,
-        ..Default::default()
-    });
     let mut world = World::new();
-    world.spawn((
-        Transform::IDENTITY,
-        MeshRenderer::new(quad, Color::WHITE).with_material(glow),
-    ));
-    world.spawn(top_down_camera(8.0));
+    build(&mut meshes, &mut materials, &mut world);
     core.upload(&mut gpu, &mut meshes);
     core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
     let mut view = core.create_view();
@@ -110,10 +125,43 @@ fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] 
         .map_async(wgpu::MapMode::Read, |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
-    Some(move |x: u32, y: u32| {
-        let i = ((y * SIZE + x) * 4) as usize;
-        [pixels[i], pixels[i + 1], pixels[i + 2]]
-    })
+    Some(Frame { pixels })
+}
+
+/// An emissive 8.0 square in the middle of a black frame, through the
+/// HDR target and the post chain; returns the output's RGB at (x, y).
+fn post_frame(settings: &RenderSettings) -> Option<impl Fn(u32, u32) -> [u8; 3] + use<>> {
+    let frame = post_world(settings, |meshes, materials, world| {
+        let quad = meshes.add(MeshData::plane(1.0));
+        let glow = materials.add(Material {
+            base_color: Color::BLACK,
+            emissive: [8.0; 3],
+            unlit: true,
+            ..Default::default()
+        });
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(quad, Color::WHITE).with_material(glow),
+        ));
+        world.spawn(top_down_camera(8.0));
+    })?;
+    Some(move |x: u32, y: u32| frame.at(x, y))
+}
+
+/// A white unlit square turned 25 degrees on black: a hard, aliased edge.
+fn tilted_square(meshes: &mut Meshes, materials: &mut Materials, world: &mut World) {
+    let quad = meshes.add(MeshData::plane(1.0));
+    let white = materials.add(Material {
+        base_color: Color::BLACK,
+        emissive: [1.0; 3],
+        unlit: true,
+        ..Default::default()
+    });
+    world.spawn((
+        Transform::IDENTITY.with_rotation(glam::Quat::from_rotation_y(25f32.to_radians())),
+        MeshRenderer::new(quad, Color::WHITE).with_material(white),
+    ));
+    world.spawn(top_down_camera(3.0));
 }
 
 #[test]
@@ -164,4 +212,43 @@ fn post_chain_tonemaps_the_hdr_frame_and_blooms() {
     assert!(luma(glow) > 60, "{glow:?}");
     // Far from it, still dark.
     assert!(luma(bloomed(2, 2)) < luma(glow), "{:?}", bloomed(2, 2));
+}
+
+#[test]
+fn fxaa_smooths_a_hard_edge_and_leaves_flat_areas() {
+    let off = RenderSettings {
+        clear_color: Color::BLACK,
+        tonemapping: Tonemapping::None,
+        post: crate::PostSettings { fxaa: false },
+        ..Default::default()
+    };
+    let on = RenderSettings {
+        post: crate::PostSettings { fxaa: true },
+        ..off.clone()
+    };
+    let (Some(hard), Some(soft)) = (
+        post_world(&off, tilted_square),
+        post_world(&on, tilted_square),
+    ) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    // Without FXAA the edge is a staircase of black and white.
+    assert!(hard.grey_pixels() < 4, "{}", hard.grey_pixels());
+    // With it, the staircase is blended into greys, which a flat image has none of.
+    assert!(
+        soft.grey_pixels() > hard.grey_pixels() + 10,
+        "{} vs {}",
+        soft.grey_pixels(),
+        hard.grey_pixels()
+    );
+    // Flat areas stay exactly as they were.
+    for (x, y) in [
+        (2, 2),
+        (SIZE - 3, 5),
+        (SIZE / 2, SIZE / 2),
+        (SIZE / 2 + 3, SIZE / 2 - 2),
+    ] {
+        assert_eq!(soft.at(x, y), hard.at(x, y), "({x}, {y})");
+    }
 }

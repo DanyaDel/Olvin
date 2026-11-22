@@ -130,6 +130,16 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 ---
 
+## Phase 7. Growth: library, wiki, collaboration (team ideas)
+
+Suggestions from users and the NLPA team. The first two are being built now, the rest are dreams for later; keep them in mind while designing (stable `SceneId`s, a serialisable scene, events through `Events<T>`).
+
+- [ ] **Preset library** (like the Unity Asset Store, but built in and offline): packs in a `library/` folder with a `pack.ron` manifest; a "Library" panel in the editor (search, categories, previews, "Import") copies files into the project's `assets/`, keeping GUIDs and dependencies; a `library` module in the hub. First packs: character controllers (first person, third person, top down) with Lua scripts, gameplay scripts (door, pickup, health and damage, checkpoint, moving platform, patrol and chase, spawner, camera shake), ready shaders (toon, outline, hologram, dissolve, water), materials, picture "filters" (looks). (L) [P1 for the first release]
+- [ ] **Wiki** in the spirit of the Arch Wiki and Hyprland Wiki: one page per topic, cross-links, search, FAQ and troubleshooting, a Lua API reference, a "first game in an hour" guide; Russian is the primary language with an English copy. Book engine: mdBook, published to GitHub Pages. (M) [P1]
+- [ ] **Online package registry**: browse and install library packs over the network, versions and dependencies, signatures, ratings. After the local library settles. (L) [P3]
+- [ ] **Collaborative editing like Roblox Studio**: several people edit one scene in real time, teammates' cursors and selections, per-object locks, change history. The groundwork exists: scene operations are `SceneFile` snapshots with stable `SceneId`s; what is missing is network synchronisation of operations (CRDT or operational transforms) and a session server. (XL) [P3]
+- [ ] **Easy multiplayer**: ready "network object" and "owner" components, replication through `Events<T>` and the save registry, lobbies and joining by room code, presets for typical games (co-op, arena). Tied to the "Networking" item of phase 3 (`olvin_net`). (XL) [P3]
+
 ## Order of work (what to do first)
 
 1. **Phase 0** in full. Without CI and tests, everything after will break unnoticed.

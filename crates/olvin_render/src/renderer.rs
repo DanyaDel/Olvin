@@ -205,12 +205,12 @@ impl Renderer {
             tier: tier_of(&adapter),
         };
 
-        // Ask only for WebGL2-level limits: whatever runs here runs everywhere.
+        // WebGL2-level limits (whatever runs here runs everywhere), plus compute
+        // and storage buffers on native adapters for the GPU particles.
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("olvin"),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: crate::full_tier_limits(&adapter),
                 ..Default::default()
             })
             .await?;

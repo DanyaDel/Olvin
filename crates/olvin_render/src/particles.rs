@@ -1,4 +1,4 @@
-//! CPU particles. A [`ParticleEmitter`] component holds plain serializable
+//! Particles. A [`ParticleEmitter`] component holds plain serializable
 //! parameters ([`EmitterParams`]: rate, bursts, lifetime, speed, emission
 //! shape, gravity, colour and size over life) and the live particles. Each
 //! frame [`update`] steps them in `Stage::PostUpdate`, and the
@@ -6,8 +6,16 @@
 //! draw per texture / blend run. Nothing allocates in the steady state: the
 //! particle storage is reserved up to `max_particles` (at most
 //! [`MAX_RESERVED`] slots; a bigger cap just grows on demand) and swap-removed.
+//!
+//! One API, two simulations ([`ParticleMode`]): on the CPU (every tier) the
+//! emitter owns its particles; on the GPU (Full tier, `EmitterParams::gpu`) the
+//! emitter only schedules births and the compute pass in
+//! [`crate::particles_gpu`] simulates them in a storage buffer, so tens of
+//! thousands cost almost nothing on the CPU.
 
+use std::collections::VecDeque;
 use std::f32::consts::TAU;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Most particle slots reserved up front: `max_particles` comes from files,
 /// and a typo must not turn into a multi-gigabyte allocation.
@@ -15,14 +23,16 @@ pub const MAX_RESERVED: usize = 1 << 16;
 
 use glam::{Mat4, Vec3, Vec4Swizzles};
 use olvin_core::{Resources, Time};
+use olvin_ecs::Entity;
 use olvin_ecs::World;
 use olvin_transform::GlobalTransform;
 
 use crate::core::GpuMeshes;
+use crate::particles_gpu::{self, GpuParticle, GpuSim};
 use crate::quad::{BatchKey, QuadBatcher, QuadBlend, QuadFilter, QuadInstance};
 use olvin_scene::Transform;
 
-use crate::TextureHandle;
+use crate::{TextureData, TextureHandle};
 
 /// Where particles are born, in the emitter's local space; the emission
 /// direction depends on the shape.
@@ -103,6 +113,8 @@ pub struct EmitterParams {
     pub space: SimSpace,
     /// Linear RGBA multiplying `color_over_life`.
     pub color: [f32; 4],
+    /// With a value, each particle picks a random tint between `color` and this.
+    pub color_max: Option<[f32; 4]>,
     /// `(life fraction, RGBA)`, ascending, linearly interpolated; empty = white.
     pub color_over_life: Vec<(f32, [f32; 4])>,
     /// `(life fraction, size multiplier)`, ascending; empty = constant.
@@ -114,8 +126,14 @@ pub struct EmitterParams {
     /// Texture to look up by the scene loader, which sets
     /// [`ParticleEmitter::texture`].
     pub texture_path: Option<String>,
-    /// Random seed: same seed, same sequence.
+    /// Random seed: same seed, same sequence (on the CPU; the GPU path is
+    /// deterministic per step but draws other numbers).
     pub seed: u32,
+    /// Start as if one full lifetime had already been simulated.
+    pub prewarm: bool,
+    /// Ask for the GPU simulation; it is used where the device can compute
+    /// (see [`gpu_particles_available`]), the CPU otherwise.
+    pub gpu: bool,
 }
 
 impl Default for EmitterParams {
@@ -139,6 +157,7 @@ impl Default for EmitterParams {
             drag: 0.0,
             space: SimSpace::World,
             color: [1.0; 4],
+            color_max: None,
             color_over_life: vec![(0.0, [1.0; 4]), (1.0, [1.0, 1.0, 1.0, 0.0])],
             size_over_life: Vec::new(),
             blend: QuadBlend::Alpha,
@@ -146,14 +165,22 @@ impl Default for EmitterParams {
             sort: true,
             texture_path: None,
             seed: 1,
+            prewarm: false,
+            gpu: false,
         }
     }
 }
 
 impl EmitterParams {
-    /// Colour at `t` (0..1 of a particle's life), tint included.
+    /// Colour at `t` (0..1 of a particle's life), `color` tint included.
     pub fn color_at(&self, t: f32) -> [f32; 4] {
-        let c = match self.color_over_life.as_slice() {
+        let c = self.life_color(t);
+        std::array::from_fn(|k| c[k] * self.color[k])
+    }
+
+    /// The gradient at `t`, without the tint.
+    pub fn life_color(&self, t: f32) -> [f32; 4] {
+        match self.color_over_life.as_slice() {
             [] => [1.0; 4],
             [(_, c)] => *c,
             stops => {
@@ -168,8 +195,7 @@ impl EmitterParams {
                     std::array::from_fn(|k| a[k] + (b[k] - a[k]) * f)
                 }
             }
-        };
-        std::array::from_fn(|k| c[k] * self.color[k])
+        }
     }
 
     /// Size multiplier at `t`.
@@ -190,6 +216,25 @@ impl EmitterParams {
             }
         }
     }
+}
+
+/// The default particle sprite: a white disc whose alpha falls off smoothly to
+/// the rim (sRGB texture data, 64 x 64).
+pub fn soft_circle_texture() -> TextureData {
+    const N: u32 = 64;
+    let mut pixels = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let (dx, dy) = (
+                (x as f32 + 0.5) / N as f32 * 2.0 - 1.0,
+                (y as f32 + 0.5) / N as f32 * 2.0 - 1.0,
+            );
+            let r = (dx * dx + dy * dy).sqrt().min(1.0);
+            let a = (1.0 - r) * (1.0 - r) * (3.0 - 2.0 * (1.0 - r));
+            pixels.extend_from_slice(&[255, 255, 255, (a * 255.0 + 0.5) as u8]);
+        }
+    }
+    TextureData::rgba8(N, N, pixels, true)
 }
 
 /// PCG-style generator: tiny, deterministic, no dependencies.
@@ -282,6 +327,45 @@ impl EmitShape {
     }
 }
 
+/// Most particle slots of one GPU emitter (64 bytes each).
+pub const MAX_GPU_PARTICLES: u32 = 1 << 20;
+
+/// Most simulation steps an emitter keeps for the GPU renderers to catch up on.
+const MAX_STEPS: usize = 32;
+
+static GPU_AVAILABLE: AtomicBool = AtomicBool::new(false);
+
+/// Whether a renderer on a compute-capable device exists (Full tier). Emitters
+/// with `EmitterParams::gpu` switch to the GPU simulation once it does; on
+/// Compat (WebGL2/GLES3, no compute) it stays false and they run on the CPU.
+pub fn gpu_particles_available() -> bool {
+    GPU_AVAILABLE.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_gpu_particles_available(on: bool) {
+    GPU_AVAILABLE.store(on, Ordering::Relaxed);
+}
+
+/// Where an emitter's particles are simulated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParticleMode {
+    /// On the CPU, in the emitter ([`ParticleEmitter::count`] is exact).
+    #[default]
+    Cpu,
+    /// In a compute pass; the emitter only schedules births.
+    Gpu,
+}
+
+/// One simulation step of a GPU emitter: the births of a frame.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuStep {
+    pub seq: u64,
+    pub dt: f32,
+    pub births: u32,
+    /// The emitter's world matrix at the step.
+    pub matrix: Mat4,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Particle {
     pos: Vec3,
@@ -291,6 +375,7 @@ struct Particle {
     rot: f32,
     spin: f32,
     size: f32,
+    tint: [f32; 4],
 }
 
 /// Emits and simulates particles at the entity's transform. Draw it with
@@ -311,6 +396,19 @@ pub struct ParticleEmitter {
     finished: bool,
     /// Queued by [`Self::burst`].
     pending: u32,
+    mode: ParticleMode,
+    /// The mode was set by hand ([`Self::force_mode`]): not re-derived from
+    /// `params.gpu` and the device.
+    mode_forced: bool,
+    /// The prewarm of this cycle has run.
+    warmed: bool,
+    /// GPU mode: queued steps, newest last, and the next sequence number.
+    steps: VecDeque<GpuStep>,
+    seq: u64,
+    /// Bumped when the GPU particles must be wiped ([`Self::clear`]).
+    epoch: u32,
+    /// GPU mode: seconds until the last birth has died (for [`Self::is_done`]).
+    gpu_alive_for: f32,
 }
 
 impl Default for ParticleEmitter {
@@ -331,6 +429,13 @@ impl ParticleEmitter {
             carry: 0.0,
             finished: false,
             pending: 0,
+            mode: ParticleMode::Cpu,
+            mode_forced: false,
+            warmed: false,
+            steps: VecDeque::new(),
+            seq: 0,
+            epoch: 0,
+            gpu_alive_for: 0.0,
         }
     }
 
@@ -339,15 +444,55 @@ impl ParticleEmitter {
         self
     }
 
-    /// Live particles.
+    /// Live particles (CPU mode; the GPU keeps its own, see
+    /// [`ParticleRenderer::read_gpu`]).
     pub fn count(&self) -> usize {
         self.particles.len()
+    }
+
+    /// Lifetimes of the live particles (statistical tests).
+    #[cfg(test)]
+    pub(crate) fn live_lives(&self) -> Vec<f32> {
+        self.particles.iter().map(|p| p.life).collect()
+    }
+
+    /// Where the particles are simulated right now.
+    pub fn mode(&self) -> ParticleMode {
+        self.mode
+    }
+
+    /// Pins the simulation to `mode`, whatever `params.gpu` and the device say
+    /// (tests, tools). A GPU emitter on a device without compute draws nothing.
+    pub fn force_mode(&mut self, mode: ParticleMode) {
+        self.mode_forced = true;
+        self.switch_mode(mode);
+    }
+
+    fn switch_mode(&mut self, mode: ParticleMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.particles.clear();
+            self.steps.clear();
+            self.epoch = self.epoch.wrapping_add(1);
+            self.gpu_alive_for = 0.0;
+        }
+    }
+
+    /// Bumped when the GPU particles must be wiped.
+    pub(crate) fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    /// Steps newer than `seq`, oldest first.
+    pub(crate) fn steps_after(&self, seq: u64) -> impl Iterator<Item = &GpuStep> {
+        self.steps.iter().filter(move |s| s.seq > seq)
     }
 
     /// Whether nothing is alive and nothing more will be born (a one-shot
     /// effect that can be despawned).
     pub fn is_done(&self) -> bool {
         self.particles.is_empty()
+            && self.gpu_alive_for <= 0.0
             && self.pending == 0
             && (self.finished || (!self.playing && self.params.rate <= 0.0))
     }
@@ -358,11 +503,15 @@ impl ParticleEmitter {
         self.carry = 0.0;
         self.finished = false;
         self.playing = true;
+        self.warmed = false;
     }
 
     /// Removes every live particle.
     pub fn clear(&mut self) {
         self.particles.clear();
+        self.steps.clear();
+        self.epoch = self.epoch.wrapping_add(1);
+        self.gpu_alive_for = 0.0;
     }
 
     /// Queues `count` extra particles for the next [`Self::update`].
@@ -376,12 +525,46 @@ impl ParticleEmitter {
         if dt.is_nan() || dt <= 0.0 {
             return;
         }
-        let max = self.params.max_particles as usize;
-        let reserved = max.min(MAX_RESERVED);
-        if self.particles.capacity() < reserved {
-            self.particles.reserve(reserved - self.particles.len());
+        if !self.mode_forced {
+            let want = if self.params.gpu && gpu_particles_available() {
+                ParticleMode::Gpu
+            } else {
+                ParticleMode::Cpu
+            };
+            self.switch_mode(want);
         }
-        self.step_particles(dt);
+        if self.params.prewarm && !self.warmed {
+            self.warmed = true;
+            if self.playing {
+                // One lifetime in coarse steps; the real step follows.
+                let span = self.params.lifetime[1].clamp(0.0, 30.0);
+                let n = if self.mode == ParticleMode::Gpu {
+                    24
+                } else {
+                    60
+                };
+                for _ in 0..n {
+                    self.step(span / n as f32, matrix);
+                }
+            }
+        }
+        self.step(dt, matrix);
+    }
+
+    fn step(&mut self, dt: f32, matrix: &Mat4) {
+        if dt <= 0.0 {
+            return;
+        }
+        let max = self.params.max_particles as usize;
+        if self.mode == ParticleMode::Cpu {
+            let reserved = max.min(MAX_RESERVED);
+            if self.particles.capacity() < reserved {
+                self.particles.reserve(reserved - self.particles.len());
+            }
+            self.step_particles(dt);
+        } else {
+            self.gpu_alive_for = (self.gpu_alive_for - dt).max(0.0);
+        }
 
         let mut births = std::mem::take(&mut self.pending);
         if self.playing && !self.finished {
@@ -405,8 +588,30 @@ impl ParticleEmitter {
                 }
             }
         }
+        if self.mode == ParticleMode::Gpu {
+            self.push_step(dt, births, matrix);
+            return;
+        }
         let room = max.saturating_sub(self.particles.len());
         self.spawn((births as usize).min(room), dt, matrix);
+    }
+
+    fn push_step(&mut self, dt: f32, births: u32, matrix: &Mat4) {
+        if births > 0 {
+            self.gpu_alive_for = self.params.lifetime[1].max(dt);
+        }
+        self.seq += 1;
+        let step = GpuStep {
+            seq: self.seq,
+            dt,
+            births,
+            matrix: *matrix,
+        };
+        // Renderers that fell more than MAX_STEPS behind skip the oldest steps.
+        if self.steps.len() >= MAX_STEPS {
+            self.steps.pop_front();
+        }
+        self.steps.push_back(step);
     }
 
     /// Particles of bursts with `from <= time < to` (`inclusive`: also at `to`).
@@ -455,7 +660,13 @@ impl ParticleEmitter {
                 rot: self.rng.range(self.params.rotation),
                 spin: self.rng.range(self.params.spin),
                 size: self.rng.range(self.params.size),
+                tint: self.params.color,
             };
+            if let Some(max) = self.params.color_max {
+                let f = self.rng.unit();
+                let min = self.params.color;
+                p.tint = std::array::from_fn(|k| min[k] + (max[k] - min[k]) * f);
+            }
             // Born somewhere inside this step: spread births over it so a
             // moving emitter leaves a trail, not clumps.
             let early = dt * (1.0 - (i as f32 + 0.5) / count as f32);
@@ -493,6 +704,8 @@ pub struct ParticleRenderer {
     quads: QuadBatcher,
     scratch: Vec<(f32, QuadInstance)>,
     color: wgpu::TextureFormat,
+    /// The compute simulation; `None` where the device cannot run it.
+    gpu: Option<GpuSim>,
 }
 
 impl ParticleRenderer {
@@ -504,25 +717,56 @@ impl ParticleRenderer {
         samples: u32,
         depth: wgpu::TextureFormat,
     ) -> Self {
+        let gpu = particles_gpu::supported(device)
+            .then(|| GpuSim::new(device, queue, color, samples, depth));
+        if gpu.is_some() {
+            set_gpu_particles_available(true);
+        }
         Self {
             quads: QuadBatcher::new(device, queue, color, samples, Some(depth), true),
             scratch: Vec::new(),
             color,
+            gpu,
         }
+    }
+
+    /// Whether this renderer simulates `EmitterParams::gpu` emitters on the GPU
+    /// (Full tier); otherwise they run on the CPU.
+    pub fn gpu_enabled(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    /// The slots of a GPU emitter read back from the GPU (tests, tools; stalls
+    /// until the GPU is idle). `None` for CPU emitters or without compute.
+    pub fn read_gpu(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        entity: Entity,
+    ) -> Option<Vec<GpuParticle>> {
+        self.gpu.as_ref()?.read(device, queue, entity)
     }
 
     /// For an HDR target: skip sRGB encoding (the post chain does it).
     pub fn set_hdr_output(&mut self, on: bool) {
         self.quads.set_hdr_output(on, self.color);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.set_hdr_output(on, self.color);
+        }
     }
 
     /// Forgets the last frame's particles (no camera to draw them with).
     pub fn clear(&mut self) {
         self.quads.clear();
+        if let Some(gpu) = &mut self.gpu {
+            gpu.clear();
+        }
     }
 
-    /// Collects the quads of every emitter in `world` for the camera
-    /// `view_proj` and uploads them. Returns the number of particles.
+    /// Collects the quads of every CPU emitter in `world` for the camera
+    /// `view_proj` and uploads them; runs the pending steps of the GPU
+    /// emitters and readies their draws. Returns the number of particles drawn
+    /// (for GPU emitters: their slots, dead ones included).
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -549,7 +793,7 @@ impl ParticleRenderer {
             )>()
             .iter()
         {
-            if emitter.particles.is_empty() {
+            if emitter.mode != ParticleMode::Cpu || emitter.particles.is_empty() {
                 continue;
             }
             let matrix = global.map_or_else(
@@ -590,7 +834,10 @@ impl ParticleRenderer {
                     origin: origin.extend(0.0).to_array(),
                     axis_x: x.extend(0.0).to_array(),
                     axis_y: y.extend(0.0).to_array(),
-                    color: params.color_at(t),
+                    color: {
+                        let c = params.life_color(t);
+                        std::array::from_fn(|k| c[k] * p.tint[k])
+                    },
                     uv,
                 };
                 if sort {
@@ -607,17 +854,42 @@ impl ParticleRenderer {
             }
         }
         self.quads.upload(device, queue, gpu, view_proj);
-        self.quads.len()
+        let mut drawn = self.quads.len();
+        if let Some(sim) = &mut self.gpu {
+            let mut query = world.query::<(
+                Entity,
+                Option<&GlobalTransform>,
+                Option<&Transform>,
+                &ParticleEmitter,
+            )>();
+            let emitters = query
+                .iter()
+                .filter(|(.., e)| e.mode == ParticleMode::Gpu)
+                .map(|(entity, global, transform, emitter)| {
+                    let matrix = global.map_or_else(
+                        || transform.map_or(Mat4::IDENTITY, Transform::matrix),
+                        |g| g.0,
+                    );
+                    (entity, matrix, emitter)
+                })
+                .collect::<Vec<_>>();
+            sim.prepare(device, queue, gpu, emitters.into_iter(), view_proj);
+            drawn += sim.slots();
+        }
+        drawn
     }
 
     /// Draws what the last `prepare` collected into `pass`.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
         self.quads.draw(pass);
+        if let Some(gpu) = &self.gpu {
+            gpu.draw(pass);
+        }
     }
 
     /// Draw calls `draw` issues.
     pub fn draw_calls(&self) -> usize {
-        self.quads.batch_count()
+        self.quads.batch_count() + self.gpu.as_ref().map_or(0, GpuSim::draw_calls)
     }
 }
 

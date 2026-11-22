@@ -10,6 +10,7 @@ mod material;
 mod mesh;
 mod overlay;
 mod particles;
+mod particles_gpu;
 mod pipelines;
 mod post;
 mod quad;
@@ -30,9 +31,10 @@ pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
 pub use overlay::{Overlay, OverlayQuad, OverlayRenderer, begin_overlay_pass};
 pub use particles::{
-    Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
-    update_emitters,
+    Burst, EmitShape, EmitterParams, FlipBook, MAX_GPU_PARTICLES, ParticleEmitter, ParticleMode,
+    ParticleRenderer, SimSpace, gpu_particles_available, soft_circle_texture, update_emitters,
 };
+pub use particles_gpu::{GpuParticle, device_limits as full_tier_limits};
 pub use post::{
     AmbientOcclusion, ColorGrade, HDR_FORMAT, PostProcess, PostSettings, identity_lut, lut_strip,
 };

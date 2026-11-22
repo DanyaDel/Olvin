@@ -145,7 +145,7 @@ cargo test -p editor_dev --test screenshots -- --ignored   # docs/screenshots/ed
   __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json WGPU_BACKEND=gl cargo run -p sandbox --release
   ```
 
-- Хаб и редактор пока на английском, документация на русском.
+- Хаб и редактор пока на английском, документация на русском. Правила языков: [STYLE.md, раздел 10](STYLE.md).
 
 ## Лицензия
 

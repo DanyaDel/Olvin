@@ -269,7 +269,19 @@ The files are in `assets/logo/`. Which file goes where, which style to pick and 
 
 ## 10. Voice and copy
 
-Interface:
+### Language policy
+
+| What | Language |
+|---|---|
+| Editor and hub UI (windows, menus, dialogs, toasts, `olvin-hub` CLI messages) | English. There is no localisation yet: strings live in the code as they are |
+| Documentation (`README`, `ARCHITECTURE`, `STYLE`, `ROADMAP`, `docs/`) | Russian is the primary; the English twin sits next to it as `*.en.md` and is updated together with it |
+| Code: identifiers, comments, doc comments, log and error messages | English |
+| Commit messages | English, `Area: what was done (#number)` |
+| Issues and repository discussions | Russian |
+
+The Russian sample phrases in the Russian version of this file illustrate tone; in the interface the same phrases are written in English ("Save scene"). When localisation arrives, string keys will be English and Russian will be the first translated locale.
+
+### Interface
 
 - Short phrases, the verb first: "Save scene", "Open project".
 - No exclamation marks in the interface.

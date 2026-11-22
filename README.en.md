@@ -145,7 +145,7 @@ cargo test -p editor_dev --test screenshots -- --ignored   # docs/screenshots/ed
   __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json WGPU_BACKEND=gl cargo run -p sandbox --release
   ```
 
-- The hub and the editor are in English for now; the documentation is in Russian (this file is the English version).
+- The hub and the editor are in English for now; the documentation is in Russian (this file is the English version). Language rules: [STYLE.md, section 10](STYLE.en.md).
 
 ## License
 

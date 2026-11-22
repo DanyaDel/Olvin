@@ -70,6 +70,14 @@ impl Panel for Assets {
             });
             return;
         };
+        // "Select Prefab Asset" in the Inspector: show the file's folder, select the tile.
+        if let Some(path) = state.asset_focus.take()
+            && let Some(parent) = path.parent().and_then(|p| p.strip_prefix(&root).ok())
+        {
+            self.current = parent.to_path_buf();
+            self.selected = Some(path);
+            self.scanned = None;
+        }
         let dir = root.join(&self.current);
         let stale = self
             .scanned
@@ -141,6 +149,23 @@ impl Panel for Assets {
                         response.context_menu(|ui| {
                             if is_scene(&entry.path) && ui.button("Open scene").clicked() {
                                 state.request_open(entry.path.clone());
+                            }
+                            if is_prefab(&entry.path) {
+                                if ui.button("Instantiate").clicked() {
+                                    drop_asset(
+                                        state,
+                                        &entry.path,
+                                        DropTarget::Hierarchy(state.selection),
+                                    );
+                                    ui.close();
+                                }
+                                if ui
+                                    .button("Open prefab")
+                                    .on_hover_text("Edit it as a scene; instances follow on save")
+                                    .clicked()
+                                {
+                                    state.request_open(entry.path.clone());
+                                }
                             }
                             if is_model(&entry.path) && ui.button("Import into scene").clicked() {
                                 import(state, &entry.path);
@@ -222,7 +247,7 @@ impl Panel for Assets {
                     self.current = rel.to_path_buf();
                 }
                 self.scanned = None;
-            } else if is_scene(&path) {
+            } else if is_scene(&path) || is_prefab(&path) {
                 state.request_open(path);
             } else if is_model(&path) {
                 import(state, &path);
@@ -477,7 +502,12 @@ fn tile(
             egui::Align2::CENTER_CENTER,
             icon(entry),
             egui::FontId::proportional(28.0),
-            ui.visuals().text_color(),
+            // Prefabs are blue here as in the Hierarchy.
+            if is_prefab(&entry.path) {
+                theme::palette(ui.ctx()).info
+            } else {
+                ui.visuals().text_color()
+            },
         );
     }
     let name = if entry.name.chars().count() > 12 {
@@ -514,6 +544,7 @@ fn icon(entry: &Entry) -> &'static str {
         "wgsl" => "🧪",
         "hdr" | "exr" => "🌅",
         "rs" => "🦀",
+        _ if is_prefab(&entry.path) => "◆",
         "ron" | "toml" | "json" => "📝",
         _ => "📄",
     }
@@ -561,6 +592,10 @@ fn material_from_texture(state: &mut EditorState, root: &Path, path: &Path) {
 
 fn is_scene(path: &Path) -> bool {
     path.to_string_lossy().ends_with(".scene.ron")
+}
+
+fn is_prefab(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".prefab.ron")
 }
 
 /// Opens a folder or file with the system handler.
@@ -636,12 +671,17 @@ fn move_asset(state: &mut EditorState, root: &Path, from: &Path, to: &Path) -> R
     state.map_scenes(|scene| {
         if let Ok(text) = ron::to_string(scene)
             && let Some(new) = replace_path(&text, &from_rel, &to_rel)
-            && let Ok(fixed) = ron::from_str(&new)
+            && let Ok(mut fixed) = ron::from_str::<olvin_scene::file::SceneFile>(&new)
         {
+            // Which instance a prefab node belongs to is not part of the file text.
+            for (e, old) in fixed.entities.iter_mut().zip(&scene.entities) {
+                e.prefab_node = old.prefab_node.clone();
+            }
             *scene = fixed;
         }
     });
     state.forget_materials(&from_rel);
+    state.forget_prefabs(&from_rel);
     state.info(format!("moved {from_rel} to {to_rel}"));
     Ok(())
 }
@@ -649,8 +689,10 @@ fn move_asset(state: &mut EditorState, root: &Path, from: &Path, to: &Path) -> R
 fn delete_asset(state: &mut EditorState, root: &Path, path: &Path) -> Result<(), String> {
     let mut assets = olvin_assets::AssetRoot::new(root);
     let rel = assets.relative(path).ok_or("outside assets/")?;
+    unpack_instances(state, root, &rel);
     assets.delete_asset(&rel)?;
     state.forget_materials(&rel);
+    state.forget_prefabs(&rel);
     state.info(format!("deleted {rel}"));
     Ok(())
 }
@@ -658,7 +700,10 @@ fn delete_asset(state: &mut EditorState, root: &Path, path: &Path) -> Result<(),
 /// `text` with the quoted path `from` (or anything under it) renamed to `to`;
 /// `None` when it does not occur.
 fn replace_path(text: &str, from: &str, to: &str) -> Option<String> {
+    // Also inside the RON text of a prefab override (`"\"path\""`).
     let new = text
+        .replace(&format!("\\\"{from}\\\""), &format!("\\\"{to}\\\""))
+        .replace(&format!("\\\"{from}/"), &format!("\\\"{to}/"))
         .replace(&format!("\"{from}\""), &format!("\"{to}\""))
         .replace(&format!("\"{from}/"), &format!("\"{to}/"));
     (new != text).then_some(new)
@@ -675,7 +720,9 @@ fn rewrite_references(root: &Path, from: &str, to: &str) {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if (is_scene(&path) || path.to_string_lossy().ends_with(".mat.ron"))
+            } else if (is_scene(&path)
+                || is_prefab(&path)
+                || path.to_string_lossy().ends_with(".mat.ron"))
                 && let Ok(text) = std::fs::read_to_string(&path)
                 && let Some(new) = replace_path(&text, from, to)
             {
@@ -685,7 +732,79 @@ fn rewrite_references(root: &Path, from: &str, to: &str) {
     }
 }
 
-/// An asset dropped on the Scene view or the Hierarchy: scenes open, models
+/// Every `*.prefab.ron` under `dir`, relative to `root` and starting with `prefix`.
+fn prefabs_under(root: &Path, dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            prefabs_under(root, &path, prefix, out);
+        } else if is_prefab(&path)
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if rel == prefix || rel.starts_with(&format!("{prefix}/")) {
+                out.push(rel);
+            }
+        }
+    }
+}
+
+/// A prefab (or a folder of them) is about to be deleted: its instances stop
+/// being instances and keep their objects, in the open scene and its history
+/// and in every scene and prefab file that uses it.
+fn unpack_instances(state: &mut EditorState, root: &Path, rel: &str) {
+    let mut gone = Vec::new();
+    prefabs_under(root, root, rel, &mut gone);
+    for asset in &gone {
+        state.map_scenes(|scene| scene.unpack_asset(asset));
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Some(own) = path
+                .strip_prefix(root)
+                .ok()
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+            else {
+                continue;
+            };
+            if !(is_scene(&path) || is_prefab(&path)) || gone.contains(&own) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if !gone.iter().any(|a| text.contains(a.as_str())) {
+                continue;
+            }
+            let mut load = |p: &str| olvin_scene::file::SceneFile::load(root.join(p));
+            if let Ok(mut scene) = olvin_scene::file::SceneFile::load(&path) {
+                // The files are still there: expand, detach, write back as a file.
+                scene.expand_prefabs(&mut load);
+                for asset in &gone {
+                    scene.unpack_asset(asset);
+                }
+                if let Err(e) = scene.collapse_prefabs(&mut load).save(&path) {
+                    state.warn(format!("{own}: {e}"));
+                }
+            }
+        }
+    }
+}
+
+/// An asset dropped on the Scene view or the Hierarchy: scenes open, prefabs
+/// are instantiated (under the pointer or under a row), models
 /// are imported (placed under the pointer or under a row), materials go to
 /// the object under the pointer or on the row.
 pub(crate) fn drop_asset(state: &mut EditorState, path: &Path, target: DropTarget) {
@@ -694,6 +813,17 @@ pub(crate) fn drop_asset(state: &mut EditorState, path: &Path, target: DropTarge
     };
     if is_scene(path) {
         state.request_open(path.to_path_buf());
+    } else if is_prefab(path) {
+        let Some(rel) = olvin_assets::AssetRoot::new(&root).relative(path) else {
+            return;
+        };
+        let (parent, at) = match target {
+            DropTarget::Hierarchy(parent) => (parent, Vec3::ZERO),
+            DropTarget::Viewport { at, .. } => (None, at.unwrap_or(Vec3::ZERO)),
+        };
+        if let Err(e) = state.instantiate_prefab(&rel, parent, at) {
+            state.warn(e);
+        }
     } else if is_model(path) {
         let before = state.scene.entities.len();
         if let Err(e) = state.import_model(path) {
@@ -852,6 +982,140 @@ mod tests {
         delete_asset(&mut state, &assets, &mat).unwrap();
         assert!(!mat.exists());
         assert!(!assets.join("materials/red.mat.ron.meta").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn moving_a_prefab_fixes_instances_and_deleting_it_unpacks_them() {
+        use olvin_scene::file::{EntityDesc, PrefabInstance, SceneFile};
+        let (root, mut state, cube) = project("prefab");
+        let assets = root.join("assets");
+        let rel = state.create_prefab(cube).unwrap();
+        state.end_frame(false);
+        assert!(state.save());
+        // Another scene with an instance whose override names the material.
+        let mut inst = EntityDesc::new(5, "Other");
+        let mut p = PrefabInstance::new(rel.clone());
+        p.overrides.insert(
+            String::new(),
+            std::collections::BTreeMap::from([(
+                "material".into(),
+                "Some(\"materials/red.mat.ron\")".into(),
+            )]),
+        );
+        inst.prefab = Some(p);
+        let other = assets.join("scenes/other.scene.ron");
+        SceneFile {
+            entities: vec![inst],
+            ..Default::default()
+        }
+        .save(&other)
+        .unwrap();
+
+        std::fs::create_dir_all(assets.join("shared")).unwrap();
+        move_asset(
+            &mut state,
+            &assets,
+            &assets.join(&rel),
+            &assets.join("shared/Box.prefab.ron"),
+        )
+        .unwrap();
+        let asset_of =
+            |s: &SceneFile, id: u64| s.get(id).unwrap().prefab.as_ref().unwrap().asset.clone();
+        assert_eq!(asset_of(&state.scene, cube), "shared/Box.prefab.ron");
+        assert!(
+            state.scene.get(cube).unwrap().prefab_node.is_some(),
+            "still expanded"
+        );
+        assert_eq!(
+            asset_of(
+                &SceneFile::load(assets.join("scenes/a.scene.ron")).unwrap(),
+                cube
+            ),
+            "shared/Box.prefab.ron"
+        );
+        assert_eq!(
+            asset_of(&SceneFile::load(&other).unwrap(), 5),
+            "shared/Box.prefab.ron"
+        );
+        assert!(!state.is_dirty(), "a move is not an unsaved change");
+        assert!(
+            assets.join("shared/Box.prefab.ron.meta").exists(),
+            "the GUID goes along"
+        );
+        // A material named inside an override follows the material.
+        move_asset(
+            &mut state,
+            &assets,
+            &assets.join("materials/red.mat.ron"),
+            &assets.join("materials/blue.mat.ron"),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&other).unwrap();
+        assert!(
+            text.contains("materials/blue.mat.ron") && !text.contains("red.mat"),
+            "{text}"
+        );
+        // The instance still expands and shows no phantom override.
+        assert!(state.prefab_report(cube).unwrap().overridden.is_empty());
+
+        // Deleting the prefab keeps the objects, here and in other files.
+        let n = state.scene.entities.len();
+        delete_asset(&mut state, &assets, &assets.join("shared/Box.prefab.ron")).unwrap();
+        assert!(
+            state
+                .scene
+                .entities
+                .iter()
+                .all(|e| e.prefab.is_none() && e.prefab_node.is_none())
+        );
+        assert_eq!(state.scene.entities.len(), n);
+        assert!(state.scene.get(cube).is_some());
+        assert!(!state.is_dirty(), "the open scene was rewritten too");
+        let saved = SceneFile::load(assets.join("scenes/a.scene.ron")).unwrap();
+        assert_eq!(saved.entities.len(), n);
+        assert!(saved.entities.iter().all(|e| e.prefab.is_none()));
+        let other = SceneFile::load(&other).unwrap();
+        assert!(other.entities.iter().all(|e| e.prefab.is_none()));
+        assert_eq!(
+            other.get(5).unwrap().name,
+            "Other",
+            "the instance's root stays an object"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dropping_a_prefab_instantiates_it_where_it_was_dropped() {
+        let (root, mut state, cube) = project("prefab-drop");
+        let assets = root.join("assets");
+        let rel = state.create_prefab(cube).unwrap();
+        let path = assets.join(&rel);
+        let n = state.scene.entities.len();
+        drop_asset(
+            &mut state,
+            &path,
+            DropTarget::Viewport {
+                pick: None,
+                at: Some(Vec3::new(4.0, 0.0, 1.0)),
+            },
+        );
+        assert_eq!(state.scene.entities.len(), n + 1);
+        let placed = state.selection.unwrap();
+        assert_eq!(
+            state.scene.get(placed).unwrap().position,
+            Vec3::new(4.0, 0.0, 1.0)
+        );
+        assert!(state.scene.get(placed).unwrap().prefab.is_some());
+        // On a row it becomes a child.
+        drop_asset(&mut state, &path, DropTarget::Hierarchy(Some(placed)));
+        let child = state.selection.unwrap();
+        assert_eq!(state.scene.get(child).unwrap().parent, Some(placed));
+        // A prefab cannot be dropped into itself while it is the open scene.
+        state.scene_path = Some(path.clone());
+        let n = state.scene.entities.len();
+        drop_asset(&mut state, &path, DropTarget::Hierarchy(None));
+        assert_eq!(state.scene.entities.len(), n);
         std::fs::remove_dir_all(root).unwrap();
     }
 

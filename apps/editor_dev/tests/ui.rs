@@ -922,6 +922,205 @@ fn csg_draw_tool_builds_a_brush_on_the_ground_and_alt_orbits_instead() {
     assert_eq!(names(&mut h).len(), 1);
 }
 
+/// The scene's prefab node `local` of the instance at `root`.
+fn node(root: u64, local: u64) -> u64 {
+    olvin_editor::olvin_scene::prefab::member_id(root, local)
+}
+
+fn asset_text(p: &Path, rel: &str) -> String {
+    fs::read_to_string(p.join("assets").join(rel)).unwrap()
+}
+
+#[test]
+fn create_prefab_from_the_selection_shows_it_in_hierarchy_and_inspector() {
+    let p = project("prefab-create");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(1));
+    h.run_steps(3);
+    click_menu(&mut h, "GAMEOBJECT", "Create Prefab");
+    let asset = p.join("assets/prefabs/Root.prefab.ron");
+    assert!(asset.exists(), "the subtree was saved as an asset");
+    let scene = SceneFile::load(&asset).unwrap();
+    assert_eq!(scene.entities.len(), 2, "Root and its Child");
+    // The object is an instance now: its child is a node of it, the blue ◈ row shows it.
+    let child = node(1, 2);
+    assert!(state(&mut h).scene.get(child).is_some());
+    assert!(state(&mut h).scene.get(1).unwrap().prefab.is_some());
+    assert!(h.query_by_label("◆ Root").is_some(), "instance row");
+    // The inspector has the Prefab block with its buttons.
+    assert!(h.query_by_label("PREFAB").is_some());
+    for button in ["Open", "Select", "Revert All", "Apply All", "Unpack"] {
+        assert!(h.query_by_label(button).is_some(), "{button}");
+    }
+    // Undo turns it back into plain objects (the asset stays).
+    undo(&mut h);
+    assert!(state(&mut h).scene.get(1).unwrap().prefab.is_none());
+    assert!(h.query_by_label("◼ Root").is_some());
+    redo(&mut h);
+    assert!(state(&mut h).scene.get(1).unwrap().prefab.is_some());
+    // The right-click menu of a plain object has Create Prefab too.
+    h.get_by_label("◼ Cube").click_secondary();
+    h.run_steps(3);
+    h.get_by_label("Create Prefab").click();
+    h.run_steps(3);
+    assert!(p.join("assets/prefabs/Cube.prefab.ron").exists());
+}
+
+#[test]
+fn overridden_fields_are_marked_and_revert_one_by_one_or_all() {
+    let p = project("prefab-override");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(1));
+    h.run_steps(3);
+    click_menu(&mut h, "GAMEOBJECT", "Create Prefab");
+    let child = node(1, 2);
+    state(&mut h).select(Some(child));
+    h.run_steps(5);
+    assert!(h.query_by_label("↺").is_none(), "nothing overridden yet");
+    assert!(
+        h.query_by_label("Part of a prefab instance; edits here are overrides.")
+            .is_some()
+    );
+    // An edit made like any other (a gizmo drag or the inspector would do the same).
+    state(&mut h).scene.get_mut(child).unwrap().position.x = 7.0;
+    h.run_steps(5);
+    let marked = h.get_all_by_label("↺").count();
+    assert!(
+        marked >= 1,
+        "the Position row and the list show a revert button"
+    );
+    assert!(h.query_by_label("position").is_some(), "listed by field");
+    assert_eq!(
+        state(&mut h).prefab_report(child).unwrap().overridden,
+        ["position"]
+    );
+    // The instance root shows the total.
+    state(&mut h).select(Some(1));
+    h.run_steps(5);
+    assert!(h.query_by_label("1 override").is_some());
+    // Revert one field from the child.
+    state(&mut h).select(Some(child));
+    h.run_steps(5);
+    h.get_all_by_label("↺").next().unwrap().click();
+    h.run_steps(5);
+    assert_eq!(state(&mut h).scene.get(child).unwrap().position.x, 1.0);
+    assert!(h.query_by_label("↺").is_none());
+    // Revert All on the root.
+    state(&mut h).scene.get_mut(child).unwrap().position.x = 7.0;
+    state(&mut h).scene.get_mut(child).unwrap().scale.y = 3.0;
+    state(&mut h).select(Some(1));
+    h.run_steps(5);
+    assert!(h.query_by_label("2 overrides").is_some());
+    h.get_by_label("Revert All").click();
+    h.run_steps(5);
+    assert_eq!(state(&mut h).scene.get(child).unwrap().position.x, 1.0);
+    assert_eq!(state(&mut h).scene.get(child).unwrap().scale.y, 1.0);
+    assert!(h.query_by_label("No overrides").is_some());
+    // Saving writes the overrides, not the nodes.
+    state(&mut h).scene.get_mut(child).unwrap().position.x = 2.5;
+    assert!(state(&mut h).save());
+    let saved = SceneFile::load(p.join("assets/scenes/main.scene.ron")).unwrap();
+    assert_eq!(saved.entities.len(), 2, "Root (the instance) and Cube");
+    let inst = saved.get(1).unwrap().prefab.as_ref().unwrap();
+    assert!(inst.overrides["2"]["position"].contains("2.5"), "{inst:?}");
+}
+
+#[test]
+fn apply_all_updates_the_prefab_and_every_instance_and_undo_takes_it_back() {
+    let p = project("prefab-apply");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(1));
+    h.run_steps(3);
+    click_menu(&mut h, "GAMEOBJECT", "Create Prefab");
+    let rel = "prefabs/Root.prefab.ron";
+    let before = asset_text(&p, rel);
+    // A second instance, from the asset.
+    let second = state(&mut h)
+        .instantiate_prefab(rel, None, Vec3::new(0.0, 0.0, 9.0))
+        .unwrap();
+    h.run_steps(3);
+    let (child, child2) = (node(1, 2), node(second, 2));
+    state(&mut h).scene.get_mut(child).unwrap().scale = Vec3::new(2.0, 2.0, 2.0);
+    h.run_steps(3);
+    state(&mut h).select(Some(1));
+    h.run_steps(5);
+    h.get_by_label("Apply All").click();
+    h.run_steps(5);
+    assert_ne!(asset_text(&p, rel), before, "written into the asset");
+    assert_eq!(
+        state(&mut h).scene.get(child2).unwrap().scale,
+        Vec3::splat(2.0),
+        "the other instance follows"
+    );
+    assert!(h.query_by_label("No overrides").is_some());
+    undo(&mut h);
+    assert_eq!(asset_text(&p, rel), before, "undo rewrites the prefab file");
+    assert_eq!(state(&mut h).scene.get(child2).unwrap().scale, Vec3::ONE);
+    assert_eq!(
+        state(&mut h).scene.get(child).unwrap().scale,
+        Vec3::splat(2.0)
+    );
+    redo(&mut h);
+    assert_ne!(asset_text(&p, rel), before);
+    assert_eq!(
+        state(&mut h).scene.get(child2).unwrap().scale,
+        Vec3::splat(2.0)
+    );
+}
+
+#[test]
+fn dragging_a_prefab_from_assets_instantiates_it() {
+    let p = project("prefab-drag");
+    // A prefab file in the Assets root: tile 0 is the scenes folder, tile 1 the prefab.
+    let mut crate_ = cube(1, "Crate", Vec3::ZERO);
+    crate_.scale = Vec3::splat(1.0);
+    let mut lid = cube(2, "Lid", Vec3::Y);
+    lid.parent = Some(1);
+    SceneFile {
+        entities: vec![crate_, lid],
+        ..Default::default()
+    }
+    .save(p.join("assets/crate.prefab.ron"))
+    .unwrap();
+    let mut h = editor(&p);
+    let before = names(&mut h).len();
+    drag(&mut h, tile_at(1), SCENE_VIEW + egui::vec2(200.0, 150.0));
+    assert_eq!(names(&mut h).len(), before + 2, "root and lid");
+    let placed = state(&mut h).selection.unwrap();
+    let e = state(&mut h).scene.get(placed).unwrap().clone();
+    assert_eq!(e.name, "crate");
+    assert!(
+        e.prefab
+            .as_ref()
+            .is_some_and(|p| p.asset == "crate.prefab.ron")
+    );
+    assert!(
+        e.position.x != 0.0 || e.position.z != 0.0,
+        "dropped where the pointer was"
+    );
+    // On a hierarchy row it becomes a child of that object.
+    let before = names(&mut h).len();
+    let cube_row = row_center(&h, "◼ Cube");
+    drag(&mut h, tile_at(1), cube_row);
+    assert_eq!(names(&mut h).len(), before + 2);
+    let dropped = state(&mut h).selection.unwrap();
+    assert_eq!(state(&mut h).scene.get(dropped).unwrap().parent, Some(3));
+    // Undo takes the last one away again.
+    undo(&mut h);
+    assert_eq!(names(&mut h).len(), before);
+    // Double-clicking the prefab opens it as a scene.
+    click_at(&mut h, tile_at(1));
+    mouse_button(&h, tile_at(1), true);
+    h.run_steps(1);
+    mouse_button(&h, tile_at(1), false);
+    h.run_steps(3);
+    if h.query_by_label("Unsaved Changes").is_some() {
+        h.get_by_label("Don't Save").click();
+        h.run_steps(3);
+    }
+    assert_eq!(names(&mut h), vec!["Crate", "Lid"]);
+}
+
 /// Clicks a toolbar button, or a menu title and then its item.
 fn click_menu(h: &mut Ed, title: &str, item: &str) {
     h.get_by_label(title).click();

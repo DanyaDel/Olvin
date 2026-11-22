@@ -282,6 +282,15 @@ impl EditorApp {
             if let Some(creation) = create_menu(ui, &self.state.ext.create) {
                 creation.apply(&mut self.state, None);
             }
+            ui.separator();
+            let sel = self.state.selection.is_some();
+            if ui
+                .add_enabled(sel, egui::Button::new("Create Prefab"))
+                .on_hover_text("Save the selected object and its children as a prefab asset")
+                .clicked()
+            {
+                self.state.create_prefab_selected();
+            }
         });
         menu(ui, theme::menu_title("Window"), |ui| {
             ui.menu_button("Add Panel", |ui| {
@@ -1018,6 +1027,7 @@ impl EditorApp {
         let interacting = ctx.input(|i| i.pointer.any_down())
             || ctx.egui_wants_keyboard_input()
             || self.state.busy;
+        self.state.sync_prefabs(false);
         self.state.end_frame(interacting);
         self.state.busy = false;
     }

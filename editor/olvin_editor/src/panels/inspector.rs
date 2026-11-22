@@ -7,7 +7,7 @@ use olvin_scene::file::{
 };
 
 use crate::ext::ComponentEditor;
-use crate::{EditorState, Panel, theme};
+use crate::{EditorState, Panel, PrefabReport, theme};
 
 const TAGS: [&str; 7] = [
     "Untagged",
@@ -30,6 +30,65 @@ const LAYERS: [&str; 6] = [
 #[derive(Default)]
 pub struct Inspector {
     search: String,
+}
+
+/// The fields of the selected prefab node that differ from the asset, and the
+/// reverts asked for. Shared with `section`/`row_field` through the egui
+/// context while the Inspector draws, so every component block can mark itself
+/// (blue title, ↺) without its own parameters.
+#[derive(Clone, Default)]
+struct PrefabMarks {
+    overridden: std::sync::Arc<Vec<String>>,
+    reverts: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+fn marks_id() -> egui::Id {
+    egui::Id::new("inspector-prefab-marks")
+}
+
+fn marks(ui: &egui::Ui) -> Option<PrefabMarks> {
+    ui.ctx().data(|d| d.get_temp::<PrefabMarks>(marks_id()))
+}
+
+impl PrefabMarks {
+    fn is_overridden(&self, field: &str) -> bool {
+        self.overridden.iter().any(|k| k == field)
+    }
+
+    fn revert(&self, field: &str) {
+        if let Ok(mut list) = self.reverts.lock() {
+            list.push(field.to_owned());
+        }
+    }
+}
+
+/// The override key of the field a component block shows (its remove key).
+fn field_of(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "mesh" => "mesh",
+        "model" => "model",
+        "camera" => "camera",
+        "light" => "light",
+        "collider" => "collider",
+        "rigidbody" => "rigidbody",
+        "cc" => "character_controller",
+        "audio" => "audio_source",
+        "listener" => "audio_listener",
+        "script" => "scripts",
+        "material" => "material",
+        _ => return None,
+    })
+}
+
+/// What the prefab header asks the state to do.
+enum PrefabAction {
+    OpenAsset(String),
+    SelectAsset(String),
+    SelectRoot(u64),
+    RevertAll(u64),
+    ApplyAll(u64),
+    Unpack(u64),
+    RevertField(String),
 }
 
 /// A built-in component in the Add Component menu.
@@ -149,6 +208,19 @@ impl Panel for Inspector {
         let components = state.ext.components.clone();
         let assets = state.assets_dir();
         state.materials.refresh(assets.as_deref());
+        let report = state.prefab_report(id);
+        let prefab_marks = PrefabMarks {
+            overridden: std::sync::Arc::new(
+                report
+                    .as_ref()
+                    .map(|r| r.overridden.clone())
+                    .unwrap_or_default(),
+            ),
+            ..Default::default()
+        };
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(marks_id(), prefab_marks.clone()));
+        let mut prefab_actions = Vec::new();
         let mut log = None;
         let frame = state.anim_frame as f32;
         let olvin_scene::file::SceneFile {
@@ -165,6 +237,9 @@ impl Panel for Inspector {
             .show(ui, |ui| {
                 header(ui, e, id);
                 ui.add_space(4.0);
+                if let Some(report) = &report {
+                    prefab_header(ui, report, &mut prefab_actions);
+                }
 
                 section(ui, "⊹ Transform", None, |ui| {
                     grid(ui, "transform", |ui| {
@@ -173,7 +248,8 @@ impl Panel for Inspector {
                             ("Rotation", Prop::Rotation, &mut e.rotation, 0.5, "°"),
                             ("Scale", Prop::Scale, &mut e.scale, 0.02, ""),
                         ] {
-                            row(ui, label, |ui| {
+                            let field = prop_field(prop);
+                            row_field(ui, label, field, |ui| {
                                 let keying = Keying {
                                     action: &mut *animation,
                                     object: id,
@@ -366,12 +442,176 @@ impl Panel for Inspector {
                     egui::Popup::menu(&response).show(|ui| self.add_menu(ui, e, &components));
                 });
             });
+        ui.ctx()
+            .data_mut(|d| d.remove_temp::<PrefabMarks>(marks_id()));
         match log {
             Some(Ok(msg)) => state.info(msg),
             Some(Err(msg)) => state.warn(msg),
             None => {}
         }
+        let reverts = prefab_marks
+            .reverts
+            .lock()
+            .map(|l| l.clone())
+            .unwrap_or_default();
+        prefab_actions.extend(reverts.into_iter().map(PrefabAction::RevertField));
+        for action in prefab_actions {
+            match action {
+                PrefabAction::OpenAsset(asset) => state.open_prefab_asset(&asset),
+                PrefabAction::SelectAsset(asset) => state.select_prefab_asset(&asset),
+                PrefabAction::SelectRoot(root) => state.select(Some(root)),
+                PrefabAction::RevertAll(root) => state.revert_prefab(root),
+                PrefabAction::ApplyAll(root) => {
+                    if let Err(err) = state.apply_prefab(root) {
+                        state.warn(format!("apply prefab: {err}"));
+                    }
+                }
+                PrefabAction::Unpack(root) => state.unpack_prefab(root),
+                PrefabAction::RevertField(key) => state.revert_prefab_field(id, &key),
+            }
+        }
     }
+}
+
+/// The override key of a transform property.
+fn prop_field(prop: Prop) -> &'static str {
+    match prop {
+        Prop::Location => "position",
+        Prop::Rotation => "rotation",
+        Prop::Scale => "scale",
+    }
+}
+
+/// [`row`] for a field that can differ from the prefab: the label turns blue and gets a ↺.
+fn row_field(ui: &mut egui::Ui, label: &str, field: &str, body: impl FnOnce(&mut egui::Ui)) {
+    let marks = marks(ui).filter(|m| m.is_overridden(field));
+    match &marks {
+        Some(marks) => {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(label)
+                        .strong()
+                        .color(theme::palette(ui.ctx()).info),
+                );
+                if ui
+                    .small_button("↺")
+                    .on_hover_text("Revert to the prefab's value")
+                    .clicked()
+                {
+                    marks.revert(field);
+                }
+            });
+        }
+        None => {
+            ui.label(label);
+        }
+    }
+    ui.horizontal(body);
+    ui.end_row();
+}
+
+/// The Prefab block: where the object comes from and what the instance changes.
+fn prefab_header(ui: &mut egui::Ui, r: &PrefabReport, actions: &mut Vec<PrefabAction>) {
+    let p = theme::palette(ui.ctx());
+    let name = r.asset.rsplit('/').next().unwrap_or(&r.asset);
+    let name = name.trim_end_matches(".prefab.ron");
+    egui::Frame::group(ui.style())
+        .fill(p.info.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, p.info.gamma_multiply(0.5)))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("◆").color(p.info).strong());
+                ui.label(theme::caps(ui.ctx(), "Prefab").color(p.info));
+                ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                    .on_hover_text(&r.asset);
+            });
+            if let Some(why) = &r.missing {
+                ui.colored_label(p.warn, format!("The prefab could not be read: {why}"));
+            } else if !r.is_root {
+                ui.weak("Part of a prefab instance; edits here are overrides.");
+                if ui.small_button("Select Root").clicked() {
+                    actions.push(PrefabAction::SelectRoot(r.root));
+                }
+            }
+            if r.is_root {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .small_button("Open")
+                        .on_hover_text("Edit the prefab as a scene")
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::OpenAsset(r.asset.clone()));
+                    }
+                    if ui
+                        .small_button("Select")
+                        .on_hover_text("Show the asset in the Assets panel")
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::SelectAsset(r.asset.clone()));
+                    }
+                    let changed = r.overrides + r.removed + r.added > 0;
+                    if ui
+                        .add_enabled(changed, egui::Button::new("Revert All").small())
+                        .on_hover_text("Drop every override of this instance")
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::RevertAll(r.root));
+                    }
+                    if ui
+                        .add_enabled(changed, egui::Button::new("Apply All").small())
+                        .on_hover_text(
+                            "Write this instance's changes into the prefab; all instances follow",
+                        )
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::ApplyAll(r.root));
+                    }
+                    if ui
+                        .small_button("Unpack")
+                        .on_hover_text("Detach from the prefab; the objects stay")
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::Unpack(r.root));
+                    }
+                });
+                if r.missing.is_none() {
+                    let total = [
+                        (r.overrides, "override"),
+                        (r.removed, "removed"),
+                        (r.added, "added"),
+                    ]
+                    .into_iter()
+                    .filter(|(n, _)| *n > 0)
+                    .map(|(n, what)| {
+                        if what == "override" && n != 1 {
+                            format!("{n} overrides")
+                        } else {
+                            format!("{n} {what}")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                    ui.weak(if total.is_empty() {
+                        "No overrides".to_owned()
+                    } else {
+                        total.join(", ")
+                    });
+                }
+            }
+            for key in &r.overridden {
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("↺")
+                        .on_hover_text("Revert to the prefab's value")
+                        .clicked()
+                    {
+                        actions.push(PrefabAction::RevertField(key.clone()));
+                    }
+                    ui.label(RichText::new(key).color(p.info));
+                });
+            }
+        });
+    ui.add_space(4.0);
 }
 
 /// The object's material: pick or create a `*.mat.ron`, and edit it in place.
@@ -533,16 +773,44 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
         ui.checkbox(&mut e.active, "")
             .on_hover_text("Active: inactive objects and their children are not spawned");
         // Leave room for the "#id" after the field.
-        let width = cell_width(ui) - 38.0 - 2.0 * ui.spacing().item_spacing.x;
+        let marks = marks(ui);
+        let name_changed = marks.as_ref().filter(|m| m.is_overridden("name"));
+        let reserve = if name_changed.is_some() { 66.0 } else { 42.0 };
+        let width = cell_width(ui) - reserve - 2.0 * ui.spacing().item_spacing.x;
         ui.add(TextEdit::singleline(&mut e.name).desired_width(width.max(40.0)));
-        ui.weak(format!("#{id}"));
+        if let Some(marks) = name_changed
+            && ui
+                .small_button("↺")
+                .on_hover_text("Revert the name to the prefab's")
+                .clicked()
+        {
+            marks.revert("name");
+        }
+        // A prefab node's id is a hash: not worth showing.
+        if olvin_scene::prefab::is_member_id(id) {
+            ui.weak("node");
+        } else {
+            ui.weak(format!("#{id}"));
+        }
     });
     ui.horizontal(|ui| {
         // Two combo boxes plus their labels: shrink with the panel, or the
         // overflow widens everything below.
         let combo =
             ((cell_width(ui) - 76.0 - 4.0 * ui.spacing().item_spacing.x) / 2.0).clamp(56.0, 110.0);
-        ui.label("Tag");
+        let marks = marks(ui);
+        let marked = |ui: &mut egui::Ui, text: &str, field: &str| {
+            if marks.as_ref().is_some_and(|m| m.is_overridden(field)) {
+                ui.label(
+                    RichText::new(text)
+                        .strong()
+                        .color(theme::palette(ui.ctx()).info),
+                );
+            } else {
+                ui.label(text);
+            }
+        };
+        marked(ui, "Tag", "tag");
         let tag = if e.tag.is_empty() {
             "Untagged"
         } else {
@@ -561,7 +829,7 @@ fn header(ui: &mut egui::Ui, e: &mut EntityDesc, id: u64) {
                     ui.selectable_value(&mut e.tag, value, t);
                 }
             });
-        ui.label("Layer");
+        marked(ui, "Layer", "layer");
         let layer = LAYERS
             .get(e.layer as usize)
             .map(|s| s.to_string())
@@ -835,6 +1103,11 @@ pub(crate) fn section(
     remove: Option<(&mut Option<&'static str>, &'static str)>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    // A prefab override of this block's field: blue title and a revert button.
+    let overridden = remove
+        .as_ref()
+        .and_then(|(_, key)| field_of(key))
+        .and_then(|field| Some((marks(ui).filter(|m| m.is_overridden(field))?, field)));
     egui::Frame::group(ui.style())
         .fill(ui.visuals().faint_bg_color)
         .show(ui, |ui| {
@@ -847,7 +1120,11 @@ pub(crate) fn section(
             );
             ui.horizontal(|ui| {
                 open.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-                ui.label(theme::caps(ui.ctx(), title));
+                let mut caption = theme::caps(ui.ctx(), title);
+                if overridden.is_some() {
+                    caption = caption.color(theme::palette(ui.ctx()).info);
+                }
+                ui.label(caption);
                 if let Some((slot, key)) = remove {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
@@ -856,6 +1133,14 @@ pub(crate) fn section(
                             .clicked()
                         {
                             *slot = Some(key);
+                        }
+                        if let Some((marks, field)) = &overridden
+                            && ui
+                                .small_button("↺")
+                                .on_hover_text("Revert to the prefab's value")
+                                .clicked()
+                        {
+                            marks.revert(field);
                         }
                     });
                 }

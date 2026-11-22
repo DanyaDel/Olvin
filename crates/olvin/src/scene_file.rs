@@ -130,7 +130,11 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
 
 /// The scene with its prefab instances expanded (borrowed when there are none).
 fn expand_prefabs<'a>(res: &Resources, scene: &'a SceneFile) -> std::borrow::Cow<'a, SceneFile> {
-    if !scene.entities.iter().any(|e| e.prefab.is_some()) {
+    if !scene
+        .entities
+        .iter()
+        .any(|e| e.prefab.is_some() && e.prefab_node.is_none())
+    {
         return std::borrow::Cow::Borrowed(scene);
     }
     let root = res

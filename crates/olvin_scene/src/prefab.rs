@@ -43,6 +43,14 @@ pub fn member_id(parent: u64, local: u64) -> u64 {
     h | MEMBER_BIT
 }
 
+/// The scene id of the node at `path` (see the module docs) of the instance
+/// whose root has id `root`.
+pub fn node_id(root: u64, path: &str) -> u64 {
+    path.split('/')
+        .filter_map(|l| l.parse().ok())
+        .fold(root, member_id)
+}
+
 /// Whether `id` is the id of a prefab node (see [`member_id`]).
 pub fn is_member_id(id: u64) -> bool {
     id & MEMBER_BIT != 0
@@ -550,6 +558,26 @@ impl SceneFile {
             .unwrap_or_default();
         let e = self.get_mut(id).ok_or("no such object")?;
         set_field(e, key, &text)
+    }
+
+    /// Detaches every instance of `asset` from it (the asset is going away):
+    /// expanded ones keep their nodes as ordinary entities, ones that never
+    /// expanded become empty objects. Prefabs inside other prefabs stay.
+    pub fn unpack_asset(&mut self, asset: &str) {
+        let roots: Vec<u64> = self
+            .entities
+            .iter()
+            .filter(|e| e.prefab.as_ref().is_some_and(|p| p.asset == asset))
+            .filter(|e| e.prefab_node.as_ref().is_none_or(|n| n.path.is_empty()))
+            .map(|e| e.id)
+            .collect();
+        for id in roots {
+            if self.get(id).is_some_and(|e| e.prefab_node.is_some()) {
+                self.unpack_prefab(id);
+            } else if let Some(e) = self.get_mut(id) {
+                e.prefab = None;
+            }
+        }
     }
 
     /// Detaches the instance at `root` from its asset: its nodes become

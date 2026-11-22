@@ -649,3 +649,62 @@ fn review() {
     }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }
+
+/// Prefab instances in the hierarchy and the inspector, in both themes
+/// (`$OLVIN_EDITOR_PREFAB_SHOTS` is the output folder).
+#[test]
+#[ignore = "renders PNGs with wgpu; run with --ignored"]
+fn prefab_ui() {
+    let Some(out) = std::env::var_os("OLVIN_EDITOR_PREFAB_SHOTS").map(PathBuf::from) else {
+        return;
+    };
+    fs::create_dir_all(&out).unwrap();
+    let project =
+        std::env::temp_dir().join(format!("olvin-editor-prefab-{}/yard", std::process::id()));
+    demo_project(&project);
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        for select_child in [false, true] {
+            let name = format!(
+                "{theme:?}-prefab_{}.png",
+                if select_child { "node" } else { "root" }
+            )
+            .to_lowercase();
+            // Fresh every time: the prefab files of an earlier shot would rename the new ones.
+            demo_project(&project);
+            let at = project.clone();
+            shot_with(&project, &out.join(name), theme, None, move |h| {
+                let state = h.state_mut().state_mut();
+                // A crate with a lid and a label, saved as a prefab and placed twice.
+                let crate_ = state.create(olvin_editor::NewEntity::Primitive(Shape::Cube), None);
+                state.scene.get_mut(crate_).unwrap().name = "Crate".into();
+                state.scene.get_mut(crate_).unwrap().position = Vec3::new(-3.0, 0.5, 2.0);
+                let lid = state.create(
+                    olvin_editor::NewEntity::Primitive(Shape::Cube),
+                    Some(crate_),
+                );
+                state.scene.get_mut(lid).unwrap().name = "Lid".into();
+                state.scene.get_mut(lid).unwrap().position = Vec3::new(0.0, 0.6, 0.0);
+                state.scene.get_mut(lid).unwrap().scale = Vec3::new(1.0, 0.2, 1.0);
+                let label = state.create(olvin_editor::NewEntity::Empty, Some(lid));
+                state.scene.get_mut(label).unwrap().name = "Label".into();
+                let rel = state.create_prefab(crate_).unwrap();
+                let second = state
+                    .instantiate_prefab(&rel, None, Vec3::new(-3.0, 0.5, 4.0))
+                    .unwrap();
+                // The second crate has its lid raised and a different tag.
+                let lid2 = olvin_editor::olvin_scene::prefab::member_id(second, 2);
+                state.scene.get_mut(lid2).unwrap().position.y = 1.4;
+                state.scene.get_mut(lid2).unwrap().name = "Open Lid".into();
+                state.scene.get_mut(second).unwrap().tag = "Respawn".into();
+                // The asset's tile in the Assets panel's root folder.
+                let assets = at.join("assets");
+                fs::copy(assets.join(&rel), assets.join("Crate.prefab.ron")).unwrap();
+                state.select(Some(if select_child { lid2 } else { second }));
+                // The Assets panel rescans by wall-clock time.
+                std::thread::sleep(std::time::Duration::from_millis(1100));
+                h.run_steps(10);
+            });
+        }
+    }
+    let _ = fs::remove_dir_all(project.parent().unwrap());
+}

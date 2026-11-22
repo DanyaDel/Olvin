@@ -84,6 +84,10 @@ enum Action {
     StartRename(u64),
     Rename(u64, String),
     AssetDrop(std::path::PathBuf, Option<u64>),
+    CreatePrefab(u64),
+    SelectPrefab(u64),
+    OpenPrefab(u64),
+    UnpackPrefab(u64),
 }
 
 #[derive(Default)]
@@ -179,6 +183,26 @@ impl Panel for Hierarchy {
                 Action::AssetDrop(path, row) => {
                     drop_asset(state, &path, DropTarget::Hierarchy(row));
                 }
+                Action::CreatePrefab(id) => {
+                    if let Err(err) = state.create_prefab(id) {
+                        state.warn(format!("create prefab: {err}"));
+                    }
+                }
+                Action::SelectPrefab(id) | Action::OpenPrefab(id) => {
+                    let asset = state
+                        .scene
+                        .get(id)
+                        .and_then(|e| e.prefab.as_ref())
+                        .map(|p| p.asset.clone());
+                    if let Some(asset) = asset {
+                        if matches!(action, Action::OpenPrefab(_)) {
+                            state.open_prefab_asset(&asset);
+                        } else {
+                            state.select_prefab_asset(&asset);
+                        }
+                    }
+                }
+                Action::UnpackPrefab(id) => state.unpack_prefab(id),
                 Action::Rename(id, name) => {
                     if let Some(e) = state.scene.get_mut(id) {
                         e.name = name;
@@ -246,7 +270,20 @@ impl Hierarchy {
             return;
         }
 
-        let icon = if entity.camera.is_some() {
+        // Prefab instances read blue (the theme's info colour, so it works in
+        // both themes); an instance whose prefab could not be read, amber.
+        let palette = theme::palette(ui.ctx());
+        let instance_root = entity.prefab.is_some()
+            && entity
+                .prefab_node
+                .as_ref()
+                .is_none_or(|n| n.path.is_empty());
+        let broken = entity.prefab.is_some() && entity.prefab_node.is_none();
+        let icon = if broken {
+            "⚠"
+        } else if instance_root {
+            "◆"
+        } else if entity.camera.is_some() {
             "🎥"
         } else if entity.mesh.is_some() {
             "◼"
@@ -254,11 +291,15 @@ impl Hierarchy {
             "○"
         };
         let selected = state.is_selected(id);
-        let text = if state.selection == Some(id) && state.selected_ids().len() > 1 {
-            egui::RichText::new(format!("{icon} {}", entity.name)).strong()
-        } else {
-            egui::RichText::new(format!("{icon} {}", entity.name))
-        };
+        let mut text = egui::RichText::new(format!("{icon} {}", entity.name));
+        if state.selection == Some(id) && state.selected_ids().len() > 1 {
+            text = text.strong();
+        }
+        if broken {
+            text = text.color(palette.warn);
+        } else if entity.prefab_node.is_some() {
+            text = text.color(palette.info);
+        }
         // One widget for clicks and drags: a drag source wrapping the label
         // would swallow the clicks.
         let label = ui.add(egui::Button::selectable(selected, text).sense(Sense::click_and_drag()));
@@ -293,6 +334,30 @@ impl Hierarchy {
             ui.menu_button("Create child", |ui| {
                 create_actions(ui, state, Some(id), actions)
             });
+            if entity.prefab.is_none() && entity.prefab_node.is_none() {
+                if ui
+                    .button("Create Prefab")
+                    .on_hover_text("Save this object and its children as a prefab asset")
+                    .clicked()
+                {
+                    actions.push(Action::CreatePrefab(id));
+                }
+            } else if instance_root {
+                if ui.button("Select Prefab Asset").clicked() {
+                    actions.push(Action::SelectPrefab(id));
+                }
+                if ui.button("Open Prefab").clicked() {
+                    actions.push(Action::OpenPrefab(id));
+                }
+                if ui
+                    .button("Unpack Prefab")
+                    .on_hover_text("Detach from the asset; the objects stay")
+                    .clicked()
+                {
+                    actions.push(Action::UnpackPrefab(id));
+                }
+            }
+            ui.separator();
             if ui.button("Rename").clicked() {
                 actions.push(Action::StartRename(id));
             }

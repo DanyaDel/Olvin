@@ -12,10 +12,21 @@ use olvin_scene::file::{
 use crate::engine::{PlaySession, ScenePreview};
 use crate::ext::Extensions;
 use crate::materials::MaterialEdits;
+use crate::prefabs::{PrefabEdits, PrefabLibrary};
+
+mod prefab;
+pub use prefab::PrefabReport;
 
 const UNDO_LIMIT: usize = 200;
 /// Log lines kept; the oldest tenth goes when it is exceeded.
 const LOG_LIMIT: usize = 5000;
+
+/// The asset files an undo step restores: edited materials and prefabs.
+#[derive(Clone, Default, PartialEq)]
+struct AssetEdits {
+    materials: MaterialEdits,
+    prefabs: PrefabEdits,
+}
 
 /// Built-in viewport tools; elements add their own ids (e.g. `"csg.draw"`).
 pub mod tools {
@@ -159,6 +170,10 @@ pub struct EditorState {
     pub render_stats: HashMap<u64, olvin::render::RenderStats>,
     /// Material, texture and shader assets of the project.
     pub materials: crate::materials::MaterialLibrary,
+    /// Prefab assets of the project; the scene holds their instances expanded.
+    pub prefabs: PrefabLibrary,
+    /// The Assets panel shows this file next time (set by "Select Prefab Asset").
+    pub(crate) asset_focus: Option<PathBuf>,
     /// Mesh Edit Mode selection (entity, selected vertices), published by the
     /// editing element for others (the UV editor's "only selected in 3D").
     pub mesh_selection: Option<(u64, Vec<u32>)>,
@@ -172,11 +187,14 @@ pub struct EditorState {
     /// The running game in Play Mode.
     pub play: Option<PlaySession>,
     committed: SceneFile,
-    /// The edited materials (already on disk) at the last undo step.
-    committed_materials: MaterialEdits,
+    /// The edited materials and prefabs (already on disk) at the last undo step.
+    committed_edits: AssetEdits,
     saved: SceneFile,
-    undo: Vec<(SceneFile, MaterialEdits)>,
-    redo: Vec<(SceneFile, MaterialEdits)>,
+    undo: Vec<(SceneFile, AssetEdits)>,
+    redo: Vec<(SceneFile, AssetEdits)>,
+    /// The expanded members of the prefab instance last compared with its asset.
+    prefab_diff: prefab::DiffCache,
+    prefab_polled: Instant,
     started: Instant,
 }
 
@@ -204,6 +222,8 @@ impl EditorState {
             settings_page: None,
             render_stats: HashMap::new(),
             materials: Default::default(),
+            prefabs: Default::default(),
+            asset_focus: None,
             mesh_selection: None,
             busy: false,
             ext: Extensions::default(),
@@ -211,12 +231,15 @@ impl EditorState {
             engine_scene: ScenePreview::default(),
             play: None,
             committed: SceneFile::default(),
-            committed_materials: MaterialEdits::new(),
+            committed_edits: AssetEdits::default(),
             saved: SceneFile::default(),
             undo: Vec::new(),
             redo: Vec::new(),
+            prefab_diff: Default::default(),
+            prefab_polled: Instant::now(),
             started: Instant::now(),
         };
+        state.prefabs.set_root(state.assets_dir());
         match state.default_scene_path() {
             Some(path) if path.is_file() => state.open(&path),
             Some(path) => {
@@ -282,7 +305,9 @@ impl EditorState {
 
     pub fn open(&mut self, path: &Path) {
         match SceneFile::load(path) {
-            Ok(scene) => {
+            Ok(mut scene) => {
+                self.prefabs.set_root(self.assets_dir());
+                self.expand_prefabs(&mut scene);
                 self.replace_scene(scene, Some(path.to_path_buf()), true);
                 let name = path
                     .file_name()
@@ -319,7 +344,7 @@ impl EditorState {
                 self.scene.clone()
             }
         };
-        match scene.save(path) {
+        match self.file_form(&scene).save(path) {
             Ok(()) => {
                 self.saved = scene;
                 self.scene_path = Some(path.to_path_buf());
@@ -340,7 +365,7 @@ impl EditorState {
             SceneFile::default()
         };
         self.committed = scene.clone();
-        self.committed_materials = self.materials.edits().clone();
+        self.committed_edits = self.edits_now();
         self.scene = scene;
         self.scene_path = path;
         // A running game belongs to the scene that was replaced.
@@ -384,9 +409,20 @@ impl EditorState {
     pub(crate) fn forget_materials(&mut self, prefix: &str) {
         let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
         self.materials.forget(&under);
-        self.committed_materials.retain(|k, _| !under(k));
+        self.committed_edits.materials.retain(|k, _| !under(k));
         for (_, m) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-            m.retain(|k, _| !under(k));
+            m.materials.retain(|k, _| !under(k));
+        }
+    }
+
+    /// Drops the prefab edits under `prefix` (an asset moved or deleted) from
+    /// the library and from every undo step.
+    pub(crate) fn forget_prefabs(&mut self, prefix: &str) {
+        let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
+        self.prefabs.forget(&under);
+        self.committed_edits.prefabs.retain(|k, _| !under(k));
+        for (_, m) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            m.prefabs.retain(|k, _| !under(k));
         }
     }
 
@@ -482,12 +518,25 @@ impl EditorState {
         }
     }
 
+    fn edits_now(&self) -> AssetEdits {
+        AssetEdits {
+            materials: self.materials.edits().clone(),
+            prefabs: self.prefabs.edits().clone(),
+        }
+    }
+
+    /// Materials or prefabs were written since the last undo step.
+    fn edits_changed(&self) -> bool {
+        self.materials.edits() != &self.committed_edits.materials
+            || self.prefabs.edits() != &self.committed_edits.prefabs
+    }
+
     fn commit(&mut self) {
-        if self.scene != self.committed || self.materials.edits() != &self.committed_materials {
-            let materials = self.materials.edits().clone();
+        if self.scene != self.committed || self.edits_changed() {
+            let edits = self.edits_now();
             self.undo.push((
                 std::mem::replace(&mut self.committed, self.scene.clone()),
-                std::mem::replace(&mut self.committed_materials, materials),
+                std::mem::replace(&mut self.committed_edits, edits),
             ));
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
@@ -499,9 +548,7 @@ impl EditorState {
     /// History is frozen while playing: everything done then is discarded by Stop.
     pub fn can_undo(&self) -> bool {
         self.play.is_none()
-            && (!self.undo.is_empty()
-                || self.scene != self.committed
-                || self.materials.edits() != &self.committed_materials)
+            && (!self.undo.is_empty() || self.scene != self.committed || self.edits_changed())
     }
 
     pub fn can_redo(&self) -> bool {
@@ -513,10 +560,10 @@ impl EditorState {
             return;
         }
         self.commit();
-        if let Some((scene, materials)) = self.undo.pop() {
+        if let Some((scene, edits)) = self.undo.pop() {
             self.redo.push((
                 std::mem::replace(&mut self.committed, scene),
-                std::mem::replace(&mut self.committed_materials, materials),
+                std::mem::replace(&mut self.committed_edits, edits),
             ));
             self.scene = self.committed.clone();
             self.after_history_jump();
@@ -527,10 +574,10 @@ impl EditorState {
         if self.play.is_some() {
             return;
         }
-        if let Some((scene, materials)) = self.redo.pop() {
+        if let Some((scene, edits)) = self.redo.pop() {
             self.undo.push((
                 std::mem::replace(&mut self.committed, scene),
-                std::mem::replace(&mut self.committed_materials, materials),
+                std::mem::replace(&mut self.committed_edits, edits),
             ));
             self.scene = self.committed.clone();
             self.after_history_jump();
@@ -538,9 +585,12 @@ impl EditorState {
     }
 
     fn after_history_jump(&mut self) {
-        // Material files follow the step: they are rewritten to its content.
-        if let Err(err) = self.materials.restore(&self.committed_materials) {
+        // Material and prefab files follow the step: they are rewritten to its content.
+        if let Err(err) = self.materials.restore(&self.committed_edits.materials) {
             self.error(format!("material undo: {err}"));
+        }
+        if let Err(err) = self.prefabs.restore(&self.committed_edits.prefabs) {
+            self.error(format!("prefab undo: {err}"));
         }
         if self
             .selection
@@ -550,6 +600,7 @@ impl EditorState {
         }
         let scene = &self.scene;
         self.multi.retain(|id| scene.get(*id).is_some());
+        self.prefab_diff = Default::default();
         self.scene_generation += 1;
     }
 
@@ -575,8 +626,17 @@ impl EditorState {
         false
     }
 
+    /// A free scene id: above every id of the scene, ignoring prefab nodes
+    /// (their ids are hashes, see `olvin_scene::prefab::member_id`).
     fn next_id(&self) -> u64 {
-        self.scene.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1
+        self.scene
+            .entities
+            .iter()
+            .map(|e| e.id)
+            .filter(|id| !olvin_scene::prefab::is_member_id(*id))
+            .max()
+            .unwrap_or(0)
+            + 1
     }
 
     /// Imports a model (`.gltf`/`.glb` under assets/) into the scene: its node
@@ -693,28 +753,55 @@ impl EditorState {
         }
     }
 
-    /// Copies an entity with its children; returns the copy's id.
+    /// Copies an entity with its children; returns the copy's id. A prefab
+    /// instance is copied as an instance (with its overrides); a node inside
+    /// an instance cannot be copied on its own.
     pub fn duplicate(&mut self, id: u64) -> Option<u64> {
-        let subtree: Vec<EntityDesc> = self
+        if self.is_prefab_member(id) {
+            return None;
+        }
+        let inside: Vec<u64> = self
             .scene
             .entities
             .iter()
             .filter(|e| e.id == id || self.is_descendant(e.id, id))
-            .cloned()
+            .map(|e| e.id)
             .collect();
-        if subtree.is_empty() {
+        if inside.is_empty() {
             return None;
         }
+        // The file form has the instances' roots and not their nodes: those
+        // come back from the asset, under ids derived from the copy's root.
+        let scene = self.scene.clone();
+        let file = self.file_form(&scene);
+        let subtree: Vec<EntityDesc> = file
+            .entities
+            .into_iter()
+            .filter(|e| inside.contains(&e.id))
+            .collect();
         let remap: HashMap<u64, u64> = subtree.iter().map(|e| e.id).zip(self.next_id()..).collect();
         for mut e in subtree {
             if e.id == id {
                 e.name = format!("{} (copy)", e.name);
             } else {
-                e.parent = e.parent.map(|p| remap[&p]);
+                e.parent = e.parent.map(|p| {
+                    remap.get(&p).copied().unwrap_or_else(|| {
+                        // The parent is a node of a copied instance: the copy's node.
+                        scene
+                            .get(p)
+                            .and_then(|n| n.prefab_node.as_ref())
+                            .and_then(|n| {
+                                let root = remap.get(&n.root)?;
+                                Some(olvin_scene::prefab::node_id(*root, &n.path))
+                            })
+                            .unwrap_or(p)
+                    })
+                });
             }
             e.id = remap[&e.id];
             self.scene.entities.push(e);
         }
+        self.expand_prefabs_now();
         let copy = remap[&id];
         self.selection = Some(copy);
         Some(copy)
@@ -723,6 +810,9 @@ impl EditorState {
     /// Moves an entity up (-1) or down (+1) among its siblings. Order matters
     /// for CSG brushes.
     pub fn move_sibling(&mut self, id: u64, dir: i32) -> bool {
+        if self.is_prefab_member(id) {
+            return false;
+        }
         let Some(parent) = self.scene.get(id).map(|e| e.parent) else {
             return false;
         };
@@ -749,6 +839,10 @@ impl EditorState {
 
     /// Moves `id` under `parent` keeping its world transform (like Unity).
     pub fn reparent(&mut self, id: u64, parent: Option<u64>) -> bool {
+        // The nodes of an instance stay where the prefab put them.
+        if self.is_prefab_member(id) {
+            return false;
+        }
         if parent == Some(id) || parent.is_some_and(|p| self.is_descendant(p, id)) {
             return false;
         }

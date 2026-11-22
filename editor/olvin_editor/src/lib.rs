@@ -7,6 +7,7 @@ pub mod engine;
 pub mod ext;
 pub mod materials;
 pub mod panels;
+pub mod prefabs;
 pub mod prefs;
 mod registry;
 mod render;
@@ -21,7 +22,7 @@ pub use registry::{
     EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
 };
 pub use render::{DEPTH_FORMAT, MSAA};
-pub use state::{EditorState, LogLevel, LogLine, NewEntity, SnapSettings, tools};
+pub use state::{EditorState, LogLevel, LogLine, NewEntity, PrefabReport, SnapSettings, tools};
 pub use workspace::Tab;
 
 // Re-exports so plugins build against exactly the editor's versions.

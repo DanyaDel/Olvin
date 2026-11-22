@@ -263,6 +263,13 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
             res.get_mut::<olvin_render::Textures>(),
         ) {
             settings.sky = assets.sky(&scene.environment.skybox, &mut textures);
+            settings.post.grade.lut = scene
+                .environment
+                .post
+                .lut
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .and_then(|p| assets.texture(p, false, &mut textures));
         }
     }
 
@@ -353,6 +360,29 @@ pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
         color: scaled(f.color, 1.0),
         start: f.start,
         end: f.end,
+    });
+    let post = &env.post;
+    settings.post.fxaa = post.fxaa;
+    settings.post.ao = post.ao.map(|a| olvin_render::AmbientOcclusion {
+        radius: a.radius,
+        strength: a.strength,
+        bias: a.bias,
+    });
+    settings.post.grade = olvin_render::ColorGrade {
+        // The LUT image is loaded where assets are at hand (`spawn_ids`).
+        lut: None,
+        lut_strength: post.lut_strength,
+        saturation: post.saturation,
+        contrast: post.contrast,
+        lift: post.lift,
+        gamma: post.gamma,
+        gain: post.gain,
+    };
+    settings.height_fog = env.height_fog.map(|f| olvin_render::HeightFog {
+        color: scaled(f.color, 1.0),
+        density: f.density,
+        falloff: f.falloff,
+        height: f.height,
     });
     settings.shadow_distance = env.shadow_distance;
     settings.shadow_map_size = env.shadow_resolution.clamp(256, 8192);
@@ -613,6 +643,15 @@ mod tests {
         assert_eq!(settings.exposure, 2.0);
         assert!(settings.fog.is_some());
         assert!(settings.vsync, "window options stay");
+        // Post and height fog follow the environment.
+        scene.environment.height_fog = Some(Default::default());
+        scene.environment.post.fxaa = false;
+        scene.environment.post.ao = Some(Default::default());
+        scene.environment.post.saturation = 0.5;
+        apply_lighting(&scene, &mut settings);
+        assert!(settings.height_fog.is_some());
+        assert!(!settings.post.fxaa && settings.post.ao.is_some());
+        assert_eq!(settings.post.grade.saturation, 0.5);
         let path = std::env::temp_dir().join(format!("olvin-env-{}.scene.ron", std::process::id()));
         scene.save(&path).unwrap();
         assert_eq!(SceneFile::load(&path).unwrap(), scene);

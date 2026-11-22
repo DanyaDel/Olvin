@@ -67,6 +67,11 @@ struct Globals {
     // x: mode (0 clear colour, 1 procedural, 2 texture); y: texture intensity;
     // z: texture mip count; w = 1: draw the sun disc.
     sky_params: vec4<f32>,
+    // rgb: height fog colour; w = 1: height fog on.
+    height_fog_color: vec4<f32>,
+    // x: density at the base altitude (per metre); y: falloff per metre of
+    // altitude; z: base altitude (world Y).
+    height_fog: vec4<f32>,
     lights: array<Light, 16>,
 };
 

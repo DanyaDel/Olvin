@@ -9,8 +9,8 @@
 // Lighting, Unity built-in style: hemisphere ambient + roughness-faded sky
 // reflection, a sun with cascaded PCF shadows, up to 16 point / spot / extra
 // directional lights, GGX + height-correlated Smith + Schlick
-// (metallic-roughness), linear fog (towards the sky at the horizon when a sky
-// is set), exposure + ACES, then sRGB.
+// (metallic-roughness), linear and exponential height fog (towards the sky at
+// the horizon when a sky is set), exposure + ACES, then sRGB.
 
 struct SurfaceInput {
     world_position: vec3<f32>,
@@ -355,6 +355,35 @@ fn unpack_normal(texel: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(n.xy * material.emissive.w, n.z);
 }
 
+// What fog fades into: its own colour, or the sky at the horizon behind the
+// fragment (`v` points at the camera).
+fn fog_tint(own: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    if (globals.sky_params.x > 0.5) {
+        let flat_dir = vec3<f32>(-v.x, 0.0, -v.z);
+        let d = select(vec3<f32>(0.0, 0.0, -1.0), normalize(flat_dir), dot(flat_dir, flat_dir) > 1e-8);
+        return sky_radiance(d, 0.5);
+    }
+    return own;
+}
+
+// Exponential height fog: density * exp(-falloff * (y - base)) integrated
+// along the ray from the eye to `p`, as the fog opacity 1 - exp(-optical depth).
+fn height_fog_amount(p: vec3<f32>, v: vec3<f32>, view_depth: f32) -> f32 {
+    let density = globals.height_fog.x;
+    let falloff = globals.height_fog.y;
+    // Orthographic: the eye plane is `view_depth` back along the view direction.
+    let eye = select(p + v * view_depth, globals.camera.xyz, globals.camera.w > 0.5);
+    let len = length(p - eye);
+    let y0 = eye.y - globals.height_fog.z;
+    let y1 = p.y - globals.height_fog.z;
+    let a0 = exp(clamp(-falloff * y0, -60.0, 60.0));
+    let a1 = exp(clamp(-falloff * y1, -60.0, 60.0));
+    let k = falloff * (y1 - y0);
+    // The mean of exp(-falloff * y) along the ray.
+    let mean = select(a0, (a0 - a1) / k, abs(k) > 1e-4);
+    return 1.0 - exp(-density * len * mean);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let geo_n = normalize(in.normal);
@@ -468,14 +497,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if (globals.fog_color.w > 0.5) {
         let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
         let fog = clamp((depth - globals.params.x) / max(globals.params.y - globals.params.x, 1e-3), 0.0, 1.0);
-        var fog_color = globals.fog_color.rgb;
-        if (globals.sky_params.x > 0.5) {
-            // Into the sky at the horizon behind the fragment.
-            let flat_dir = vec3<f32>(-v.x, 0.0, -v.z);
-            let d = select(vec3<f32>(0.0, 0.0, -1.0), normalize(flat_dir), dot(flat_dir, flat_dir) > 1e-8);
-            fog_color = sky_radiance(d, 0.5);
-        }
-        color = mix(color, fog_color, fog);
+        // Into the sky at the horizon behind the fragment, when there is one.
+        color = mix(color, fog_tint(globals.fog_color.rgb, v), fog);
+    }
+    if (globals.height_fog_color.w > 0.5) {
+        let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
+        let fog = height_fog_amount(p, v, depth);
+        color = mix(color, fog_tint(globals.height_fog_color.rgb, v), fog);
     }
 
     return vec4<f32>(finish(color), s.color.a);

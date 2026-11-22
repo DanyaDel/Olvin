@@ -61,6 +61,8 @@ pub(crate) struct Globals {
     sky_horizon: [f32; 4],
     sky_ground: [f32; 4],
     sky_params: [f32; 4],
+    height_fog_color: [f32; 4],
+    height_fog: [f32; 4],
     lights: [PackedLight; MAX_LIGHTS],
 }
 

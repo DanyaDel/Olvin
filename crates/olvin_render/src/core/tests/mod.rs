@@ -3,6 +3,7 @@
 
 mod blend;
 mod edge;
+mod fog;
 mod lighting;
 mod materials;
 mod post;

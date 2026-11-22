@@ -234,6 +234,7 @@ impl RenderCore {
 
         // Uniforms.
         let fog = settings.fog;
+        let height_fog = settings.height_fog;
         // Sampling matrices land in the cascade's tile of the atlas.
         let mut shadow_view_proj = [Mat4::IDENTITY; MAX_CASCADES];
         let mut shadow_offsets = [0.0; 4];
@@ -346,6 +347,10 @@ impl RenderCore {
             sky_horizon: sky.horizon,
             sky_ground: sky.ground,
             sky_params: sky.params,
+            height_fog_color: height_fog.map_or([0.0; 4], |f| rgb(f.color.0).extend(1.0).into()),
+            height_fog: height_fog.map_or([0.0; 4], |f| {
+                [f.density.max(0.0), f.falloff.max(0.0), f.height, 0.0]
+            }),
             lights: lights.lights,
         };
         self.queue

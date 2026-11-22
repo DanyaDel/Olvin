@@ -137,6 +137,9 @@ pub struct Environment {
     /// ACES filmic tonemapping; off = plain clamp.
     pub filmic: bool,
     pub fog: Option<FogDesc>,
+    /// Exponential fog that thickens towards the ground, on top of `fog`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_fog: Option<HeightFogDesc>,
     /// What's drawn behind everything.
     pub skybox: Sky,
     /// Shadows are drawn this far from the camera.
@@ -153,6 +156,10 @@ pub struct Environment {
     pub max_point_shadows: u32,
     /// Resolution of the atlas holding spot and point shadows (4x4 tiles).
     pub local_shadow_resolution: u32,
+    /// Post-processing of the window renderer: FXAA, ambient occlusion and
+    /// colour grading.
+    #[serde(skip_serializing_if = "PostDesc::is_default")]
+    pub post: PostDesc,
 }
 
 /// Shadow edge filtering (see `olvin_render::ShadowFilter`).
@@ -207,6 +214,98 @@ pub struct FogDesc {
     pub end: f32,
 }
 
+/// Post-processing (Full tier of the window renderer; the editor viewport
+/// draws without it).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostDesc {
+    /// FXAA anti-aliasing.
+    pub fxaa: bool,
+    /// Screen-space ambient occlusion (GTAO).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ao: Option<AoDesc>,
+    /// 1 = unchanged, 0 = grey.
+    pub saturation: f32,
+    /// Around mid grey; 1 = unchanged.
+    pub contrast: f32,
+    /// Added to the shadows.
+    pub lift: [f32; 3],
+    /// Midtone curve per channel; 1 = unchanged.
+    pub gamma: [f32; 3],
+    /// Multiplies the highlights.
+    pub gain: [f32; 3],
+    /// A colour grading LUT strip (`size` slices of `size`², e.g. 1024x32),
+    /// path relative to the project's `assets/`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lut: Option<String>,
+    /// 0 = no LUT, 1 = fully through it.
+    pub lut_strength: f32,
+}
+
+impl Default for PostDesc {
+    fn default() -> Self {
+        Self {
+            fxaa: true,
+            ao: None,
+            saturation: 1.0,
+            contrast: 1.0,
+            lift: [0.0; 3],
+            gamma: [1.0; 3],
+            gain: [1.0; 3],
+            lut: None,
+            lut_strength: 1.0,
+        }
+    }
+}
+
+impl PostDesc {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Ambient occlusion settings; see `olvin_render::AmbientOcclusion`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AoDesc {
+    /// Reach in metres.
+    pub radius: f32,
+    /// Exponent on the visibility: 1 = plain, higher = darker.
+    pub strength: f32,
+    /// Slack against self-occlusion.
+    pub bias: f32,
+}
+
+impl Default for AoDesc {
+    fn default() -> Self {
+        Self {
+            radius: 1.0,
+            strength: 1.2,
+            bias: 0.05,
+        }
+    }
+}
+
+/// Exponential height fog: `density` per metre at `height`, thinning out
+/// upwards by `falloff` per metre. Linear colour.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeightFogDesc {
+    pub color: [f32; 3],
+    pub density: f32,
+    pub falloff: f32,
+    pub height: f32,
+}
+
+impl Default for HeightFogDesc {
+    fn default() -> Self {
+        Self {
+            color: [0.5, 0.6, 0.7],
+            density: 0.02,
+            falloff: 0.15,
+            height: 0.0,
+        }
+    }
+}
+
 impl Default for Environment {
     fn default() -> Self {
         Self {
@@ -217,6 +316,7 @@ impl Default for Environment {
             exposure: 1.0,
             filmic: true,
             fog: None,
+            height_fog: None,
             skybox: Sky::Color,
             shadow_distance: 60.0,
             shadow_resolution: 2048,
@@ -225,6 +325,7 @@ impl Default for Environment {
             max_spot_shadows: 4,
             max_point_shadows: 2,
             local_shadow_resolution: 2048,
+            post: PostDesc::default(),
         }
     }
 }
@@ -1147,6 +1248,18 @@ mod tests {
                 },
                 filmic: false,
                 shadow_resolution: 4096,
+                height_fog: Some(HeightFogDesc {
+                    density: 0.04,
+                    ..Default::default()
+                }),
+                post: PostDesc {
+                    fxaa: false,
+                    ao: Some(AoDesc::default()),
+                    saturation: 1.2,
+                    lut: Some("grading/warm.png".into()),
+                    lut_strength: 0.5,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             extensions: BTreeMap::from([("animator".into(), "(clips: [])".into())]),
@@ -1179,6 +1292,31 @@ mod tests {
         assert!(!text.contains("environment") && !text.contains("extensions"));
         assert_eq!(SceneFile::load(&path).unwrap(), minimal);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scenes_from_before_height_fog_and_post_still_load() {
+        // An environment as older builds wrote it: none of the newer fields.
+        let text = "(version: 3, entities: [], environment: (exposure: 1.5, \
+                    fog: Some((color: (0.5, 0.5, 0.5), start: 1.0, end: 9.0))))";
+        let scene = SceneFile::parse(text).unwrap();
+        assert_eq!(scene.environment.exposure, 1.5);
+        assert!(scene.environment.fog.is_some());
+        assert_eq!(scene.environment.height_fog, None);
+        assert_eq!(scene.environment.post, PostDesc::default());
+        assert!(
+            scene.environment.post.fxaa,
+            "FXAA is on unless a scene says no"
+        );
+        // The post block alone, partially filled, keeps the other defaults.
+        let text = "(version: 3, entities: [], environment: (post: (ao: Some((radius: 2.0, \
+                    strength: 1.0, bias: 0.1)), saturation: 0.5)))";
+        let post = SceneFile::parse(text).unwrap().environment.post;
+        assert_eq!(post.ao.map(|a| a.radius), Some(2.0));
+        assert_eq!(
+            (post.saturation, post.contrast, post.fxaa),
+            (0.5, 1.0, true)
+        );
     }
 
     #[test]

@@ -126,6 +126,33 @@ pub struct Fog {
     pub end: f32,
 }
 
+/// Exponential height fog, applied before tonemapping next to [`Fog`]: the
+/// air is densest at `height` and thins out upwards, so valleys fill with
+/// mist and the camera looking down through it sees more than looking along
+/// it. Works on every tier (it lives in the mesh shader). Like [`Fog`] it
+/// fades into the sky's horizon colour when a sky is set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeightFog {
+    pub color: Color,
+    /// Fog per metre at `height`; 0.02 sees about 50 m.
+    pub density: f32,
+    /// How fast the density drops per metre above `height` (0 = uniform).
+    pub falloff: f32,
+    /// World altitude (Y) where the density equals `density`.
+    pub height: f32,
+}
+
+impl Default for HeightFog {
+    fn default() -> Self {
+        Self {
+            color: Color::rgb(0.5, 0.6, 0.7),
+            density: 0.02,
+            falloff: 0.15,
+            height: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tonemapping {
     /// Clamp; what you write is what you get.
@@ -195,6 +222,8 @@ pub struct RenderSettings {
     pub exposure: f32,
     pub tonemapping: Tonemapping,
     pub fog: Option<Fog>,
+    /// Exponential height fog, on top of [`Self::fog`].
+    pub height_fog: Option<HeightFog>,
     /// Bloom; needs the post-processing chain of [`RenderTier::Full`] in the
     /// window renderer, ignored elsewhere.
     pub bloom: Option<Bloom>,
@@ -241,6 +270,7 @@ impl Default for RenderSettings {
             exposure: 1.0,
             tonemapping: Tonemapping::Aces,
             fog: None,
+            height_fog: None,
             bloom: None,
             post: PostSettings::default(),
             shadow_distance: 60.0,

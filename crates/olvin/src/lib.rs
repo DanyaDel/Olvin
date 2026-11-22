@@ -191,8 +191,8 @@ pub mod prelude {
     };
     #[cfg(feature = "render")]
     pub use olvin_render::{
-        Color, Fog, Light, LightKind, MeshData, MeshHandle, MeshRenderer, Meshes, RenderInfo,
-        RenderPlugin, RenderSettings, RenderStats, Tonemapping,
+        Color, Fog, HeightFog, Light, LightKind, MeshData, MeshHandle, MeshRenderer, Meshes,
+        RenderInfo, RenderPlugin, RenderSettings, RenderStats, Tonemapping,
     };
     pub use olvin_scene::{Camera, Name, SceneId, Tag, Transform};
     #[cfg(feature = "script")]

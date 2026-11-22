@@ -33,7 +33,9 @@ pub use particles::{
     Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
     update_emitters,
 };
-pub use post::{AmbientOcclusion, HDR_FORMAT, PostProcess, PostSettings};
+pub use post::{
+    AmbientOcclusion, ColorGrade, HDR_FORMAT, PostProcess, PostSettings, identity_lut, lut_strip,
+};
 pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{
     RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, begin_scene_pass, tier_of,

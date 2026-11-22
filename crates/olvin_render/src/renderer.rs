@@ -353,6 +353,7 @@ impl Renderer {
         olvin_core::profile_scope!("render scene passes");
         if let Some(post) = &mut self.post {
             post.resize(&self.core.device, size);
+            post.sync_lut(&self.core.device, &self.gpu, settings);
             let hdr = post.hdr_view().expect("resized above");
             let depth = post.depth_view().expect("resized above");
             let mut pass = begin_scene_pass(

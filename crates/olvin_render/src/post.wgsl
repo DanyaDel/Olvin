@@ -15,6 +15,12 @@ struct Params {
     inv_view_proj: mat4x4<f32>,
     // x: AO radius (m); y: strength (exponent); z: bias; w = 1: AO on.
     ao: vec4<f32>,
+    // x: LUT strength; y: saturation; z: contrast; w = 1: grading on.
+    grade: vec4<f32>,
+    // rgb: lift; rgb: gamma, w = 1: a LUT is bound; rgb: gain.
+    lift: vec4<f32>,
+    gamma: vec4<f32>,
+    gain: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -24,6 +30,8 @@ struct Params {
 // The scene's depth, and the blurred AO (a stand-in while it is being made).
 @group(1) @binding(0) var depth_tex: texture_2d<f32>; // a depth texture read as unfilterable float (r)
 @group(1) @binding(1) var ao_tex: texture_2d<f32>;
+// The colour grading LUT strip (size slices of size x size, blue picks the slice).
+@group(1) @binding(2) var lut_tex: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
@@ -47,6 +55,12 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let lo = c * 12.92;
     let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((max(c, vec3<f32>(0.0)) + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
 fn tap(t: texture_2d<f32>, uv: vec2<f32>) -> vec3<f32> {
@@ -88,6 +102,36 @@ fn fs_blur(in: VertexOut) -> @location(0) vec4<f32> {
     c += (tap(source, in.uv + delta * 1.3846153846) + tap(source, in.uv - delta * 1.3846153846)) * 0.3162162162;
     c += (tap(source, in.uv + delta * 3.2307692308) + tap(source, in.uv - delta * 3.2307692308)) * 0.0702702703;
     return vec4<f32>(c, 1.0);
+}
+
+// ---- Colour grading, on sRGB-encoded colour.
+
+// Trilinear lookup in the LUT strip: blue picks (and blends) two slices, red
+// and green are filtered by the sampler inside a slice.
+fn lut_lookup(c: vec3<f32>) -> vec3<f32> {
+    let dim = vec2<f32>(textureDimensions(lut_tex));
+    let n = dim.y;
+    let b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
+    let b0 = floor(b);
+    let b1 = min(b0 + 1.0, n - 1.0);
+    let v = (clamp(c.g, 0.0, 1.0) * (n - 1.0) + 0.5) / n;
+    let u = clamp(c.r, 0.0, 1.0) * (n - 1.0) + 0.5;
+    let s0 = textureSampleLevel(lut_tex, linear_sampler, vec2<f32>((b0 * n + u) / dim.x, v), 0.0).rgb;
+    let s1 = textureSampleLevel(lut_tex, linear_sampler, vec2<f32>((b1 * n + u) / dim.x, v), 0.0).rgb;
+    return mix(s0, s1, b - b0);
+}
+
+fn grade(encoded: vec3<f32>) -> vec3<f32> {
+    var c = max(encoded * params.gain.rgb + params.lift.rgb, vec3<f32>(0.0));
+    c = pow(c, 1.0 / params.gamma.rgb);
+    c = (c - 0.5) * params.grade.z + 0.5;
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    c = mix(vec3<f32>(luma), c, params.grade.y);
+    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (params.gamma.w > 0.5) {
+        c = mix(c, lut_lookup(c), params.grade.x);
+    }
+    return c;
 }
 
 // ---- Ambient occlusion: GTAO (Jimenez et al. 2016) in world space. Two
@@ -265,6 +309,14 @@ fn fs_composite(in: VertexOut) -> @location(0) vec4<f32> {
         color = aces(color);
     }
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (params.grade.w > 0.5) {
+        // Graded in display colour; hardware sRGB targets get linear back.
+        let graded = grade(linear_to_srgb(color));
+        if (params.output.x > 0.5) {
+            return vec4<f32>(graded, 1.0);
+        }
+        return vec4<f32>(srgb_to_linear(graded), 1.0);
+    }
     if (params.output.x > 0.5) {
         color = linear_to_srgb(color);
     }

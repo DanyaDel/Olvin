@@ -2,13 +2,14 @@
 //! `Rgba16Float` target (plus a depth texture the chain can read) without
 //! tonemapping, then a short chain of fullscreen passes computes ambient
 //! occlusion from the depth, adds bloom, applies exposure and the tonemapper,
-//! and writes the surface (through FXAA when it is on). Compat hardware skips
+//! grades the colour (LUT, lift / gamma / gain, saturation, contrast), and
+//! writes the surface (through FXAA when it is on). Compat hardware skips
 //! all of this and tonemaps in the mesh shader.
 
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 
-use crate::{RenderSettings, Tonemapping};
+use crate::{GpuMeshes, RenderSettings, TextureData, TextureHandle, Tonemapping};
 
 /// What the scene is drawn into before post-processing.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -43,6 +44,82 @@ impl Default for AmbientOcclusion {
     }
 }
 
+/// Colour grading after tonemapping, in display (sRGB-encoded) colour:
+/// lift / gamma / gain, then contrast and saturation, then the LUT. The
+/// default changes nothing and costs nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorGrade {
+    /// A LUT strip (see [`lut_strip`]), uploaded as
+    /// [`TextureFormat::Rgba8Linear`](crate::TextureFormat): `size` slices of
+    /// `size`² texels side by side, blue picks the slice, red runs along a
+    /// slice, green down it.
+    pub lut: Option<TextureHandle>,
+    /// 0 = the graded colour as it is, 1 = fully through the LUT.
+    pub lut_strength: f32,
+    /// 1 = unchanged, 0 = grey.
+    pub saturation: f32,
+    /// Around mid grey; 1 = unchanged.
+    pub contrast: f32,
+    /// Added to the shadows (0 = unchanged).
+    pub lift: [f32; 3],
+    /// Midtone curve per channel (1 = unchanged, > 1 brightens).
+    pub gamma: [f32; 3],
+    /// Multiplies the highlights (1 = unchanged).
+    pub gain: [f32; 3],
+}
+
+impl Default for ColorGrade {
+    fn default() -> Self {
+        Self {
+            lut: None,
+            lut_strength: 1.0,
+            saturation: 1.0,
+            contrast: 1.0,
+            lift: [0.0; 3],
+            gamma: [1.0; 3],
+            gain: [1.0; 3],
+        }
+    }
+}
+
+impl ColorGrade {
+    /// Nothing to apply (the grading is skipped altogether).
+    pub fn is_neutral(&self) -> bool {
+        let has_lut = self.lut.is_some() && self.lut_strength > 0.0;
+        !has_lut
+            && self.saturation == 1.0
+            && self.contrast == 1.0
+            && self.lift == [0.0; 3]
+            && self.gamma == [1.0; 3]
+            && self.gain == [1.0; 3]
+    }
+}
+
+/// A LUT strip of `size`³ colours (4 to 64): `f` maps each sRGB-encoded input
+/// colour to its graded colour (both 0..1). Upload it with
+/// `Textures::add`; blue picks the slice, red runs along it, green down it.
+pub fn lut_strip(size: u32, f: impl Fn([f32; 3]) -> [f32; 3]) -> TextureData {
+    let n = size.clamp(4, 64);
+    let max = (n - 1) as f32;
+    let mut pixels = Vec::with_capacity((n * n * n * 4) as usize);
+    for g in 0..n {
+        for b in 0..n {
+            for r in 0..n {
+                let out = f([r as f32 / max, g as f32 / max, b as f32 / max]);
+                pixels.extend(out.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+                pixels.push(255);
+            }
+        }
+    }
+    TextureData::rgba8(n * n, n, pixels, false)
+}
+
+/// The LUT strip that changes nothing; the starting point for grading in an
+/// image editor, and what a fresh LUT slot holds.
+pub fn identity_lut(size: u32) -> TextureData {
+    lut_strip(size, |c| c)
+}
+
 /// Post-processing switches of [`RenderSettings`]. Like bloom, they need the
 /// chain of [`RenderTier::Full`](crate::RenderTier::Full) in the window
 /// renderer and are ignored elsewhere.
@@ -54,6 +131,8 @@ pub struct PostSettings {
     /// Ambient occlusion; off by default: it is the one effect with a real
     /// cost and it changes the look of every scene.
     pub ao: Option<AmbientOcclusion>,
+    /// Colour grading (LUT and simple controls); neutral by default.
+    pub grade: ColorGrade,
 }
 
 impl Default for PostSettings {
@@ -61,6 +140,7 @@ impl Default for PostSettings {
         Self {
             fxaa: true,
             ao: None,
+            grade: ColorGrade::default(),
         }
     }
 }
@@ -79,6 +159,12 @@ struct Params {
     inv_view_proj: [[f32; 4]; 4],
     /// AO radius, strength, bias, 1: AO on.
     ao: [f32; 4],
+    /// LUT strength, saturation, contrast, 1: grading on.
+    grade: [f32; 4],
+    /// Lift rgb, -; gamma rgb, 1: a LUT is bound; gain rgb, -.
+    lift: [f32; 4],
+    gamma: [f32; 4],
+    gain: [f32; 4],
 }
 
 /// Textures and bind groups that depend on the frame size.
@@ -130,6 +216,8 @@ pub struct PostProcess {
     horizontal: wgpu::Buffer,
     vertical: wgpu::Buffer,
     lut: Option<wgpu::TextureView>,
+    /// Upload generation of `lut`.
+    lut_generation: u64,
     encode_srgb: bool,
     output: wgpu::TextureFormat,
     targets: Option<Targets>,
@@ -263,6 +351,7 @@ impl PostProcess {
             }),
             layout,
             lut: None,
+            lut_generation: 0,
             encode_srgb: !output.is_srgb(),
             output,
             targets: None,
@@ -354,8 +443,8 @@ impl PostProcess {
         });
     }
 
-    /// Group 1 of the passes: the depth, the AO (`empty` while it is made)
-    /// and the LUT.
+    /// Group 1 of the passes: the depth, the AO (`empty_ao` while it is
+    /// made) and the LUT.
     fn aux_groups(
         &self,
         device: &wgpu::Device,
@@ -363,10 +452,21 @@ impl PostProcess {
         ao: &wgpu::TextureView,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         let lut = self.lut.as_ref().unwrap_or(&self.empty_lut);
+        Self::aux_groups_for(device, &self.aux_layout, &self.empty_ao, lut, depth, ao)
+    }
+
+    fn aux_groups_for(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        empty_ao: &wgpu::TextureView,
+        lut: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        ao: &wgpu::TextureView,
+    ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         let group = |ao: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("post aux"),
-                layout: &self.aux_layout,
+                layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -383,7 +483,37 @@ impl PostProcess {
                 ],
             })
         };
-        (group(&self.empty_ao), group(ao))
+        (group(empty_ao), group(ao))
+    }
+
+    /// Binds the grading LUT of `settings` (call each frame before
+    /// [`Self::run`], with the registries' GPU copies): cheap unless the
+    /// texture changed.
+    pub fn sync_lut(&mut self, device: &wgpu::Device, gpu: &GpuMeshes, settings: &RenderSettings) {
+        let found = settings
+            .post
+            .grade
+            .lut
+            .and_then(|h| gpu.texture_view(h))
+            .filter(|(view, _)| view.texture().height() > 1);
+        let generation = found.map_or(0, |(_, g)| g);
+        if generation == self.lut_generation && found.is_some() == self.lut.is_some() {
+            return;
+        }
+        self.lut = found.map(|(view, _)| view.clone());
+        self.lut_generation = generation;
+        if let Some(t) = &mut self.targets {
+            let (pre, post) = Self::aux_groups_for(
+                device,
+                &self.aux_layout,
+                &self.empty_ao,
+                self.lut.as_ref().unwrap_or(&self.empty_lut),
+                &t.depth,
+                &t.ao_blurred,
+            );
+            t.aux_pre = pre;
+            t.aux_post = post;
+        }
     }
 
     /// The depth texture to draw the scene with (after [`Self::resize`]); the
@@ -418,6 +548,8 @@ impl PostProcess {
             .post
             .ao
             .filter(|a| a.radius > 0.0 && a.strength > 0.0);
+        let grade = &settings.post.grade;
+        let has_lut = self.lut.is_some() && grade.lut_strength > 0.0;
         let (w, h) = (t.size.0 as f32, t.size.1 as f32);
         let main = Params {
             bloom_exposure: [
@@ -437,6 +569,24 @@ impl PostProcess {
             ao: ao.map_or([0.0; 4], |a| {
                 [a.radius, a.strength, a.bias.clamp(0.0, 0.5), 1.0]
             }),
+            grade: [
+                if has_lut {
+                    grade.lut_strength.min(1.0)
+                } else {
+                    0.0
+                },
+                grade.saturation.max(0.0),
+                grade.contrast.max(0.0),
+                if grade.is_neutral() { 0.0 } else { 1.0 },
+            ],
+            lift: [grade.lift[0], grade.lift[1], grade.lift[2], 0.0],
+            gamma: [
+                grade.gamma[0].max(0.01),
+                grade.gamma[1].max(0.01),
+                grade.gamma[2].max(0.01),
+                if has_lut { 1.0 } else { 0.0 },
+            ],
+            gain: [grade.gain[0], grade.gain[1], grade.gain[2], 0.0],
         };
         queue.write_buffer(&self.main, 0, bytemuck::bytes_of(&main));
         if ao.is_some() {

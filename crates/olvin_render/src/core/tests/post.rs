@@ -31,6 +31,15 @@ fn post_world(
     settings: &RenderSettings,
     build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
 ) -> Option<Frame> {
+    post_world_lut(settings, None, build)
+}
+
+/// [`post_world`] with a colour grading LUT.
+fn post_world_lut(
+    settings: &RenderSettings,
+    lut: Option<TextureData>,
+    build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
+) -> Option<Frame> {
     let (device, queue) = device()?;
     let mut core = RenderCore::new(
         device.clone(),
@@ -48,10 +57,16 @@ fn post_world(
         Materials::default(),
     );
     let (mut textures, mut shaders) = (Textures::default(), Shaders::default());
+    let mut settings = settings.clone();
+    if let Some(lut) = lut {
+        settings.post.grade.lut = Some(textures.add(lut));
+    }
+    let settings = &settings;
     let mut world = World::new();
     build(&mut meshes, &mut materials, &mut world);
     core.upload(&mut gpu, &mut meshes);
     core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
+    post.sync_lut(&device, &gpu, settings);
     let mut view = core.create_view();
     let view_proj = camera_view_proj(&world, 1.0).unwrap();
     core.prepare(&mut view, &gpu, &world, view_proj, settings);
@@ -347,4 +362,100 @@ fn save_shot(name: &str, frame: &Frame) {
     }
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(format!("{dir}/{name}.ppm"), out);
+}
+
+/// The whole frame is one unlit colour (linear 0.2, 0.5, 0.8 before grading).
+fn flat_colour(meshes: &mut Meshes, materials: &mut Materials, world: &mut World) {
+    let quad = meshes.add(MeshData::plane(40.0));
+    let m = materials.add(Material {
+        base_color: Color::BLACK,
+        emissive: [0.2, 0.5, 0.8],
+        unlit: true,
+        ..Default::default()
+    });
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(quad, Color::WHITE).with_material(m),
+    ));
+    world.spawn(top_down_camera(8.0));
+}
+
+fn graded(grade: crate::ColorGrade) -> RenderSettings {
+    RenderSettings {
+        clear_color: Color::BLACK,
+        tonemapping: Tonemapping::None,
+        post: crate::PostSettings {
+            fxaa: false,
+            grade,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn identity_lut_changes_nothing_and_a_tint_lut_shifts_colours() {
+    let plain = graded(Default::default());
+    let with_lut = |data| {
+        let settings = graded(crate::ColorGrade {
+            // Replaced by the handle of `data`.
+            lut: Some(TextureHandle(0)),
+            ..Default::default()
+        });
+        post_world_lut(&settings, Some(data), flat_colour)
+    };
+    let (Some(base), Some(same), Some(tinted)) = (
+        post_world(&plain, flat_colour),
+        with_lut(crate::identity_lut(32)),
+        with_lut(crate::lut_strip(16, |[r, g, b]| {
+            [(r * 0.5 + 0.5).min(1.0), g * 0.5, b * 0.5]
+        })),
+    ) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let c = base.at(SIZE / 2, SIZE / 2);
+    // 0.2, 0.5, 0.8 linear, sRGB-encoded.
+    assert!(close(c, [124, 188, 231]), "{c:?}");
+    for (x, y) in [(SIZE / 2, SIZE / 2), (3, 3), (SIZE - 4, 9)] {
+        let (a, b) = (base.at(x, y), same.at(x, y));
+        assert!(
+            a.iter().zip(b).all(|(&a, b)| a.abs_diff(b) <= 1),
+            "identity LUT: {a:?} -> {b:?}"
+        );
+    }
+    let t = tinted.at(SIZE / 2, SIZE / 2);
+    assert!(
+        t[0] > c[0] + 40 && t[1] + 40 < c[1] && t[2] + 40 < c[2],
+        "{c:?} -> {t:?}"
+    );
+}
+
+#[test]
+fn simple_grading_works_without_a_lut() {
+    let grey = graded(crate::ColorGrade {
+        saturation: 0.0,
+        ..Default::default()
+    });
+    let bright = graded(crate::ColorGrade {
+        gain: [1.0, 1.0, 0.5],
+        lift: [0.1, 0.0, 0.0],
+        ..Default::default()
+    });
+    let (Some(base), Some(grey), Some(bright)) = (
+        post_world(&graded(Default::default()), flat_colour),
+        post_world(&grey, flat_colour),
+        post_world(&bright, flat_colour),
+    ) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let g = grey.at(SIZE / 2, SIZE / 2);
+    assert!(
+        g[0].abs_diff(g[1]) <= 1 && g[1].abs_diff(g[2]) <= 1,
+        "{g:?}"
+    );
+    let (c, b) = (base.at(SIZE / 2, SIZE / 2), bright.at(SIZE / 2, SIZE / 2));
+    assert!(b[0] > c[0] + 10, "lift: {c:?} -> {b:?}");
+    assert!(b[2] + 40 < c[2], "gain: {c:?} -> {b:?}");
 }

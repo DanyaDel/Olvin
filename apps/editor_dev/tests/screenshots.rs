@@ -602,6 +602,29 @@ fn review() {
                 h.run_steps(10);
             });
         }
+        // The Rendering settings page (shadows, fog, post-processing), scrolled.
+        for (part, scroll) in [("top", 0.0_f32), ("mid", -650.0), ("end", -2500.0)] {
+            let name = format!("{theme:?}-settings_rendering_{part}.png").to_lowercase();
+            if only.as_deref().is_some_and(|o| !name.contains(o)) {
+                continue;
+            }
+            shot_with(&project, &out.join(name), theme, Some("Layout"), |h| {
+                h.state_mut().state_mut().settings_page =
+                    Some(olvin_editor::settings::Page::Rendering);
+                h.run_steps(10);
+                h.event(egui::Event::PointerMoved(egui::pos2(400.0, 350.0)));
+                h.run_steps(2);
+                if scroll != 0.0 {
+                    h.event(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, scroll),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    h.run_steps(10);
+                }
+            });
+        }
         // The Code workspace with a file open (syntax colours on both themes).
         let name = format!("{theme:?}-code_open.png").to_lowercase();
         if only.as_deref().is_none_or(|o| name.contains(o)) {

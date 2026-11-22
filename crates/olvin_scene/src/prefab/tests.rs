@@ -396,6 +396,7 @@ fn every_entity_field_can_be_overridden() {
     full.brush = Some(BrushDesc::default());
     full.material = Some("m.mat.ron".into());
     full.model = Some(ModelDesc::new("a.glb"));
+    full.particles = Some(ParticleDesc::fire());
     full.light = Some(LightDesc::new(LightKind::Spot));
     full.collider = Some(ColliderDesc::new(ColliderShape::Mesh));
     full.rigidbody = Some(RigidbodyDesc::default());
@@ -422,4 +423,39 @@ fn every_entity_field_can_be_overridden() {
     assert_eq!(rebuilt, blank);
     assert!(set_field(&mut rebuilt, "nonsense", "1").is_err());
     assert!(set_field(&mut rebuilt, "layer", "(").is_err());
+}
+
+/// An instance changes the emitter of one node of its prefab; the asset and the
+/// other instances keep theirs.
+#[test]
+fn a_particle_emitter_is_overridden_per_instance() {
+    use crate::file::ParticleDesc;
+    let mut torch = mesh(1, "Torch", None, Vec3::ZERO);
+    let mut flame = EntityDesc::new(2, "Flame");
+    flame.parent = Some(1);
+    flame.particles = Some(ParticleDesc::fire());
+    torch.name = "Torch".into();
+    let assets = assets(&[("torch.prefab.ron", scene(vec![torch, flame]))]);
+    let mut s = scene(vec![
+        instance(10, "torch.prefab.ron", Vec3::ZERO),
+        instance(11, "torch.prefab.ron", Vec3::X),
+    ]);
+    assert!(s.expand_prefabs(&mut loader(&assets)).is_empty());
+    let flame_id = member_id(11, 2);
+    s.get_mut(flame_id)
+        .unwrap()
+        .particles
+        .as_mut()
+        .unwrap()
+        .rate = 99.0;
+    let saved = s.collapse_prefabs(&mut loader(&assets));
+    let over = &saved.get(11).unwrap().prefab.as_ref().unwrap().overrides;
+    assert_eq!(over["2"].keys().collect::<Vec<_>>(), ["particles"]);
+    assert!(saved.get(10).unwrap().prefab.as_ref().unwrap().is_clean());
+    // Loading the saved scene again reproduces the edit and only the edit.
+    let mut again = saved.clone();
+    assert!(again.expand_prefabs(&mut loader(&assets)).is_empty());
+    let rate = |id| again.get(id).unwrap().particles.as_ref().unwrap().rate;
+    assert_eq!(rate(flame_id), 99.0);
+    assert_eq!(rate(member_id(10, 2)), ParticleDesc::fire().rate);
 }

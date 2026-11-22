@@ -13,6 +13,7 @@ pub use crate::action::{Action, FCurve, Interp, Prop};
 pub use crate::anim::{
     AnimGraphDesc, AnimStateDesc, AnimationDesc, MotionDesc, ParamDesc, TestDesc, TransitionDesc,
 };
+pub use crate::particles::{BlendDesc, BurstDesc, ParticleDesc, ShapeDesc, SpaceDesc};
 pub use crate::prefab::{PrefabInstance, PrefabNode};
 pub use crate::primitives::Shape;
 use crate::{Camera, Transform};
@@ -21,7 +22,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -29,7 +30,7 @@ pub const FORMAT_VERSION: u32 = 4;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
@@ -76,6 +77,11 @@ fn v2_to_v3(scene: &mut SceneFile) {
 /// none, so the data stays as it is; the bump makes version-3 builds refuse new
 /// files instead of spawning empty objects where instances were.
 fn v3_to_v4(_: &mut SceneFile) {}
+
+/// Version 5 adds `EntityDesc::particles` (particle emitters). Older files have
+/// none, so the data stays as it is; the bump makes version-4 builds refuse new
+/// files instead of dropping the emitters.
+fn v4_to_v5(_: &mut SceneFile) {}
 
 /// The timeline clip of format versions 1 and 2.
 #[derive(Deserialize)]
@@ -462,6 +468,9 @@ pub struct EntityDesc {
     /// glTF model instanced under this object at load (format version 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelDesc>,
+    /// Particle emitter at this object (format version 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particles: Option<ParticleDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light: Option<LightDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -787,6 +796,7 @@ impl EntityDesc {
             poly: None,
             material: None,
             model: None,
+            particles: None,
             light: None,
             collider: None,
             rigidbody: None,
@@ -1398,6 +1408,7 @@ mod tests {
     const V2: &str = include_str!("../tests/fixtures/v2.scene.ron");
     const V3: &str = include_str!("../tests/fixtures/v3.scene.ron");
     const V4: &str = include_str!("../tests/fixtures/v4.scene.ron");
+    const V5: &str = include_str!("../tests/fixtures/v5.scene.ron");
     const CRATE_PREFAB: &str = include_str!("../tests/fixtures/crate.prefab.ron");
 
     #[test]
@@ -1557,6 +1568,45 @@ mod tests {
         // A version-3 build refuses what it would silently lose.
         let err = SceneFile::parse_with(V4, 3, &MIGRATIONS[..3]).unwrap_err();
         assert!(err.contains("newer"), "{err}");
+    }
+
+    #[test]
+    fn v4_file_migrates_to_v5_without_particles() {
+        let scene = SceneFile::parse(V4).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        assert!(scene.entities.iter().all(|e| e.particles.is_none()));
+        // A version-4 build refuses what it would silently lose.
+        let err = SceneFile::parse_with(V5, 4, &MIGRATIONS[..4]).unwrap_err();
+        assert!(err.contains("newer"), "{err}");
+    }
+
+    #[test]
+    fn v5_fixture_reads_particles_and_round_trips() {
+        let scene = SceneFile::parse(V5).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let fire = scene.get(2).unwrap().particles.as_ref().unwrap();
+        assert_eq!(*fire, ParticleDesc::fire());
+        let custom = scene.get(3).unwrap().particles.as_ref().unwrap();
+        assert!(custom.gpu && custom.rate == 4000.0 && custom.max_particles == 50_000);
+        assert_eq!(custom.blend, BlendDesc::Additive);
+        assert_eq!(custom.texture.as_deref(), Some("fx/spark.png"));
+        assert_eq!(
+            custom.shape,
+            ShapeDesc::Sphere {
+                radius: 2.0,
+                surface: false
+            }
+        );
+        assert_eq!(custom.lifetime, [1.0, 3.0]);
+        assert!(scene.get(1).unwrap().particles.is_none());
+        for pretty in [false, true] {
+            let text = if pretty {
+                ron::ser::to_string_pretty(&scene, Default::default()).unwrap()
+            } else {
+                ron::to_string(&scene).unwrap()
+            };
+            assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+        }
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub mod look;
 #[cfg(feature = "serde")]
 pub mod material;
 #[cfg(feature = "serde")]
+pub mod particles;
+#[cfg(feature = "serde")]
 pub mod prefab;
 pub mod primitives;
 

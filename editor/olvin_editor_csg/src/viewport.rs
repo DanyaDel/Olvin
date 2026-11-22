@@ -164,7 +164,7 @@ impl ViewportExtension for CsgViewport {
                 if state.selection == Some(b.id) {
                     continue; // drawn thicker in `interact`
                 }
-                let c = op_color(b.op);
+                let c = op_color(b.op, true);
                 for [a, e] in olvin_csg::brush_edges(b) {
                     out.line(a, e, c.gamma_multiply(0.55), false);
                     // Hidden parts stay faintly visible: subtractive brushes live inside walls.
@@ -441,9 +441,9 @@ fn rect_preview(ctx: &ViewportCtx, plane: DrawPlane, start: Vec3, end: Vec3, hei
     let top = base.map(|c| c + plane.normal * height);
     let carve = height < 0.0 || ctx.ui.input(|i| i.modifiers.shift);
     let color = if carve {
-        op_color(CsgOp::Subtract)
+        op_color(CsgOp::Subtract, true)
     } else {
-        op_color(CsgOp::Add)
+        op_color(CsgOp::Add, true)
     };
     for i in 0..4 {
         ctx.camera

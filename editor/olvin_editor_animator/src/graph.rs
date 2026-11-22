@@ -11,23 +11,16 @@ use olvin_editor::egui::{
 use olvin_editor::olvin_scene::action::{
     Action, HandleType, Interp, Prop, SEL_ALL, SEL_KEY, SEL_LEFT, SEL_RIGHT,
 };
-use olvin_editor::{EditorState, Panel};
+use olvin_editor::{EditorState, Panel, theme};
 
 use crate::clock;
 use crate::modal::{Kind, Modal, Outcome};
 use crate::ops;
-use crate::view::{self, Axis, KEY_SELECTED, RULER_H};
+use crate::view::{self, Axis, RULER_H};
 
 const NAMES_W: f32 = 190.0;
 const ROW_H: f32 = 22.0;
 const PICK_R: f32 = 9.0;
-
-/// Blender's X / Y / Z axis colours.
-const AXIS: [Color32; 3] = [
-    Color32::from_rgb(237, 78, 100),
-    Color32::from_rgb(139, 220, 0),
-    Color32::from_rgb(64, 156, 255),
-];
 
 type CurveId = (u64, Prop, u8);
 
@@ -617,6 +610,8 @@ impl GraphEditor {
     ) {
         let painter = ui.painter_at(rect);
         let visuals = ui.visuals();
+        let pal = theme::palette(ui.ctx());
+        let axes = pal.axes();
         painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
         let clip = ui.painter_at(body);
         let a = &state.scene.animation;
@@ -630,7 +625,7 @@ impl GraphEditor {
             let zero = v.abs() < step * 1e-3;
             clip.line_segment(
                 [pos2(body.left(), y), pos2(body.right(), y)],
-                (1.0, Color32::from_white_alpha(if zero { 40 } else { 12 })),
+                (1.0, pal.ink(if zero { 40 } else { 12 })),
             );
             clip.text(
                 pos2(body.left() + 3.0, y - 2.0),
@@ -645,7 +640,7 @@ impl GraphEditor {
         // Curves, drawn as evaluated.
         for &c in curves {
             let curve = &a.curves[c];
-            let color = AXIS[curve.index.min(2) as usize];
+            let color = axes[curve.index.min(2) as usize];
             let selected_curve = curve.keys.iter().any(|k| k.select != 0);
             let width = if selected_curve { 2.0 } else { 1.2 };
             let mut points = Vec::new();
@@ -677,26 +672,21 @@ impl GraphEditor {
                             self.y.px(pt[1], body.bottom()),
                         );
                         let sel = key.select & bit != 0;
-                        let line = handle_color(ty, sel);
+                        let line = handle_color(ty, sel, pal.dark);
                         clip.line_segment([kp, hp], (1.0, line));
-                        clip.circle(
-                            hp,
-                            3.0,
-                            if sel { Color32::WHITE } else { line },
-                            (1.0, Color32::BLACK),
-                        );
+                        clip.circle(hp, 3.0, if sel { pal.text } else { line }, (1.0, pal.bg));
                     }
                 }
                 let fill = if key.select & SEL_KEY != 0 {
-                    KEY_SELECTED
+                    pal.selected()
                 } else {
-                    Color32::BLACK
+                    pal.bg
                 };
                 clip.rect_filled(Rect::from_center_size(kp, vec2(7.0, 7.0)), 1.0, fill);
                 clip.rect_stroke(
                     Rect::from_center_size(kp, vec2(7.0, 7.0)),
                     1.0,
-                    (1.0, Color32::WHITE),
+                    (1.0, pal.text),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -720,7 +710,7 @@ impl GraphEditor {
         // Channel list.
         let list = Rect::from_min_max(rect.min, pos2(rect.left() + NAMES_W, rect.bottom()));
         let side = ui.painter_at(list);
-        side.rect_filled(list, 0.0, Color32::from_gray(30));
+        side.rect_filled(list, 0.0, pal.surface);
         for (i, row) in self.channel_rows(state).iter().enumerate() {
             let y = list.top() + RULER_H + i as f32 * ROW_H;
             let mid = y + ROW_H / 2.0;
@@ -731,9 +721,9 @@ impl GraphEditor {
                         Rect::from_min_size(pos2(list.left(), y), vec2(list.width(), ROW_H)),
                         0.0,
                         if sel {
-                            Color32::from_rgb(70, 82, 112)
+                            pal.info.gamma_multiply(0.35)
                         } else {
-                            Color32::from_gray(52)
+                            pal.ink(20)
                         },
                     );
                     side.text(
@@ -756,7 +746,7 @@ impl GraphEditor {
                     side.circle_filled(
                         pos2(list.left() + 30.0, mid),
                         4.0,
-                        AXIS[id.2.min(2) as usize],
+                        axes[id.2.min(2) as usize],
                     );
                     side.text(
                         pos2(list.left() + 42.0, mid),
@@ -785,7 +775,7 @@ impl GraphEditor {
             painter.rect_stroke(
                 Rect::from_two_pos(start, now),
                 0.0,
-                (1.0, Color32::WHITE),
+                (1.0, pal.text),
                 egui::StrokeKind::Inside,
             );
         }
@@ -841,30 +831,23 @@ fn select_pick(a: &mut Action, pick: Pick, extend: bool, dragging: bool) {
     }
 }
 
-fn handle_color(ty: HandleType, selected: bool) -> Color32 {
-    let (dim, bright) = match ty {
-        HandleType::Free => (
-            Color32::from_rgb(90, 90, 90),
-            Color32::from_rgb(210, 210, 210),
-        ),
-        HandleType::Auto => (
-            Color32::from_rgb(150, 130, 40),
-            Color32::from_rgb(255, 230, 80),
-        ),
-        HandleType::Vector => (
-            Color32::from_rgb(40, 120, 50),
-            Color32::from_rgb(90, 230, 100),
-        ),
-        HandleType::Aligned => (
-            Color32::from_rgb(140, 70, 110),
-            Color32::from_rgb(255, 130, 200),
-        ),
-        HandleType::AutoClamped => (
-            Color32::from_rgb(130, 60, 60),
-            Color32::from_rgb(255, 110, 110),
-        ),
+fn handle_color(ty: HandleType, selected: bool, dark: bool) -> Color32 {
+    let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
+    // (dim, bright) on a dark canvas; on Light the dim one is the pale tint
+    // and the bright one the strong ink.
+    let (dim, bright) = match (ty, dark) {
+        (HandleType::Free, true) => ([90, 90, 90], [210, 210, 210]),
+        (HandleType::Auto, true) => ([150, 130, 40], [255, 230, 80]),
+        (HandleType::Vector, true) => ([40, 120, 50], [90, 230, 100]),
+        (HandleType::Aligned, true) => ([140, 70, 110], [255, 130, 200]),
+        (HandleType::AutoClamped, true) => ([130, 60, 60], [255, 110, 110]),
+        (HandleType::Free, false) => ([150, 150, 156], [40, 42, 48]),
+        (HandleType::Auto, false) => ([190, 160, 40], [140, 100, 0]),
+        (HandleType::Vector, false) => ([90, 160, 100], [16, 120, 36]),
+        (HandleType::Aligned, false) => ([200, 120, 170], [160, 30, 110]),
+        (HandleType::AutoClamped, false) => ([210, 120, 120], [180, 30, 30]),
     };
-    if selected { bright } else { dim }
+    rgb(if selected { bright } else { dim })
 }
 
 fn format_value(v: f32, step: f32) -> String {

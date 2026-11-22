@@ -242,6 +242,58 @@ impl Palette {
     };
 }
 
+/// Colours for editor canvases (UV, timeline, graph): drawing that sits on
+/// a panel but isn't a widget, so it can't lean on egui's `Visuals`.
+impl Palette {
+    /// `text` at `alpha`: white veils on the dark themes, near-black on
+    /// Light. For grid lines, hover fills, box selections.
+    pub fn ink(&self, alpha: u8) -> Color32 {
+        let t = self.text;
+        Color32::from_rgba_unmultiplied(t.r(), t.g(), t.b(), alpha)
+    }
+
+    /// The backdrop of a pannable canvas (UV editor): one step off the panel.
+    pub fn canvas(&self) -> Color32 {
+        if self.dark {
+            self.surface_raised
+        } else {
+            self.bg
+        }
+    }
+
+    /// Blender's X / Y / Z colours, readable (3:1) on every surface.
+    pub fn axes(&self) -> [Color32; 3] {
+        if self.dark {
+            [rgb(0xed4e64), rgb(0x8bdc00), rgb(0x409cff)]
+        } else {
+            [rgb(0xc4233b), rgb(0x3f7d00), rgb(0x1a5fd0)]
+        }
+    }
+
+    /// Selected keys, edges and vertices on a canvas (Blender's orange).
+    pub fn selected(&self) -> Color32 {
+        if self.dark {
+            rgb(0xffa733)
+        } else {
+            rgb(0xc25e00)
+        }
+    }
+
+    /// An unselected key diamond.
+    pub fn key_idle(&self) -> Color32 {
+        if self.dark {
+            rgb(0xe8e8e8)
+        } else {
+            rgb(0x4a4e58)
+        }
+    }
+
+    /// Veil over the part of a timeline outside the playback range.
+    pub fn dim(&self) -> Color32 {
+        Color32::from_black_alpha(if self.dark { 70 } else { 24 })
+    }
+}
+
 impl Default for Palette {
     fn default() -> Self {
         Self::DARK
@@ -622,6 +674,20 @@ mod tests {
             }
             let c = contrast(p.on_accent, p.accent);
             assert!(c >= 4.5, "{kind:?}: on_accent on accent is {c:.2}:1");
+        }
+    }
+
+    #[test]
+    fn canvas_colours_are_readable_on_every_surface() {
+        for kind in ThemeKind::ALL {
+            let p = kind.palette();
+            let marks = p.axes().into_iter().chain([p.selected(), p.key_idle()]);
+            for (i, c) in marks.enumerate() {
+                for (bn, b) in [("surface", p.surface), ("canvas", p.canvas())] {
+                    let r = contrast(c, b);
+                    assert!(r >= 3.0, "{kind:?}: canvas colour {i} on {bn} is {r:.2}:1");
+                }
+            }
         }
     }
 

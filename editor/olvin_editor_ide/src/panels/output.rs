@@ -69,8 +69,8 @@ impl Output {
                         OutKind::Normal => theme::palette(ui.ctx()).text,
                         OutKind::Error => ui.visuals().error_fg_color,
                         OutKind::Warning => ui.visuals().warn_fg_color,
-                        OutKind::Info => theme::INFO,
-                        OutKind::Success => theme::ACCENT,
+                        OutKind::Info => theme::palette(ui.ctx()).info,
+                        OutKind::Success => theme::palette(ui.ctx()).axes()[1],
                     };
                     let text = RichText::new(&line.text).monospace().color(color);
                     if let Some(loc) = location(&line.text) {

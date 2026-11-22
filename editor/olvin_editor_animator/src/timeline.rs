@@ -1,12 +1,12 @@
 //! The Timeline: playback controls, current frame, start / end / fps, and a
 //! strip of the selected objects' keyframes under the frame ruler.
 
-use olvin_editor::egui::{self, Color32, DragValue, Rect, Sense, pos2, vec2};
-use olvin_editor::{EditorState, Panel};
+use olvin_editor::egui::{self, DragValue, Rect, Sense, pos2, vec2};
+use olvin_editor::{EditorState, Panel, theme};
 
 use crate::clock::{self, Dir};
 use crate::ops;
-use crate::view::{self, Axis, KEY_IDLE, KEY_SELECTED, RULER_H};
+use crate::view::{self, Axis, RULER_H};
 
 /// Frame rates Blender offers as presets.
 const FPS_PRESETS: [f32; 8] = [12.0, 15.0, 24.0, 25.0, 30.0, 50.0, 60.0, 120.0];
@@ -96,6 +96,7 @@ impl Panel for Timeline {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
         let a = &state.scene.animation;
+        let pal = theme::palette(ui.ctx());
         view::ruler(
             ui,
             &painter,
@@ -114,7 +115,7 @@ impl Panel for Timeline {
                     &painter,
                     pos2(x, y),
                     5.0,
-                    if sel { KEY_SELECTED } else { KEY_IDLE },
+                    if sel { pal.selected() } else { pal.key_idle() },
                 );
             }
         }
@@ -224,7 +225,6 @@ impl Timeline {
             })
             .response
             .on_hover_text("How the running game plays this animation");
-            let _ = Color32::WHITE;
         });
     }
 }

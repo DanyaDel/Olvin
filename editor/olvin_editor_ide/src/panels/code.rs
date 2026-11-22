@@ -80,7 +80,7 @@ pub fn build_toolbar(ui: &mut egui::Ui, ide: &mut Ide, state: &mut EditorState) 
             cmd = Some(Command::Build);
         }
         if ui
-            .button(RichText::new("▶ Run").color(theme::AXIS_Y))
+            .button(RichText::new("▶ Run").color(theme::palette(ui.ctx()).axes()[1]))
             .on_hover_text("cargo run: starts the game")
             .clicked()
         {
@@ -112,7 +112,7 @@ pub fn build_toolbar(ui: &mut egui::Ui, ide: &mut Ide, state: &mut EditorState) 
         (_, Some((kind, ok))) => {
             let (e, w) = ide.counts();
             let color = if ok {
-                theme::AXIS_Y
+                theme::palette(ui.ctx()).axes()[1]
             } else {
                 ui.visuals().error_fg_color
             };
@@ -872,7 +872,7 @@ pub fn severity_color(ui: &egui::Ui, s: Severity) -> Color32 {
     match s {
         Severity::Error => ui.visuals().error_fg_color,
         Severity::Warning => ui.visuals().warn_fg_color,
-        Severity::Note => theme::ACCENT,
+        Severity::Note => theme::palette(ui.ctx()).accent,
     }
 }
 
@@ -971,7 +971,7 @@ fn status_bar(ui: &mut egui::Ui, ide: &Ide, idx: usize, edit_id: egui::Id, marke
                 ui.label(
                     RichText::new("✔ Surface shader OK")
                         .small()
-                        .color(theme::AXIS_Y),
+                        .color(theme::palette(ui.ctx()).axes()[1]),
                 );
             }
             Some(e) if !e.is_empty() => {

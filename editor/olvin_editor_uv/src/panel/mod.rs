@@ -125,7 +125,7 @@ impl Panel for UvEditor {
         let size = ui.available_size().max(egui::vec2(32.0, 32.0));
         let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
         let rect = response.rect;
-        painter.rect_filled(rect, 4.0, theme::VIEWPORT_BG);
+        painter.rect_filled(rect, 4.0, theme::palette(ui.ctx()).canvas());
         let origin = v2(rect.center());
         self.last_origin = origin;
         if !self.framed && rect.width() > 1.0 {
@@ -144,7 +144,7 @@ impl Panel for UvEditor {
                 Align2::CENTER_CENTER,
                 "Select a mesh object (Modeling: Make Editable) to edit its UVs",
                 FontId::proportional(13.0),
-                theme::TEXT_WEAK,
+                theme::palette(ui.ctx()).muted,
             );
             return;
         };

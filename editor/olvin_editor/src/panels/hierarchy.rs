@@ -140,7 +140,7 @@ impl Panel for Hierarchy {
                 ui.painter().rect_stroke(
                     rect.shrink(1.0),
                     3.0,
-                    (1.0, theme::ACCENT),
+                    (1.0, theme::palette(ui.ctx()).accent),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -274,7 +274,7 @@ impl Hierarchy {
                     egui::Align2::LEFT_CENTER,
                     &entity.name,
                     egui::FontId::proportional(13.0),
-                    theme::SELECTED,
+                    theme::palette(ui.ctx()).selected(),
                 );
             }
         }
@@ -335,7 +335,7 @@ impl Hierarchy {
             ui.painter().rect_stroke(
                 response.rect,
                 3.0,
-                (1.5, theme::ACCENT),
+                (1.5, theme::palette(ui.ctx()).accent),
                 egui::StrokeKind::Outside,
             );
         }

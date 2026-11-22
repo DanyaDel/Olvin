@@ -2,11 +2,10 @@
 //! a pannable / zoomable axis, the frame ruler with the playhead, key diamonds.
 
 use olvin_editor::egui::{self, Align2, Color32, FontId, Painter, Pos2, Rect, Shape, pos2, vec2};
+use olvin_editor::theme;
 
 /// Blender's current-frame blue.
 pub const PLAYHEAD: Color32 = Color32::from_rgb(71, 114, 179);
-pub const KEY_IDLE: Color32 = Color32::from_rgb(232, 232, 232);
-pub const KEY_SELECTED: Color32 = Color32::from_rgb(255, 190, 50);
 pub const RULER_H: f32 = 22.0;
 
 /// A 1D view: `origin` is the value at pixel `base`, `scale` pixels per unit
@@ -122,13 +121,14 @@ pub fn ruler(
     current: i32,
 ) {
     let visuals = ui.visuals();
+    let pal = theme::palette(ui.ctx());
     painter.rect_filled(rect, 0.0, visuals.faint_bg_color);
     let (x_start, x_end) = (
         axis.px(range.0 as f32, rect.left()),
         axis.px(range.1 as f32 + 1.0, rect.left()),
     );
     // Dim everything outside the playback range.
-    let dim = Color32::from_black_alpha(70);
+    let dim = pal.dim();
     let clip = painter.clip_rect();
     if x_start > clip.left() {
         painter.rect_filled(
@@ -153,7 +153,7 @@ pub fn ruler(
     let step = nice_step(axis.scale, 56.0);
     let first = (axis.value(rect.left(), rect.left()) / step).floor() * step;
     let mut f = first;
-    let grid = Color32::from_white_alpha(14);
+    let grid = pal.ink(14);
     let text = visuals.weak_text_color();
     while axis.px(f, rect.left()) < rect.right() {
         let x = axis.px(f, rect.left());

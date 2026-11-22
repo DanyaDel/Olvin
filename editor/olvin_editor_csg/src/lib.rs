@@ -169,18 +169,25 @@ fn level_layout(a: &mut TabAlloc) -> DockState<Tab> {
     dock
 }
 
-pub(crate) fn op_color(op: CsgOp) -> egui::Color32 {
-    match op {
-        CsgOp::Add => egui::Color32::from_rgb(110, 170, 255),
-        CsgOp::Subtract => egui::Color32::from_rgb(255, 140, 70),
-        CsgOp::Intersect => egui::Color32::from_rgb(190, 120, 255),
-    }
+/// The operation's colour: bright on dark surfaces (the viewport, the dark
+/// themes), deeper on Light so text in it stays readable.
+pub(crate) fn op_color(op: CsgOp, dark: bool) -> egui::Color32 {
+    let [r, g, b] = match (op, dark) {
+        (CsgOp::Add, true) => [110, 170, 255],
+        (CsgOp::Subtract, true) => [255, 140, 70],
+        (CsgOp::Intersect, true) => [190, 120, 255],
+        (CsgOp::Add, false) => [20, 90, 200],
+        (CsgOp::Subtract, false) => [185, 70, 0],
+        (CsgOp::Intersect, false) => [120, 50, 190],
+    };
+    egui::Color32::from_rgb(r, g, b)
 }
 
 pub(crate) fn op_buttons(ui: &mut egui::Ui, op: &mut CsgOp) {
     ui.horizontal(|ui| {
         for candidate in CsgOp::ALL {
-            let text = RichText::new(candidate.label()).color(op_color(candidate));
+            let dark = olvin_editor::theme::palette(ui.ctx()).dark;
+            let text = RichText::new(candidate.label()).color(op_color(candidate, dark));
             ui.selectable_value(op, candidate, text);
         }
     });

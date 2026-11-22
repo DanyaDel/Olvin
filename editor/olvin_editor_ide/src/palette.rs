@@ -248,8 +248,11 @@ fn row_ui(
         egui::Sense::click(),
     );
     if selected {
-        ui.painter()
-            .rect_filled(rect, 5.0, theme::ACCENT.gamma_multiply(0.45));
+        ui.painter().rect_filled(
+            rect,
+            5.0,
+            theme::palette(ui.ctx()).accent.gamma_multiply(0.45),
+        );
     } else if resp.hovered() {
         ui.painter()
             .rect_filled(rect, 5.0, theme::palette(ui.ctx()).surface);
@@ -259,7 +262,12 @@ fn row_ui(
     for (ci, ch) in text.chars().enumerate() {
         let hit = hits.contains(&ci);
         let color = if hit {
-            theme::ACCENT.gamma_multiply(1.3)
+            let p = theme::palette(ui.ctx());
+            if p.dark {
+                p.accent.gamma_multiply(1.3)
+            } else {
+                p.axes()[1]
+            }
         } else {
             theme::palette(ui.ctx()).text
         };

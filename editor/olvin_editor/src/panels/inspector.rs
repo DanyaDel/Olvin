@@ -1035,7 +1035,7 @@ fn axis_letter(ui: &mut egui::Ui, i: usize, letters: bool) {
     if letters {
         ui.label(
             RichText::new(["X", "Y", "Z"][i])
-                .color(theme::AXES[i])
+                .color(theme::palette(ui.ctx()).axes()[i])
                 .strong(),
         );
     }

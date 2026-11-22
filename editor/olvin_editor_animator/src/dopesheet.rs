@@ -4,14 +4,14 @@
 
 use std::collections::HashSet;
 
-use olvin_editor::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, pos2, vec2};
+use olvin_editor::egui::{self, Align2, FontId, Key, Pos2, Rect, Sense, pos2, vec2};
 use olvin_editor::olvin_scene::action::Interp;
-use olvin_editor::{EditorState, Panel};
+use olvin_editor::{EditorState, Panel, theme};
 
 use crate::clock;
 use crate::modal::{Kind, Modal, Outcome};
 use crate::ops::{self, KeyRef};
-use crate::view::{self, Axis, KEY_IDLE, KEY_SELECTED, RULER_H};
+use crate::view::{self, Axis, RULER_H};
 
 const NAMES_W: f32 = 200.0;
 const ROW_H: f32 = 22.0;
@@ -568,6 +568,7 @@ impl DopeSheet {
     ) {
         let painter = ui.painter_at(rect);
         let visuals = ui.visuals();
+        let pal = theme::palette(ui.ctx());
         painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
         let body = Rect::from_min_max(pos2(keys_rect.left(), top), rect.max);
         let action = &state.scene.animation;
@@ -589,11 +590,11 @@ impl DopeSheet {
             };
             let fill = match row.kind {
                 RowKind::Summary => visuals.faint_bg_color,
-                RowKind::Object(_) if selected_object => Color32::from_rgb(70, 82, 112),
-                RowKind::Object(_) => Color32::from_gray(52),
-                RowKind::Group(_) => Color32::from_gray(44),
-                RowKind::Channel(_) if i % 2 == 0 => Color32::from_gray(34),
-                RowKind::Channel(_) => Color32::from_gray(38),
+                RowKind::Object(_) if selected_object => pal.info.gamma_multiply(0.35),
+                RowKind::Object(_) => pal.ink(20),
+                RowKind::Group(_) => pal.ink(14),
+                RowKind::Channel(_) if i % 2 == 0 => pal.ink(5),
+                RowKind::Channel(_) => pal.ink(9),
             };
             painter.rect_filled(band, 0.0, fill);
             let arrow = match row.kind {
@@ -637,9 +638,9 @@ impl DopeSheet {
                         );
                         let sel = pair[0].is_selected() && pair[1].is_selected();
                         let color = if sel {
-                            KEY_SELECTED.gamma_multiply(0.55)
+                            pal.selected().gamma_multiply(0.55)
                         } else {
-                            Color32::from_gray(120)
+                            pal.muted
                         };
                         clip.rect_filled(
                             Rect::from_min_max(
@@ -657,7 +658,7 @@ impl DopeSheet {
                 if x < keys_rect.left() - 8.0 || x > keys_rect.right() + 8.0 {
                     continue;
                 }
-                let color = if sel { KEY_SELECTED } else { KEY_IDLE };
+                let color = if sel { pal.selected() } else { pal.key_idle() };
                 view::diamond(&clip, pos2(x, y + ROW_H / 2.0), 5.0, color);
             }
         }
@@ -666,7 +667,7 @@ impl DopeSheet {
                 pos2(keys_rect.left(), rect.top()),
                 pos2(keys_rect.left(), rect.bottom()),
             ],
-            (1.0, Color32::from_gray(20)),
+            (1.0, pal.line),
         );
         if rows.len() == 1 {
             painter.text(
@@ -697,7 +698,7 @@ impl DopeSheet {
             painter.rect_stroke(
                 Rect::from_two_pos(start, now),
                 0.0,
-                (1.0, Color32::WHITE),
+                (1.0, pal.text),
                 egui::StrokeKind::Inside,
             );
         }

@@ -133,7 +133,7 @@ impl Panel for Assets {
                                 ui.painter().rect_stroke(
                                     response.rect,
                                     4.0,
-                                    (1.5, theme::ACCENT),
+                                    (1.5, theme::palette(ui.ctx()).accent),
                                     egui::StrokeKind::Inside,
                                 );
                             }
@@ -454,7 +454,7 @@ fn tile(
     let visuals = ui.style().interact_selectable(&response, selected);
     if selected || response.hovered() {
         let fill = if selected {
-            theme::ACCENT.gamma_multiply(0.55)
+            theme::palette(ui.ctx()).accent.gamma_multiply(0.55)
         } else {
             visuals.weak_bg_fill
         };
@@ -610,7 +610,7 @@ fn drag_label(ui: &egui::Ui, name: &str) {
                 egui::Align2::LEFT_CENTER,
                 name,
                 egui::FontId::proportional(13.0),
-                theme::SELECTED,
+                theme::palette(ui.ctx()).selected(),
             );
     }
 }

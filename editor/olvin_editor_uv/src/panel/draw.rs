@@ -10,12 +10,7 @@ use crate::select::{Hit, SelectMode, Topo};
 use crate::transform::{self, GIZMO_ARM, GIZMO_BOX, Kind};
 use crate::{Background, hooks};
 
-const CHECKER: [Color32; 2] = [
-    Color32::from_rgb(78, 82, 92),
-    Color32::from_rgb(100, 105, 116),
-];
 const CHECKER_TILES: usize = 8;
-const EDGE: Color32 = Color32::from_rgb(196, 202, 214);
 
 impl UvEditor {
     /// The 0..1 square's background: the [`crate::set_background`] hook, or
@@ -28,6 +23,7 @@ impl UvEditor {
         id: Option<u64>,
     ) {
         let view = self.view;
+        let pal = theme::palette(painter.ctx());
         let a = view.to_screen(origin, Vec2::new(0.0, 1.0));
         let b = view.to_screen(origin, Vec2::new(1.0, 0.0));
         let square = Rect::from_min_max(p2(a), p2(b));
@@ -37,12 +33,12 @@ impl UvEditor {
             _ => false,
         };
         if !drawn {
-            background(painter, square);
+            background(painter, square, pal.dark);
         }
         painter.rect_stroke(
             square,
             0.0,
-            Stroke::new(1.0, theme::TEXT_WEAK),
+            Stroke::new(1.0, pal.muted),
             egui::StrokeKind::Outside,
         );
     }
@@ -62,6 +58,7 @@ impl UvEditor {
     ) {
         let origin = v2(rect.center());
         let view = self.view;
+        let pal = theme::palette(ui.ctx());
         let to = |t: Vec2| p2(view.to_screen(origin, t));
         self.draw_background(painter, origin, state, Some(id));
         self.draw_grids(painter, rect, origin);
@@ -77,11 +74,11 @@ impl UvEditor {
         let mut fill = egui::Mesh::default();
         for &f in &topo.visible {
             let color = if selected_faces.contains(&f) {
-                theme::SELECTED.gamma_multiply(0.28)
+                pal.selected().gamma_multiply(0.28)
             } else if hover == Some(Hit::Face(f)) {
-                Color32::from_white_alpha(30)
+                pal.ink(30)
             } else {
-                Color32::from_white_alpha(10)
+                pal.ink(10)
             };
             let base = fill.vertices.len() as u32;
             for &t in &mesh.uvs[f] {
@@ -99,13 +96,13 @@ impl UvEditor {
             let face = &mesh.faces[c.0];
             let (a, b) = (face[c.1], face[n.1]);
             let stroke = if hover == Some(Hit::Edge(c)) {
-                Stroke::new(2.5, Color32::WHITE)
+                Stroke::new(2.5, pal.text)
             } else if self.sel.has_edge(&topo, c) {
-                Stroke::new(1.8, theme::SELECTED)
+                Stroke::new(1.8, pal.selected())
             } else if mesh.is_seam(a, b) {
-                Stroke::new(1.8, theme::AXIS_X)
+                Stroke::new(1.8, pal.axes()[0])
             } else {
-                Stroke::new(1.0, EDGE)
+                Stroke::new(1.0, pal.text_2)
             };
             painter.line_segment([to(topo.uv(c)), to(topo.uv(n))], stroke);
         }
@@ -114,11 +111,11 @@ impl UvEditor {
             SelectMode::Vertex | SelectMode::Edge => {
                 for c in topo.corners() {
                     let (r, color) = if self.sel.contains(c) {
-                        (3.5, theme::SELECTED)
+                        (3.5, pal.selected())
                     } else if hover == Some(Hit::Vertex(c)) {
-                        (4.0, Color32::WHITE)
+                        (4.0, pal.text)
                     } else {
-                        (2.0, Color32::from_gray(25))
+                        (2.0, pal.bg)
                     };
                     painter.circle_filled(to(topo.uv(c)), r, color);
                 }
@@ -126,9 +123,9 @@ impl UvEditor {
             SelectMode::Face | SelectMode::Island => {
                 for &f in &topo.visible {
                     let color = if selected_faces.contains(&f) {
-                        theme::SELECTED
+                        pal.selected()
                     } else {
-                        Color32::from_gray(30)
+                        pal.bg
                     };
                     painter.circle_filled(to(topo.center(f)), 2.5, color);
                 }
@@ -138,13 +135,8 @@ impl UvEditor {
         if let Some(start) = self.boxing {
             let end = response.hover_pos().unwrap_or(start);
             let r = Rect::from_two_pos(start, end);
-            painter.rect_filled(r, 0.0, Color32::from_white_alpha(12));
-            painter.rect_stroke(
-                r,
-                0.0,
-                (1.0, Color32::from_white_alpha(200)),
-                egui::StrokeKind::Middle,
-            );
+            painter.rect_filled(r, 0.0, pal.ink(12));
+            painter.rect_stroke(r, 0.0, (1.0, pal.ink(200)), egui::StrokeKind::Middle);
         }
 
         // Gizmo or modal guides.
@@ -155,16 +147,16 @@ impl UvEditor {
                 let far = rect.width().max(rect.height()) * 2.0;
                 painter.line_segment(
                     [p2(p - dir * far), p2(p + dir * far)],
-                    Stroke::new(1.5, theme::AXES[axis]),
+                    Stroke::new(1.5, pal.axes()[axis]),
                 );
             }
-            painter.circle_stroke(p2(p), 4.0, Stroke::new(1.5, Color32::WHITE));
+            painter.circle_stroke(p2(p), 4.0, Stroke::new(1.5, pal.text));
             if modal.kind != Kind::Move
                 && let Some(m) = ui.input(|i| i.pointer.latest_pos())
             {
                 painter.add(egui::Shape::dashed_line(
                     &[p2(p), m],
-                    Stroke::new(1.0, Color32::from_white_alpha(160)),
+                    Stroke::new(1.0, pal.ink(160)),
                     5.0,
                     4.0,
                 ));
@@ -179,9 +171,9 @@ impl UvEditor {
                 .and_then(|m| transform::gizmo_hit(c, v2(m)));
             for (axis, dir) in [(0usize, Vec2::X), (1, Vec2::NEG_Y)] {
                 let color = if hot == Some(Some(axis)) {
-                    Color32::WHITE
+                    pal.text
                 } else {
-                    theme::AXES[axis]
+                    pal.axes()[axis]
                 };
                 let end = c + dir * GIZMO_ARM;
                 painter.line_segment([p2(c), p2(end)], Stroke::new(2.5, color));
@@ -193,9 +185,9 @@ impl UvEditor {
                 ));
             }
             let color = if hot == Some(None) {
-                Color32::WHITE
+                pal.text
             } else {
-                theme::ACCENT
+                pal.accent
             };
             painter.rect_stroke(
                 Rect::from_center_size(p2(c), egui::vec2(GIZMO_BOX * 2.0, GIZMO_BOX * 2.0)),
@@ -221,7 +213,7 @@ impl UvEditor {
             Align2::LEFT_BOTTOM,
             status,
             FontId::proportional(12.0),
-            theme::TEXT,
+            pal.text,
         );
         if !real_uvs {
             painter.text(
@@ -237,6 +229,7 @@ impl UvEditor {
     /// Faint lines on whole UV tiles, and the 1/64 pixel grid when zoomed in.
     fn draw_grids(&self, painter: &egui::Painter, rect: Rect, origin: Vec2) {
         let view = self.view;
+        let pal = theme::palette(painter.ctx());
         let lo = view.to_uv(origin, v2(rect.left_bottom()));
         let hi = view.to_uv(origin, v2(rect.right_top()));
         let lines = |step: f32, color: Color32, limit: f32| {
@@ -262,9 +255,9 @@ impl UvEditor {
                 v += step;
             }
         };
-        lines(1.0, Color32::from_white_alpha(22), 200.0);
+        lines(1.0, pal.ink(22), 200.0);
         if view.zoom * transform::PIXEL >= 10.0 {
-            lines(transform::PIXEL, Color32::from_black_alpha(40), 400.0);
+            lines(transform::PIXEL, pal.ink(40), 400.0);
         }
     }
 }
@@ -272,15 +265,26 @@ impl UvEditor {
 /// Procedural checker filling `square` (the 0..1 UV square on screen).
 /// This is the fallback of the [`crate::Background`] hook: once materials can
 /// hand their base texture to the editor, a hook draws that instead.
-pub fn background(painter: &egui::Painter, square: Rect) {
+pub fn background(painter: &egui::Painter, square: Rect, dark: bool) {
     let n = CHECKER_TILES;
+    let checker = if dark {
+        [
+            Color32::from_rgb(78, 82, 92),
+            Color32::from_rgb(100, 105, 116),
+        ]
+    } else {
+        [
+            Color32::from_rgb(190, 194, 204),
+            Color32::from_rgb(214, 217, 224),
+        ]
+    };
     let step = square.size() / n as f32;
-    painter.rect_filled(square, 0.0, CHECKER[0]);
+    painter.rect_filled(square, 0.0, checker[0]);
     for i in 0..n {
         for j in 0..n {
             if (i + j) % 2 == 1 {
                 let min = square.min + egui::vec2(step.x * i as f32, step.y * j as f32);
-                painter.rect_filled(Rect::from_min_size(min, step), 0.0, CHECKER[1]);
+                painter.rect_filled(Rect::from_min_size(min, step), 0.0, checker[1]);
             }
         }
     }

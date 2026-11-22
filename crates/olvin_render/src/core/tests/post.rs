@@ -252,6 +252,8 @@ fn fxaa_smooths_a_hard_edge_and_leaves_flat_areas() {
         eprintln!("no GPU adapter: skipping");
         return;
     };
+    save_shot("fxaa_off", &|x, y| hard.at(x, y));
+    save_shot("fxaa_on", &|x, y| soft.at(x, y));
     // Without FXAA the edge is a staircase of black and white.
     assert!(hard.grey_pixels() < 4, "{}", hard.grey_pixels());
     // With it, the staircase is blended into greys, which a flat image has none of.
@@ -332,8 +334,8 @@ fn ao_darkens_the_crease_and_leaves_open_ground() {
         eprintln!("no GPU adapter: skipping");
         return;
     };
-    save_shot("ao_off", &flat);
-    save_shot("ao_on", &occluded);
+    save_shot("ao_off", &|x, y| flat.at(x, y));
+    save_shot("ao_on", &|x, y| occluded.at(x, y));
     // Somewhere down the middle column (the cube's foot) AO darkens a lot.
     let drop = (0..SIZE)
         .map(|y| flat.at(SIZE / 2, y)[0].saturating_sub(occluded.at(SIZE / 2, y)[0]))
@@ -352,13 +354,13 @@ fn ao_darkens_the_crease_and_leaves_open_ground() {
 }
 
 /// With `OLVIN_POST_SHOTS=<dir>`: a PPM of the frame there.
-fn save_shot(name: &str, frame: &Frame) {
+pub(super) fn save_shot(name: &str, at: &dyn Fn(u32, u32) -> [u8; 3]) {
     let Ok(dir) = std::env::var("OLVIN_POST_SHOTS") else {
         return;
     };
     let mut out = format!("P6\n{SIZE} {SIZE}\n255\n").into_bytes();
     for i in 0..SIZE * SIZE {
-        out.extend(frame.at(i % SIZE, i / SIZE));
+        out.extend(at(i % SIZE, i / SIZE));
     }
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(format!("{dir}/{name}.ppm"), out);
@@ -414,6 +416,8 @@ fn identity_lut_changes_nothing_and_a_tint_lut_shifts_colours() {
         eprintln!("no GPU adapter: skipping");
         return;
     };
+    save_shot("lut_none", &|x, y| base.at(x, y));
+    save_shot("lut_tint", &|x, y| tinted.at(x, y));
     let c = base.at(SIZE / 2, SIZE / 2);
     // 0.2, 0.5, 0.8 linear, sRGB-encoded.
     assert!(close(c, [124, 188, 231]), "{c:?}");

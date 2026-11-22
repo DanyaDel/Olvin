@@ -111,6 +111,8 @@ fn height_fog_is_thicker_low_than_high() {
     };
     let (_, misty) = h.render(&world, &fogged(Some(fog)));
     let (_, clear) = h.render(&world, &fogged(None));
+    super::post::save_shot("fog_off", &clear);
+    super::post::save_shot("fog_on", &misty);
     // Rows of the two boxes: screen y of world y at 14 m is 10 + (y - 10) -> find lit rows.
     let column = SIZE / 2;
     let lit: Vec<u32> = (0..SIZE)

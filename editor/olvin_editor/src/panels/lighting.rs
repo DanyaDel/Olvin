@@ -2,7 +2,9 @@
 //! environment itself is edited in Settings → Rendering (`environment_ui`).
 
 use egui::{DragValue, RichText};
-use olvin_scene::file::{Environment, FogDesc, LightKind, ShadowFilter, Sky};
+use olvin_scene::file::{
+    AoDesc, Environment, FogDesc, HeightFogDesc, LightKind, PostDesc, ShadowFilter, Sky,
+};
 
 use super::inspector::{drag, grid, row, section};
 use crate::{EditorState, Panel};
@@ -88,6 +90,33 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
             fog.end = fog.end.max(fog.start + 0.1);
         }
     });
+    section(ui, "⛰ Height Fog", None, |ui| {
+        let mut on = env.height_fog.is_some();
+        if ui.checkbox(&mut on, "Enabled").changed() {
+            env.height_fog = on.then(|| HeightFogDesc {
+                color: env.fog.map_or(HeightFogDesc::default().color, |f| f.color),
+                ..Default::default()
+            });
+        }
+        if let Some(fog) = &mut env.height_fog {
+            grid(ui, "height-fog", |ui| {
+                row(ui, "Color", |ui| {
+                    crate::widgets::color_rgb(ui, &mut fog.color);
+                });
+                row(ui, "Density", |ui| {
+                    drag(ui, &mut fog.density, 0.0..=2.0, 0.001, " /m")
+                });
+                row(ui, "Falloff", |ui| {
+                    drag(ui, &mut fog.falloff, 0.0..=2.0, 0.005, " /m")
+                });
+                row(ui, "Base height", |ui| {
+                    drag(ui, &mut fog.height, -1000.0..=1000.0, 0.2, " m")
+                });
+            });
+            ui.weak("Thickest at the base height, thinner above it. Fades into the sky horizon.");
+        }
+    });
+    post_ui(ui, &mut env.post, textures);
     section(ui, "◼ Shadows", None, |ui| {
         grid(ui, "shadows", |ui| {
             row(ui, "Distance", |ui| {
@@ -154,6 +183,91 @@ fn filter_label(f: ShadowFilter) -> &'static str {
         ShadowFilter::Soft => "Soft",
         ShadowFilter::Pcss => "PCSS",
     }
+}
+
+/// Post-processing: FXAA, ambient occlusion and colour grading. Drawn by the
+/// game window on Full-tier GPUs; the editor viewport shows none of it.
+fn post_ui(ui: &mut egui::Ui, post: &mut PostDesc, textures: &[String]) {
+    section(ui, "✨ Post-processing", None, |ui| {
+        ui.checkbox(&mut post.fxaa, "FXAA anti-aliasing");
+        let mut ao = post.ao.is_some();
+        if ui
+            .checkbox(&mut ao, "Ambient occlusion (GTAO)")
+            .on_hover_text("Darkens creases and contact points; costs two fullscreen passes")
+            .changed()
+        {
+            post.ao = ao.then(AoDesc::default);
+        }
+        if let Some(a) = &mut post.ao {
+            grid(ui, "post-ao", |ui| {
+                row(ui, "Radius", |ui| {
+                    drag(ui, &mut a.radius, 0.05..=10.0, 0.01, " m")
+                });
+                row(ui, "Strength", |ui| {
+                    drag(ui, &mut a.strength, 0.1..=4.0, 0.01, "")
+                });
+                row(ui, "Bias", |ui| drag(ui, &mut a.bias, 0.0..=0.5, 0.002, ""));
+            });
+        }
+        ui.separator();
+        ui.label(RichText::new("Color grading").strong());
+        grid(ui, "post-grade", |ui| {
+            row(ui, "Saturation", |ui| {
+                drag(ui, &mut post.saturation, 0.0..=2.0, 0.01, "")
+            });
+            row(ui, "Contrast", |ui| {
+                drag(ui, &mut post.contrast, 0.0..=2.0, 0.01, "")
+            });
+            row(ui, "Lift", |ui| {
+                crate::widgets::color_rgb(ui, &mut post.lift);
+            });
+            row(ui, "Gamma", |ui| {
+                for g in &mut post.gamma {
+                    ui.add(
+                        DragValue::new(g)
+                            .range(0.1..=4.0)
+                            .speed(0.01)
+                            .max_decimals(2),
+                    );
+                }
+            });
+            row(ui, "Gain", |ui| {
+                for g in &mut post.gain {
+                    ui.add(
+                        DragValue::new(g)
+                            .range(0.0..=4.0)
+                            .speed(0.01)
+                            .max_decimals(2),
+                    );
+                }
+            });
+            row(ui, "LUT", |ui| {
+                let shown = post.lut.clone().unwrap_or_default();
+                egui::ComboBox::from_id_salt("post-lut")
+                    .width(200.0)
+                    .selected_text(if shown.is_empty() {
+                        "(none)"
+                    } else {
+                        shown.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut post.lut, None, "(none)");
+                        for t in textures {
+                            ui.selectable_value(&mut post.lut, Some(t.clone()), t.as_str());
+                        }
+                    });
+            });
+            if post.lut.is_some() {
+                row(ui, "LUT strength", |ui| {
+                    drag(ui, &mut post.lut_strength, 0.0..=1.0, 0.01, "")
+                });
+            }
+        });
+        if ui.small_button("Reset post-processing").clicked() {
+            *post = PostDesc::default();
+        }
+        ui.weak("LUT: a strip of N slices of N×N (e.g. 1024×32) in an image file, imported as plain data.");
+    });
 }
 
 pub(crate) fn presets(ui: &mut egui::Ui, state: &mut EditorState) {

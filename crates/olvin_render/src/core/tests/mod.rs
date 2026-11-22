@@ -11,7 +11,8 @@ use super::*;
 use crate::{
     BlendMode, Color, Light, Material, Materials, MeshData, MeshRenderer, Meshes, RenderSettings,
     RenderStats, RenderTier, ShaderHandle, Shaders, ShadowFilter, SkyMode, TextureData,
-    TextureFormat, TextureHandle, Textures, Tonemapping, renderer::begin_pass,
+    TextureFormat, TextureHandle, Textures, Tonemapping,
+    renderer::{begin_pass, begin_scene_pass},
 };
 
 const SIZE: u32 = 64;

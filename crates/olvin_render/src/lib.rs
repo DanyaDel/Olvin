@@ -33,9 +33,11 @@ pub use particles::{
     Burst, EmitShape, EmitterParams, FlipBook, ParticleEmitter, ParticleRenderer, SimSpace,
     update_emitters,
 };
-pub use post::{HDR_FORMAT, PostProcess, PostSettings};
+pub use post::{AmbientOcclusion, HDR_FORMAT, PostProcess, PostSettings};
 pub use quad::{QuadBlend, QuadFilter};
-pub use renderer::{RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, tier_of};
+pub use renderer::{
+    RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, begin_scene_pass, tier_of,
+};
 pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
 pub use skinning::{SkinnedMesh, skin_meshes};
 pub use sprite::{

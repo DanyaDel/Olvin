@@ -354,14 +354,22 @@ impl Renderer {
         if let Some(post) = &mut self.post {
             post.resize(&self.core.device, size);
             let hdr = post.hdr_view().expect("resized above");
-            let mut pass = begin_pass(&mut encoder, hdr, &self.depth, settings);
+            let depth = post.depth_view().expect("resized above");
+            let mut pass = begin_scene_pass(
+                &mut encoder,
+                hdr,
+                depth,
+                settings,
+                settings.post.ao.is_some(),
+            );
             if view_proj.is_some() {
                 self.core.draw(&self.view, &self.gpu, &mut pass);
             }
             self.particles.draw(&mut pass);
             self.sprites.draw(&mut pass);
             drop(pass);
-            post.run(&self.core.queue, &mut encoder, &target, settings);
+            let vp = view_proj.unwrap_or(glam::Mat4::IDENTITY);
+            post.run(&self.core.queue, &mut encoder, &target, settings, vp);
         } else {
             let mut pass = begin_pass(&mut encoder, &target, &self.depth, settings);
             // Even without meshes: the sky.
@@ -392,6 +400,18 @@ pub fn begin_pass<'a>(
     depth: &wgpu::TextureView,
     settings: &RenderSettings,
 ) -> wgpu::RenderPass<'a> {
+    begin_scene_pass(encoder, color, depth, settings, false)
+}
+
+/// [`begin_pass`] that can keep the depth for the post-processing passes
+/// (`keep_depth`; they read it for ambient occlusion).
+pub fn begin_scene_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    color: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    settings: &RenderSettings,
+    keep_depth: bool,
+) -> wgpu::RenderPass<'a> {
     let [r, g, b, a] = settings.clear_color.0.map(f64::from);
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("main"),
@@ -408,7 +428,11 @@ pub fn begin_pass<'a>(
             view: depth,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Discard,
+                store: if keep_depth {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
             }),
             stencil_ops: None,
         }),

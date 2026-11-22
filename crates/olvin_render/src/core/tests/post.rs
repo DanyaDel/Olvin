@@ -53,13 +53,8 @@ fn post_world(
     core.upload(&mut gpu, &mut meshes);
     core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
     let mut view = core.create_view();
-    core.prepare(
-        &mut view,
-        &gpu,
-        &world,
-        camera_view_proj(&world, 1.0).unwrap(),
-        settings,
-    );
+    let view_proj = camera_view_proj(&world, 1.0).unwrap();
+    core.prepare(&mut view, &gpu, &world, view_proj, settings);
     let texture = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -80,11 +75,6 @@ fn post_world(
         FORMAT,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
-    let depth = texture(
-        wgpu::TextureFormat::Depth24Plus,
-        wgpu::TextureUsages::RENDER_ATTACHMENT,
-    )
-    .create_view(&Default::default());
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: (SIZE * SIZE * 4) as u64,
@@ -94,7 +84,14 @@ fn post_world(
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let hdr = post.hdr_view().unwrap();
-        let mut pass = begin_pass(&mut encoder, hdr, &depth, settings);
+        let depth = post.depth_view().unwrap();
+        let mut pass = begin_scene_pass(
+            &mut encoder,
+            hdr,
+            depth,
+            settings,
+            settings.post.ao.is_some(),
+        );
         core.draw(&view, &gpu, &mut pass);
     }
     post.run(
@@ -102,6 +99,7 @@ fn post_world(
         &mut encoder,
         &out.create_view(&Default::default()),
         settings,
+        view_proj,
     );
     encoder.copy_texture_to_buffer(
         out.as_image_copy(),
@@ -219,11 +217,17 @@ fn fxaa_smooths_a_hard_edge_and_leaves_flat_areas() {
     let off = RenderSettings {
         clear_color: Color::BLACK,
         tonemapping: Tonemapping::None,
-        post: crate::PostSettings { fxaa: false },
+        post: crate::PostSettings {
+            fxaa: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let on = RenderSettings {
-        post: crate::PostSettings { fxaa: true },
+        post: crate::PostSettings {
+            fxaa: true,
+            ..Default::default()
+        },
         ..off.clone()
     };
     let (Some(hard), Some(soft)) = (
@@ -251,4 +255,96 @@ fn fxaa_smooths_a_hard_edge_and_leaves_flat_areas() {
     ] {
         assert_eq!(soft.at(x, y), hard.at(x, y), "({x}, {y})");
     }
+}
+
+/// A grey floor with a cube on it, seen from an angle, lit by ambient only.
+fn cube_on_floor(meshes: &mut Meshes, materials: &mut Materials, world: &mut World) {
+    let floor = meshes.add(MeshData::plane(40.0));
+    let cube = meshes.add(MeshData::cube(1.0));
+    let grey = materials.add(Material {
+        base_color: Color::rgb(0.6, 0.6, 0.6),
+        roughness: 1.0,
+        ..Default::default()
+    });
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(floor, Color::WHITE).with_material(grey),
+    ));
+    let red = materials.add(Material {
+        base_color: Color::rgb(0.7, 0.25, 0.2),
+        roughness: 1.0,
+        ..Default::default()
+    });
+    world.spawn((
+        Transform::from_xyz(0.0, 0.5, 0.0),
+        MeshRenderer::new(cube, Color::WHITE).with_material(red),
+    ));
+    world.spawn((
+        Transform::from_xyz(0.0, 4.0, 5.0).looking_at(Vec3::new(0.0, 0.4, 0.0), Vec3::Y),
+        olvin_scene::Camera::default(),
+    ));
+}
+
+fn ambient_only() -> RenderSettings {
+    RenderSettings {
+        clear_color: Color::BLACK,
+        tonemapping: Tonemapping::None,
+        light_color: Color::BLACK,
+        ambient: Color::rgb(1.0, 1.0, 1.0),
+        ground_ambient: Color::rgb(1.0, 1.0, 1.0),
+        post: crate::PostSettings {
+            fxaa: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn ao_darkens_the_crease_and_leaves_open_ground() {
+    let off = ambient_only();
+    let on = RenderSettings {
+        post: crate::PostSettings {
+            ao: Some(crate::AmbientOcclusion::default()),
+            ..off.post.clone()
+        },
+        ..off.clone()
+    };
+    let (Some(flat), Some(occluded)) = (
+        post_world(&off, cube_on_floor),
+        post_world(&on, cube_on_floor),
+    ) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    save_shot("ao_off", &flat);
+    save_shot("ao_on", &occluded);
+    // Somewhere down the middle column (the cube's foot) AO darkens a lot.
+    let drop = (0..SIZE)
+        .map(|y| flat.at(SIZE / 2, y)[0].saturating_sub(occluded.at(SIZE / 2, y)[0]))
+        .max()
+        .unwrap();
+    assert!(drop > 20, "{drop}");
+    // Open ground, far from the cube, is the same.
+    for (x, y) in [
+        (3, SIZE - 3),
+        (SIZE - 4, SIZE - 4),
+        (SIZE - 4, SIZE / 2 + 8),
+    ] {
+        let (a, b) = (flat.at(x, y)[0], occluded.at(x, y)[0]);
+        assert!(a.abs_diff(b) <= 6, "({x}, {y}): {a} vs {b}");
+    }
+}
+
+/// With `OLVIN_POST_SHOTS=<dir>`: a PPM of the frame there.
+fn save_shot(name: &str, frame: &Frame) {
+    let Ok(dir) = std::env::var("OLVIN_POST_SHOTS") else {
+        return;
+    };
+    let mut out = format!("P6\n{SIZE} {SIZE}\n255\n").into_bytes();
+    for i in 0..SIZE * SIZE {
+        out.extend(frame.at(i % SIZE, i / SIZE));
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(format!("{dir}/{name}.ppm"), out);
 }

@@ -1,6 +1,7 @@
 // ---- Engine: post-processing chain on the HDR frame. Fullscreen triangle
-// passes: bright-pass + downsample, downsample, separable blur, composite
-// (bloom, exposure, tonemapping, sRGB when the target doesn't do it).
+// passes: ambient occlusion (GTAO + blur), bright-pass + downsample,
+// downsample, separable blur, composite (AO, bloom, exposure, tonemapping,
+// sRGB when the target doesn't do it), FXAA.
 
 struct Params {
     // x: bloom threshold; y: bloom intensity; z: exposure; w = 1: ACES.
@@ -9,12 +10,20 @@ struct Params {
     output: vec4<f32>,
     // xy: blur step in uv (one texel along the blur axis).
     blur: vec4<f32>,
+    // The camera the scene was drawn with (world <-> clip, depth 0..1).
+    view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
+    // x: AO radius (m); y: strength (exponent); z: bias; w = 1: AO on.
+    ao: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var bloom: texture_2d<f32>;
 @group(0) @binding(3) var linear_sampler: sampler;
+// The scene's depth, and the blurred AO (a stand-in while it is being made).
+@group(1) @binding(0) var depth_tex: texture_2d<f32>; // a depth texture read as unfilterable float (r)
+@group(1) @binding(1) var ao_tex: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
@@ -81,9 +90,175 @@ fn fs_blur(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(c, 1.0);
 }
 
+// ---- Ambient occlusion: GTAO (Jimenez et al. 2016) in world space. Two
+// slices per pixel, five steps per side, a 4x4 ordered-dither pattern for the
+// angles and step offsets, removed by a depth-aware 4x4 blur.
+
+const AO_SLICES: i32 = 2;
+const AO_STEPS: i32 = 5;
+const PI: f32 = 3.14159265;
+
+fn load_depth(p: vec2<i32>) -> f32 {
+    let dim = vec2<i32>(textureDimensions(depth_tex));
+    let q = clamp(p, vec2<i32>(0), dim - vec2<i32>(1));
+    return textureLoad(depth_tex, q, 0).r;
+}
+
+// World position of the pixel centre `pix` (pixels, y down) at `depth`.
+fn unproject(pix: vec2<f32>, depth: f32, size: vec2<f32>) -> vec3<f32> {
+    let ndc = vec4<f32>(pix.x / size.x * 2.0 - 1.0, 1.0 - pix.y / size.y * 2.0, depth, 1.0);
+    let w = params.inv_view_proj * ndc;
+    return w.xyz / w.w;
+}
+
+fn to_pixels(p: vec3<f32>, size: vec2<f32>) -> vec2<f32> {
+    let c = params.view_proj * vec4<f32>(p, 1.0);
+    let ndc = c.xy / max(abs(c.w), 1e-5);
+    return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size;
+}
+
+fn bayer(p: vec2<i32>) -> f32 {
+    var m = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    return (m[(p.y & 3) * 4 + (p.x & 3)] + 0.5) / 16.0;
+}
+
+// Normal from the closer neighbour on each axis (no smearing over edges),
+// facing the camera.
+fn surface_normal(pi: vec2<i32>, pix: vec2<f32>, size: vec2<f32>, p: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    let pl = unproject(pix + vec2<f32>(-1.0, 0.0), load_depth(pi + vec2<i32>(-1, 0)), size) - p;
+    let pr = unproject(pix + vec2<f32>(1.0, 0.0), load_depth(pi + vec2<i32>(1, 0)), size) - p;
+    let pu = unproject(pix + vec2<f32>(0.0, -1.0), load_depth(pi + vec2<i32>(0, -1)), size) - p;
+    let pd = unproject(pix + vec2<f32>(0.0, 1.0), load_depth(pi + vec2<i32>(0, 1)), size) - p;
+    let dx = select(-pl, pr, dot(pr, pr) < dot(pl, pl));
+    let dy = select(-pu, pd, dot(pd, pd) < dot(pu, pu));
+    let n = normalize(cross(dy, dx));
+    return select(-n, n, dot(n, v) >= 0.0);
+}
+
+@fragment
+fn fs_ao(in: VertexOut) -> @location(0) vec4<f32> {
+    let pi = vec2<i32>(in.clip.xy);
+    let size = vec2<f32>(textureDimensions(depth_tex));
+    let d = load_depth(pi);
+    if (d >= 1.0) {
+        return vec4<f32>(1.0);
+    }
+    let radius = params.ao.x;
+    let pix = vec2<f32>(pi) + 0.5;
+    let p = unproject(pix, d, size);
+    let v = normalize(unproject(pix, 0.0, size) - p);
+
+    let n = surface_normal(pi, pix, size, p, v);
+
+    // Screen-space size of `radius` at this depth.
+    let side = normalize(cross(v, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(v.y) > 0.95)));
+    let r_pix = clamp(distance(to_pixels(p + side * radius, size), pix), 2.0, size.y * 0.3);
+
+    let noise_slice = bayer(pi);
+    let noise_step = bayer(pi + vec2<i32>(2, 1));
+    let falloff_from = radius * 0.385;
+    let falloff_len = radius * 0.615;
+    var visibility = 0.0;
+    for (var s = 0; s < AO_SLICES; s++) {
+        let phi = (f32(s) + noise_slice) / f32(AO_SLICES) * PI;
+        let dir = vec2<f32>(cos(phi), sin(phi));
+        // The slice's direction in the plane facing the camera, and its normal.
+        let a = unproject(pix + dir, d, size) - p;
+        let ortho = normalize(a - v * dot(a, v));
+        let axis = normalize(cross(ortho, v));
+        let proj_n = n - axis * dot(n, axis);
+        let proj_len = length(proj_n);
+        if (proj_len < 1e-4) {
+            visibility += 1.0;
+            continue;
+        }
+        let sign_n = sign(dot(ortho, proj_n));
+        let cos_n = clamp(dot(proj_n, v) / proj_len, -1.0, 1.0);
+        let ang_n = sign_n * acos(cos_n);
+        // Horizon cosines on the +dir side (0) and the -dir side (1); the
+        // start is the horizon of the unoccluded hemisphere.
+        let low0 = cos(ang_n + 0.5 * PI);
+        let low1 = cos(ang_n - 0.5 * PI);
+        var h0 = low0;
+        var h1 = low1;
+        for (var i = 0; i < AO_STEPS; i++) {
+            var t = (f32(i) + noise_step) / f32(AO_STEPS);
+            t = t * t;
+            let off = dir * (t * r_pix + 1.0);
+            for (var side_i = 0; side_i < 2; side_i++) {
+                let o = select(-off, off, side_i == 0);
+                let sp = vec2<i32>(floor(pix + o));
+                let sd = load_depth(sp);
+                if (sd >= 1.0) {
+                    continue;
+                }
+                let delta = unproject(vec2<f32>(sp) + 0.5, sd, size) - p;
+                let dist = max(length(delta), 1e-4);
+                var c = dot(delta, v) / dist - params.ao.z;
+                let low = select(low1, low0, side_i == 0);
+                c = mix(c, low, clamp((dist - falloff_from) / falloff_len, 0.0, 1.0));
+                if (side_i == 0) {
+                    h0 = max(h0, c);
+                } else {
+                    h1 = max(h1, c);
+                }
+            }
+        }
+        let a0 = ang_n + clamp(acos(clamp(h0, -1.0, 1.0)) - ang_n, -0.5 * PI, 0.5 * PI);
+        let a1 = ang_n + clamp(-acos(clamp(h1, -1.0, 1.0)) - ang_n, -0.5 * PI, 0.5 * PI);
+        let arc0 = (cos_n + 2.0 * a0 * sin(ang_n) - cos(2.0 * a0 - ang_n)) * 0.25;
+        let arc1 = (cos_n + 2.0 * a1 * sin(ang_n) - cos(2.0 * a1 - ang_n)) * 0.25;
+        visibility += proj_len * (arc0 + arc1);
+    }
+    return vec4<f32>(clamp(visibility / f32(AO_SLICES), 0.0, 1.0));
+}
+
+// 4x4 blur of the raw AO (`source`) that stays on its own surface: samples
+// off this pixel's tangent plane are skipped. Applies the
+// strength.
+@fragment
+fn fs_ao_blur(in: VertexOut) -> @location(0) vec4<f32> {
+    let pi = vec2<i32>(in.clip.xy);
+    let size = vec2<f32>(textureDimensions(depth_tex));
+    let dim = vec2<i32>(textureDimensions(depth_tex));
+    let d = load_depth(pi);
+    if (d >= 1.0) {
+        return vec4<f32>(1.0);
+    }
+    let pix = vec2<f32>(pi) + 0.5;
+    let p = unproject(pix, d, size);
+    let n = surface_normal(pi, pix, size, p, normalize(unproject(pix, 0.0, size) - p));
+    let thr = max(params.ao.x * 0.15, 0.03);
+    var sum = 0.0;
+    var weight = 0.0;
+    for (var y = -2; y < 2; y++) {
+        for (var x = -2; x < 2; x++) {
+            let q = clamp(pi + vec2<i32>(x, y), vec2<i32>(0), dim - vec2<i32>(1));
+            let sd = load_depth(q);
+            if (sd >= 1.0) {
+                continue;
+            }
+            let delta = unproject(vec2<f32>(q) + 0.5, sd, size) - p;
+            // Distance from this pixel's tangent plane: slanted surfaces blur.
+            let off_plane = dot(delta, n);
+            let w = exp(-off_plane * off_plane / (thr * thr));
+            sum += w * textureLoad(source, q, 0).r;
+            weight += w;
+        }
+    }
+    return vec4<f32>(pow(sum / max(weight, 1e-4), params.ao.y));
+}
+
 @fragment
 fn fs_composite(in: VertexOut) -> @location(0) vec4<f32> {
     var color = tap(source, in.uv);
+    if (params.ao.w > 0.5) {
+        // AO is a property of the ambient light: bright (sunlit, emissive)
+        // pixels keep less of it.
+        let l = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let ao = textureSampleLevel(ao_tex, linear_sampler, in.uv, 0.0).r;
+        color *= mix(ao, 1.0, smoothstep(0.8, 3.0, l));
+    }
     color += tap(bloom, in.uv) * params.bloom_exposure.y;
     color *= params.bloom_exposure.z;
     if (params.bloom_exposure.w > 0.5) {

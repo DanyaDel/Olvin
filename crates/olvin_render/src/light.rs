@@ -20,7 +20,9 @@ pub enum LightKind {
 ///
 /// The first `Directional` light in the world is the sun: it replaces
 /// `RenderSettings::light_dir/light_color` and, with `shadows`, casts the
-/// directional shadow map. `shadows` is ignored on point and spot lights.
+/// directional shadow map. Point and spot lights cast shadows with `shadows`
+/// too, but only the most important few (`RenderSettings::max_spot_shadows` /
+/// `max_point_shadows`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
     pub kind: LightKind,
@@ -31,8 +33,22 @@ pub struct Light {
     pub range: f32,
     /// Spot: full cone angle in degrees (like Unity's Spot Angle).
     pub spot_angle_deg: f32,
+    /// Casts shadows (default: only the sun does).
     pub shadows: bool,
+    /// Shadow bias in shadow-map texels: how far the lookup slides off the
+    /// surface along its normal (sun: the cascade's texel, local lights: the
+    /// tile's texel at that distance). Raise it against acne, lower it
+    /// against peter-panning.
+    pub shadow_bias: f32,
+    /// Sun: angular diameter in degrees, the penumbra size of
+    /// `ShadowFilter::Pcss`. Unused by point and spot lights.
+    pub size: f32,
 }
+
+/// Default of [`Light::shadow_bias`].
+pub const DEFAULT_SHADOW_BIAS: f32 = 1.5;
+/// Default of [`Light::size`] (a softened sun; the real one is 0.53°).
+pub const DEFAULT_LIGHT_SIZE: f32 = 3.0;
 
 impl Light {
     /// Unity-like defaults (warm white, intensity 1, range 10, 30° spot).
@@ -44,6 +60,8 @@ impl Light {
             range: 10.0,
             spot_angle_deg: 30.0,
             shadows: kind == LightKind::Directional,
+            shadow_bias: DEFAULT_SHADOW_BIAS,
+            size: DEFAULT_LIGHT_SIZE,
         }
     }
 
@@ -96,6 +114,7 @@ impl Light {
             position_range: position.extend(range).into(),
             color_spot_scale: self.radiance().extend(scale).into(),
             direction_spot_offset: dir.extend(offset).into(),
+            shadow: [0.0; 4],
         }
     }
 }
@@ -110,6 +129,9 @@ pub(crate) struct PackedLight {
     pub color_spot_scale: [f32; 4],
     /// xyz: direction the light travels; w: spot cone offset.
     pub direction_spot_offset: [f32; 4],
+    /// x: first atlas tile + 1 (0 = no shadow); y: bias in texels; z: texel
+    /// size per metre of distance; w = 1: a point light (six tiles).
+    pub shadow: [f32; 4],
 }
 
 /// Keeps the [`MAX_LIGHTS`] most relevant lights without allocating.
@@ -147,6 +169,127 @@ impl LightList {
             self.scores[worst] = score;
         }
     }
+}
+
+/// Tiles per side of the point / spot shadow atlas.
+pub(crate) const LOCAL_GRID: usize = 4;
+/// Tiles in the atlas: a spot light takes one, a point light six.
+pub const MAX_LOCAL_TILES: usize = LOCAL_GRID * LOCAL_GRID;
+/// Point faces see a little more than 90° so the filter never reads across
+/// a face's edge: tan of the half angle.
+const POINT_FACE_TAN: f32 = 1.1;
+
+/// A local light's shadow camera for one tile.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalFit {
+    /// World to the tile's own clip space (what the depth pass draws with).
+    pub view_proj: Mat4,
+    /// World size of a texel one metre away.
+    pub texel_per_metre: f32,
+}
+
+fn near_plane(range: f32) -> f32 {
+    (range * 0.01).clamp(0.05, 0.5)
+}
+
+fn up_for(dir: Vec3) -> Vec3 {
+    if dir.y.abs() > 0.99 { Vec3::X } else { Vec3::Y }
+}
+
+/// A perspective camera at the spot light looking along its cone, a little
+/// wider than the cone so the filter has room at the rim.
+pub(crate) fn fit_spot(
+    pos: Vec3,
+    dir: Vec3,
+    angle_deg: f32,
+    range: f32,
+    tile: u32,
+) -> Option<LocalFit> {
+    let dir = dir.try_normalize()?;
+    let range = range.max(0.1);
+    let fov = (angle_deg.clamp(1.0, 179.0) + 8.0)
+        .clamp(10.0, 150.0)
+        .to_radians();
+    let view = view::look_to_mat4(pos, dir, up_for(dir));
+    let proj = directx::perspective(fov, 1.0, near_plane(range), range);
+    Some(LocalFit {
+        view_proj: proj * view,
+        texel_per_metre: 2.0 * (fov * 0.5).tan() / tile as f32,
+    })
+}
+
+/// The six faces of a point light (+X, -X, +Y, -Y, +Z, -Z).
+pub(crate) fn fit_point(pos: Vec3, range: f32, tile: u32) -> [LocalFit; 6] {
+    let range = range.max(0.1);
+    let proj = directx::perspective(2.0 * POINT_FACE_TAN.atan(), 1.0, near_plane(range), range);
+    let faces = [
+        (Vec3::X, Vec3::Y),
+        (Vec3::NEG_X, Vec3::Y),
+        (Vec3::Y, Vec3::Z),
+        (Vec3::NEG_Y, Vec3::NEG_Z),
+        (Vec3::Z, Vec3::Y),
+        (Vec3::NEG_Z, Vec3::Y),
+    ];
+    faces.map(|(dir, up)| LocalFit {
+        view_proj: proj * view::look_to_mat4(pos, dir, up),
+        texel_per_metre: 2.0 * POINT_FACE_TAN / tile as f32,
+    })
+}
+
+/// Moves a tile-local view-projection into tile `slot` of the atlas.
+pub(crate) fn atlas_matrix(view_proj: Mat4, slot: usize) -> Mat4 {
+    let step = 2.0 / LOCAL_GRID as f32;
+    let (col, row) = ((slot % LOCAL_GRID) as f32, (slot / LOCAL_GRID) as f32);
+    let scale = 1.0 / LOCAL_GRID as f32;
+    Mat4::from_translation(Vec3::new(
+        -1.0 + step * 0.5 + col * step,
+        1.0 - step * 0.5 - row * step,
+        0.0,
+    )) * Mat4::from_scale(Vec3::new(scale, scale, 1.0))
+        * view_proj
+}
+
+/// A light asking for shadow tiles.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Candidate {
+    pub point: bool,
+    /// Higher = served first.
+    pub importance: f32,
+}
+
+/// How much a local light matters to the viewer: bright, big, close.
+pub(crate) fn importance(light: &Light, pos: Vec3, eye: Vec3) -> f32 {
+    let lum = light.radiance().dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    let gap = (pos.distance(eye) - light.range).max(0.0);
+    lum * light.range / ((1.0 + gap) * (1.0 + gap))
+}
+
+/// Hands out atlas tiles to the most important candidates: at most
+/// `max_spot` spot and `max_point` point lights, [`MAX_LOCAL_TILES`] tiles
+/// in all. Returns `(candidate index, first tile)` pairs.
+pub(crate) fn assign_tiles(
+    cands: &[Candidate],
+    max_spot: usize,
+    max_point: usize,
+) -> Vec<(usize, usize)> {
+    let mut order: Vec<usize> = (0..cands.len()).collect();
+    order.sort_by(|&a, &b| cands[b].importance.total_cmp(&cands[a].importance));
+    let (mut spots, mut points, mut next) = (0, 0, 0);
+    let mut out = Vec::new();
+    for i in order {
+        let (cap, used, tiles) = if cands[i].point {
+            (max_point, &mut points, 6)
+        } else {
+            (max_spot, &mut spots, 1)
+        };
+        if *used >= cap || next + tiles > MAX_LOCAL_TILES {
+            continue;
+        }
+        *used += 1;
+        out.push((i, next));
+        next += tiles;
+    }
+    out
 }
 
 /// What the shader needs to know about the camera, recovered from view-proj
@@ -221,6 +364,8 @@ pub(crate) struct ShadowCascades {
     pub splits: [f32; MAX_CASCADES],
     /// World size of one shadow texel.
     pub texel_world: [f32; MAX_CASCADES],
+    /// World length of the depth range 0..1 of each cascade.
+    pub depth_world: [f32; MAX_CASCADES],
 }
 
 /// Splits the first `distance` metres of the camera frustum into `count`
@@ -276,6 +421,7 @@ pub(crate) fn fit_cascades(
         view_proj: [Mat4::IDENTITY; MAX_CASCADES],
         splits: [f32::MAX; MAX_CASCADES],
         texel_world: [0.0; MAX_CASCADES],
+        depth_world: [0.0; MAX_CASCADES],
     };
     let mut start = 0.0;
     for c in 0..count {
@@ -284,9 +430,10 @@ pub(crate) fn fit_cascades(
             points[i] = at(i, start);
             points[i + 4] = at(i, ends[c]);
         }
-        let (view_proj, texel) = fit_slice(&points, dir, tile)?;
+        let (view_proj, texel, depth) = fit_slice(&points, dir, tile)?;
         out.view_proj[c] = view_proj;
         out.texel_world[c] = texel;
+        out.depth_world[c] = depth;
         out.splits[c] = cam.near_depth + ends[c];
         start = ends[c];
     }
@@ -294,8 +441,9 @@ pub(crate) fn fit_cascades(
 }
 
 /// Orthographic light camera around the bounding sphere of `points`,
-/// snapped to the texel grid. Returns it with the world size of a texel.
-fn fit_slice(points: &[Vec3; 8], dir: Vec3, size: u32) -> Option<(Mat4, f32)> {
+/// snapped to the texel grid. Returns it with the world size of a texel and
+/// the world length of its depth range.
+fn fit_slice(points: &[Vec3; 8], dir: Vec3, size: u32) -> Option<(Mat4, f32, f32)> {
     let center = points.iter().copied().sum::<Vec3>() / 8.0;
     let radius = points
         .iter()
@@ -321,7 +469,7 @@ fn fit_slice(points: &[Vec3; 8], dir: Vec3, size: u32) -> Option<(Mat4, f32)> {
         -c.z - radius - pad,
         -c.z + radius,
     );
-    Some((proj * light_view, texel))
+    Some((proj * light_view, texel, 2.0 * radius + pad))
 }
 
 #[cfg(test)]

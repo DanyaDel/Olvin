@@ -43,6 +43,8 @@ struct Harness {
     format: wgpu::TextureFormat,
     samples: u32,
     depth: wgpu::TextureFormat,
+    /// Side of the render target (screenshots use a bigger one).
+    size: u32,
 }
 
 impl Harness {
@@ -73,11 +75,13 @@ impl Harness {
             format,
             samples,
             depth,
+            size: SIZE,
         })
     }
 
     fn texture(
         &self,
+        size: u32,
         format: wgpu::TextureFormat,
         samples: u32,
         usage: wgpu::TextureUsages,
@@ -87,8 +91,8 @@ impl Harness {
             .create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d {
-                    width: SIZE,
-                    height: SIZE,
+                    width: size,
+                    height: size,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -108,6 +112,7 @@ impl Harness {
         settings: &RenderSettings,
     ) -> (RenderStats, impl Fn(u32, u32) -> [u8; 3] + use<>) {
         let core = &self.core;
+        let size = self.size;
         core.upload(&mut self.gpu, &mut self.meshes);
         core.upload_assets(
             &mut self.gpu,
@@ -127,8 +132,8 @@ impl Harness {
         let resolved = core.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -139,10 +144,10 @@ impl Harness {
             view_formats: &[],
         });
         let resolved_view = resolved.create_view(&Default::default());
-        let depth = self.texture(self.depth, self.samples, rt);
+        let depth = self.texture(size, self.depth, self.samples, rt);
         let readback = core.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (SIZE * SIZE * 4) as u64,
+            size: (size * size * 4) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -153,7 +158,7 @@ impl Harness {
             core.draw(&self.view, &self.gpu, &mut pass);
         } else {
             // A foreign pass, like egui's: MSAA resolved into a non-sRGB target.
-            let msaa = self.texture(self.format, self.samples, rt);
+            let msaa = self.texture(size, self.format, self.samples, rt);
             let [r, g, b, a] = settings.clear_color.0.map(f64::from);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("foreign"),
@@ -184,13 +189,13 @@ impl Harness {
                 buffer: &readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(SIZE * 4),
+                    bytes_per_row: Some(size * 4),
                     rows_per_image: None,
                 },
             },
             wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
         );
@@ -203,7 +208,7 @@ impl Harness {
             .unwrap();
         let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
         (stats, move |x: u32, y: u32| {
-            let i = ((y * SIZE + x) * 4) as usize;
+            let i = ((y * size + x) * 4) as usize;
             [pixels[i], pixels[i + 1], pixels[i + 2]]
         })
     }
@@ -241,4 +246,60 @@ fn flat_settings() -> RenderSettings {
 
 fn close(c: [u8; 3], want: [u8; 3]) -> bool {
     c.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 6)
+}
+
+/// Writes the pixels of a [`Harness::render`] closure as a PNG (stored
+/// blocks) into `$OLVIN_SHOTS_DIR` when it is set; used to eyeball renders.
+fn save_shot(name: &str, size: u32, at: impl Fn(u32, u32) -> [u8; 3]) {
+    let Some(dir) = std::env::var_os("OLVIN_SHOTS_DIR") else {
+        return;
+    };
+    let mut raw = Vec::new();
+    for y in 0..size {
+        raw.push(0u8);
+        for x in 0..size {
+            raw.extend(at(x, y));
+        }
+    }
+    let crc = |data: &[u8]| {
+        let mut c = !0u32;
+        for &b in data {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = (c >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(c & 1));
+            }
+        }
+        !c
+    };
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, b) in blocks.iter().enumerate() {
+        z.push(u8::from(i + 1 == blocks.len()));
+        z.extend((b.len() as u16).to_le_bytes());
+        z.extend((!(b.len() as u16)).to_le_bytes());
+        z.extend(*b);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &v in &raw {
+        a = (a + u32::from(v)) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend(((b << 16) | a).to_be_bytes());
+    let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        png.extend((data.len() as u32).to_be_bytes());
+        let body: Vec<u8> = kind.iter().chain(data).copied().collect();
+        png.extend(&body);
+        png.extend(crc(&body).to_be_bytes());
+    };
+    let mut head = Vec::new();
+    head.extend(size.to_be_bytes());
+    head.extend(size.to_be_bytes());
+    head.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &head);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
+    let dir = std::path::Path::new(&dir);
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(format!("{name}.png")), png).unwrap();
 }

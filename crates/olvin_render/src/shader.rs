@@ -16,6 +16,21 @@ pub(crate) fn mesh_source(surface_source: &str) -> String {
     format!("{surface_source}\n{GLOBALS_WGSL}\n{MESH_WGSL}")
 }
 
+/// The line of `shadow_depth_at` that reads a raw depth: GLSL (the Compat
+/// tier's GL / WebGL2 backends) has no `textureLoad` from depth textures, so
+/// there it becomes a stub and PCSS stays off (`RenderCore::pcss_shader`).
+const DEPTH_READ: &str = "return textureLoad(shadow_map, texel, 0);";
+
+/// Adapts a full mesh shader to the device: keeps the raw depth reads PCSS
+/// needs only where they compile.
+pub(crate) fn for_device(source: &str, depth_reads: bool) -> std::borrow::Cow<'_, str> {
+    if depth_reads {
+        source.into()
+    } else {
+        source.replace(DEPTH_READ, "return 1.0;").into()
+    }
+}
+
 pub(crate) fn sky_source() -> String {
     format!("{GLOBALS_WGSL}\n{SKY_WGSL}")
 }

@@ -145,6 +145,55 @@ fn gradient_noise(pixel: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
 }
 
+// The one raw depth read (PCSS's blocker search). `shader::for_device` stubs
+// the line out where GLSL can't do it.
+fn shadow_depth_at(texel: vec2<i32>) -> f32 {
+    return textureLoad(shadow_map, texel, 0);
+}
+
+// Reach of PCSS in atlas texels: the blocker search, and the widest filter.
+const PCSS_SEARCH: f32 = 16.0;
+const PCSS_MAX_RADIUS: f32 = 24.0;
+
+// PCSS for one cascade: a rotated disc finds the average blocker depth, the
+// distance to it sets the penumbra (light size x distance), then a disc of
+// that radius filters the comparison. `z` is the receiver's depth (0..1);
+// returns 1 lit .. 0 shadowed.
+fn pcss_filter(i: u32, uv: vec2<f32>, z: f32, pixel: vec2<f32>) -> f32 {
+    let texel = globals.params.z;
+    let angle = gradient_noise(pixel) * 6.2831853;
+    let dims = vec2<f32>(textureDimensions(shadow_map));
+    let world_texel = globals.shadow_texel[i];
+    let range = globals.shadow_depth[i];
+    // A blocker must sit at least a texel in front of the receiver.
+    let slack = world_texel / range;
+    var blocker = 0.0;
+    var hits = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let r = sqrt((f32(k) + 0.5) / 16.0);
+        let a = f32(k) * 2.3999632 + angle;
+        let at = uv + vec2<f32>(cos(a), sin(a)) * r * PCSS_SEARCH * texel;
+        let d = shadow_depth_at(vec2<i32>(at * dims));
+        if (d < z - slack) {
+            blocker += d;
+            hits += 1.0;
+        }
+    }
+    if (hits < 0.5) {
+        return 1.0;
+    }
+    // Distance to the blockers in metres; penumbra half-width from the light's angular radius.
+    let gap = (z - blocker / hits) * range;
+    let radius = clamp(gap * globals.shadow_cfg.w / world_texel, 1.0, PCSS_MAX_RADIUS);
+    var sum = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let r = sqrt((f32(k) + 0.5) / 16.0);
+        let a = f32(k) * 2.3999632 + angle;
+        sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(cos(a), sin(a)) * r * radius * texel, z);
+    }
+    return sum / 16.0;
+}
+
 // One cascade's lookup: x = 1 lit .. 0 shadowed, y = 1 when the point falls
 // inside the cascade's tile (with room for the filter), else 0.
 fn cascade_shadow(i: u32, p: vec3<f32>, n: vec3<f32>, ndl: f32, pixel: vec2<f32>) -> vec2<f32> {
@@ -157,7 +206,10 @@ fn cascade_shadow(i: u32, p: vec3<f32>, n: vec3<f32>, ndl: f32, pixel: vec2<f32>
     let filter_mode = globals.shadow_cfg.y;
     let radius = max(globals.shadow_cfg.z, 0.0) * texel;
     // Keeps the filter inside the tile (the disc reaches 1.5 radii).
-    let margin = texel + radius * select(1.0, 1.5, filter_mode > 1.5) * select(0.0, 1.0, filter_mode > 0.5);
+    var margin = texel + radius * select(1.0, 1.5, filter_mode > 1.5) * select(0.0, 1.0, filter_mode > 0.5);
+    if (filter_mode > 2.5) {
+        margin = texel * (PCSS_SEARCH + PCSS_MAX_RADIUS + 1.0);
+    }
     // Tile bounds in the atlas.
     let tiled = globals.shadow_cfg.x > 1.5;
     let size = select(1.0, 0.5, tiled);
@@ -176,6 +228,8 @@ fn cascade_shadow(i: u32, p: vec3<f32>, n: vec3<f32>, ndl: f32, pixel: vec2<f32>
                 }
             }
             lit = sum / 9.0;
+        } else if (filter_mode > 2.5) {
+            lit = pcss_filter(i, uv, ndc.z, pixel);
         } else {
             // Vogel disc, rotated per pixel so the banding turns into noise.
             let angle = gradient_noise(pixel) * 6.2831853;
@@ -226,6 +280,62 @@ fn sun_shadow(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
     let fade = clamp((depth - globals.shadow_params.y) / max(globals.params.w - globals.shadow_params.y, 1e-3), 0.0, 1.0);
     lit = mix(lit, 1.0, fade);
     return select(1.0, lit, s.y > 0.5);
+}
+
+// A point or spot light's shadow: 1 lit .. 0 shadowed. A point light picks
+// the face (a tile of the atlas) by the dominant axis of the direction to the
+// fragment; the lookup slides along the normal and towards the light by
+// `bias` texels of that tile.
+fn local_shadow(light: Light, p: vec3<f32>, n: vec3<f32>, l: vec3<f32>, dist: f32, pixel: vec2<f32>) -> f32 {
+    let bias = light.shadow.y * light.shadow.z * dist;
+    let ndl = clamp(dot(n, l), 0.0, 1.0);
+    let q = p + n * bias * (1.0 - 0.5 * ndl) + l * bias * 0.5;
+    var tile = u32(light.shadow.x) - 1u;
+    if (light.shadow.w > 0.5) {
+        let a = q - light.position_range.xyz;
+        let m = abs(a);
+        if (m.x >= m.y && m.x >= m.z) {
+            tile += select(1u, 0u, a.x > 0.0);
+        } else if (m.y >= m.z) {
+            tile += select(3u, 2u, a.y > 0.0);
+        } else {
+            tile += select(5u, 4u, a.z > 0.0);
+        }
+    }
+    let c = globals.local_view_proj[tile] * vec4<f32>(q, 1.0);
+    if (c.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = c.xyz / c.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let texel = globals.local_cfg.x;
+    let radius = max(globals.shadow_cfg.z, 0.0) * texel;
+    let filter_mode = globals.shadow_cfg.y;
+    let origin = vec2<f32>(f32(tile % 4u), f32(tile / 4u)) * 0.25;
+    let margin = texel + radius * select(1.0, 1.5, filter_mode > 1.5) * select(0.0, 1.0, filter_mode > 0.5);
+    if (any(uv < origin + vec2<f32>(margin)) || any(uv > origin + vec2<f32>(0.25 - margin)) || ndc.z > 1.0 || ndc.z < 0.0) {
+        return 1.0;
+    }
+    if (filter_mode < 0.5) {
+        return textureSampleCompareLevel(local_shadow_map, shadow_sampler, uv, ndc.z);
+    }
+    if (filter_mode < 1.5) {
+        var sum = 0.0;
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                sum += textureSampleCompareLevel(local_shadow_map, shadow_sampler, uv + vec2<f32>(f32(x), f32(y)) * radius, ndc.z);
+            }
+        }
+        return sum / 9.0;
+    }
+    let angle = gradient_noise(pixel) * 6.2831853;
+    var sum = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let r = sqrt((f32(k) + 0.5) / 16.0);
+        let a = f32(k) * 2.3999632 + angle;
+        sum += textureSampleCompareLevel(local_shadow_map, shadow_sampler, uv + vec2<f32>(cos(a), sin(a)) * r * radius * 1.5, ndc.z);
+    }
+    return sum / 16.0;
 }
 
 // Tangent-space normal (green up) to world space.
@@ -343,6 +453,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 // Spot cone (scale 0, offset 1 for point lights).
                 let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
                 atten *= cone * cone;
+                if (atten > 0.0 && light.shadow.x > 0.5) {
+                    atten *= local_shadow(light, p, geo_n, l, sqrt(d2), in.clip.xy);
+                }
             }
             if (atten > 0.0) {
                 color += brdf(albedo, metallic, roughness, sn, v, l, light.color_spot_scale.rgb * atten);

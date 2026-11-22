@@ -24,7 +24,7 @@ use olvin_ecs::World;
 use olvin_scene::{Camera, Transform};
 use olvin_transform::GlobalTransform;
 
-use crate::light::{MAX_CASCADES, MAX_LIGHTS, PackedLight};
+use crate::light::{MAX_CASCADES, MAX_LIGHTS, MAX_LOCAL_TILES, PackedLight};
 use crate::{BlendMode, Material, RenderTier, TextureHandle};
 use instancing::{BlendSet, InstanceSet};
 use shadows::Cascade;
@@ -40,6 +40,7 @@ const NO_MATERIAL: u32 = u32::MAX;
 pub(crate) struct Globals {
     view_proj: [[f32; 4]; 4],
     shadow_view_proj: [[[f32; 4]; 4]; MAX_CASCADES],
+    local_view_proj: [[[f32; 4]; 4]; MAX_LOCAL_TILES],
     inv_view_proj: [[f32; 4]; 4],
     camera: [f32; 4],
     view_plane: [f32; 4],
@@ -53,6 +54,9 @@ pub(crate) struct Globals {
     shadow_splits: [f32; 4],
     shadow_offsets: [f32; 4],
     shadow_cfg: [f32; 4],
+    shadow_texel: [f32; 4],
+    shadow_depth: [f32; 4],
+    local_cfg: [f32; 4],
     sky_zenith: [f32; 4],
     sky_horizon: [f32; 4],
     sky_ground: [f32; 4],
@@ -154,6 +158,13 @@ pub struct ViewData {
     shadow_tile: u32,
     /// Attachment view and size; created on first use, kept afterwards.
     shadow_map: Option<(wgpu::TextureView, u32)>,
+    /// The spot / point light atlas (4x4 tiles) and its size, the same way.
+    local_map: Option<(wgpu::TextureView, u32)>,
+    /// One per atlas tile; the first `local_count` are live.
+    local_tiles: Vec<Cascade>,
+    local_count: usize,
+    /// Side of one atlas tile, in texels.
+    local_tile: u32,
     /// Generation of the sky texture in `bind` (None = the default).
     sky_bound: Option<u64>,
     sky_active: bool,
@@ -164,6 +175,12 @@ impl ViewData {
     /// `render_shadows` has work to do).
     pub fn shadows_active(&self) -> bool {
         self.cascade_count > 0
+    }
+
+    /// Atlas tiles of spot / point shadows the last `prepare` rendered
+    /// (a spot light takes one, a point light six).
+    pub fn local_shadow_tiles(&self) -> usize {
+        self.local_count
     }
 
     /// Cascades of the sun's shadow the last `prepare` rendered (0 = off).
@@ -213,6 +230,9 @@ pub struct RenderCore {
     /// Writes untonemapped linear light for a post-processing chain.
     hdr_output: bool,
     tier: RenderTier,
+    /// Whether the mesh shaders can read raw shadow depths (PCSS): native
+    /// APIs only, decided when the shaders were compiled.
+    pcss_shader: bool,
     time: Option<f32>,
     start: Instant,
 }

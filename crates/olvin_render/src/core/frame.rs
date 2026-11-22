@@ -2,11 +2,11 @@
 //! uniforms) and `draw` (opaque meshes, sky, blended meshes).
 
 use glam::{Mat4, Vec3};
-use olvin_ecs::World;
+use olvin_ecs::{Entity, World};
 use olvin_scene::Transform;
 use olvin_transform::GlobalTransform;
 
-use crate::light::{CameraInfo, LightList, MAX_CASCADES, fit_cascades};
+use crate::light::{CameraInfo, DEFAULT_SHADOW_BIAS, LightList, MAX_CASCADES, fit_cascades};
 use crate::pipelines::shadow_texture;
 use crate::{
     Frustum, Light, LightKind, MeshRenderer, RenderSettings, RenderStats, RenderTier, ShadowFilter,
@@ -37,10 +37,12 @@ impl RenderCore {
         let cam = CameraInfo::from_view_proj(view_proj);
 
         // Lights.
-        let mut sun: Option<(Vec3, Vec3, bool)> = None;
+        let local = self.plan_local_shadows(world, settings, cam.eye, &frustum);
+        let mut sun: Option<(Vec3, Vec3, bool, f32, f32)> = None;
         let mut lights = LightList::new();
-        let mut query = world.query::<(&Light, Option<&GlobalTransform>, Option<&Transform>)>();
-        for (light, global, transform) in query.iter().filter(|_| settings.scene_lights) {
+        let mut query =
+            world.query::<(Entity, &Light, Option<&GlobalTransform>, Option<&Transform>)>();
+        for (entity, light, global, transform) in query.iter().filter(|_| settings.scene_lights) {
             let m = global
                 .map(|g| g.0)
                 .or_else(|| transform.map(Transform::matrix))
@@ -49,7 +51,13 @@ impl RenderCore {
             let pos = m.w_axis.truncate();
             let score = match light.kind {
                 LightKind::Directional if sun.is_none() => {
-                    sun = Some((dir, light.radiance(), light.shadows));
+                    sun = Some((
+                        dir,
+                        light.radiance(),
+                        light.shadows,
+                        light.size,
+                        light.shadow_bias,
+                    ));
                     continue;
                 }
                 LightKind::Directional => f32::MIN,
@@ -60,12 +68,18 @@ impl RenderCore {
                     pos.distance(cam.eye) - light.range
                 }
             };
-            lights.push(light.pack(pos, dir), score);
+            let mut packed = light.pack(pos, dir);
+            if let Some((first, texel, point)) = local.of(entity) {
+                packed.shadow = [(first + 1) as f32, light.shadow_bias, texel, flag(point)];
+            }
+            lights.push(packed, score);
         }
-        let (sun_dir, sun_color, sun_shadows) = sun.unwrap_or((
+        let (sun_dir, sun_color, sun_shadows, sun_size, sun_bias) = sun.unwrap_or((
             settings.light_dir,
             Vec3::from_slice(&settings.light_color.0[..3]),
             settings.light_shadows,
+            settings.shadow_light_size,
+            DEFAULT_SHADOW_BIAS,
         ));
         let sun_dir = sun_dir.normalize_or(Vec3::NEG_Y);
 
@@ -95,6 +109,20 @@ impl RenderCore {
         while view.cascades.len() < count {
             view.cascades.push(self.create_cascade());
         }
+        view.local_count = local.count;
+        view.local_tile = local.tile;
+        if local.count > 0
+            && view
+                .local_map
+                .as_ref()
+                .is_none_or(|(_, s)| *s != local.size)
+        {
+            view.local_map = Some((shadow_texture(&self.device, local.size), local.size));
+            rebind = true;
+        }
+        while view.local_tiles.len() < local.count {
+            view.local_tiles.push(self.create_cascade());
+        }
         let cascade_frusta: [Option<Frustum>; MAX_CASCADES] = std::array::from_fn(|c| {
             fit.filter(|f| c < f.count)
                 .map(|f| Frustum::from_view_proj(f.view_proj[c]))
@@ -114,15 +142,19 @@ impl RenderCore {
                 .shadow_map
                 .as_ref()
                 .map_or(&self.dummy_shadow, |(v, _)| v);
+            let local_map = view
+                .local_map
+                .as_ref()
+                .map_or(&self.dummy_shadow, |(v, _)| v);
             let sky = sky_texture.map_or(&self.defaults.base, |t| &t.view);
-            view.bind = self.main_bind_group(&view.globals, shadow, sky);
+            view.bind = self.main_bind_group(&view.globals, shadow, local_map, sky);
             view.sky_bound = sky_generation;
         }
 
         // Meshes.
         view.main.begin();
         view.blend.items.clear();
-        for cascade in &mut view.cascades {
+        for cascade in view.cascades.iter_mut().chain(&mut view.local_tiles) {
             cascade.casters.begin();
         }
         let mut culled = 0;
@@ -160,6 +192,13 @@ impl RenderCore {
                         cascade.casters.push(bucket_key(NO_MATERIAL, i), instance);
                     }
                 }
+                for (tile, f) in view.local_tiles.iter_mut().zip(&local.frusta) {
+                    if let Some(f) = f
+                        && f.intersects_sphere(center, radius)
+                    {
+                        tile.casters.push(bucket_key(NO_MATERIAL, i), instance);
+                    }
+                }
             }
             if !frustum.intersects_sphere(center, radius) {
                 culled += 1;
@@ -181,18 +220,25 @@ impl RenderCore {
             .finish(&self.device, &self.queue, &mut view.staging, |m| {
                 gpu.pipeline_of(m)
             });
-        for cascade in view.cascades.iter_mut().take(count) {
+        let local_count = local.count;
+        for cascade in view
+            .cascades
+            .iter_mut()
+            .take(count)
+            .chain(view.local_tiles.iter_mut().take(local_count))
+        {
             cascade
                 .casters
                 .finish(&self.device, &self.queue, &mut view.staging, |_| 0);
         }
 
         // Uniforms.
-        let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let fog = settings.fog;
         // Sampling matrices land in the cascade's tile of the atlas.
         let mut shadow_view_proj = [Mat4::IDENTITY; MAX_CASCADES];
         let mut shadow_offsets = [0.0; 4];
+        let mut shadow_texel = [0.0; 4];
+        let mut shadow_depth = [1.0; 4];
         let mut shadow_splits = [f32::MAX; 4];
         if let Some(f) = fit {
             for c in 0..f.count {
@@ -204,7 +250,9 @@ impl RenderCore {
                 } else {
                     f.view_proj[c]
                 };
-                shadow_offsets[c] = f.texel_world[c] * 1.5;
+                shadow_offsets[c] = f.texel_world[c] * sun_bias;
+                shadow_texel[c] = f.texel_world[c];
+                shadow_depth[c] = f.depth_world[c];
                 shadow_splits[c] = f.splits[c];
             }
         }
@@ -212,8 +260,10 @@ impl RenderCore {
             ShadowFilter::Hard => 0.0,
             ShadowFilter::Pcf => 1.0,
             ShadowFilter::Soft if self.tier == RenderTier::Full => 2.0,
-            ShadowFilter::Soft => 1.0,
+            ShadowFilter::Pcss if self.tier == RenderTier::Full && self.pcss_shader => 3.0,
+            ShadowFilter::Soft | ShadowFilter::Pcss => 1.0,
         };
+        let sun_tan = (sun_size.clamp(0.0, 60.0).to_radians() * 0.5).tan();
         let time = self
             .time
             .unwrap_or_else(|| self.start.elapsed().as_secs_f32());
@@ -250,6 +300,7 @@ impl RenderCore {
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
             shadow_view_proj: shadow_view_proj.map(|m| m.to_cols_array_2d()),
+            local_view_proj: local.atlas.map(|m| m.to_cols_array_2d()),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera: cam.camera.into(),
             view_plane: cam.view_plane.into(),
@@ -286,8 +337,11 @@ impl RenderCore {
                 count as f32,
                 filter,
                 settings.shadow_filter_radius.max(0.0),
-                0.0,
+                sun_tan,
             ],
+            shadow_texel,
+            shadow_depth,
+            local_cfg: [1.0 / local.size as f32, 0.0, 0.0, 0.0],
             sky_zenith: sky.zenith,
             sky_horizon: sky.horizon,
             sky_ground: sky.ground,
@@ -301,6 +355,16 @@ impl RenderCore {
                 self.queue
                     .write_buffer(&cascade.globals, 0, bytemuck::bytes_of(m));
             }
+        }
+
+        for (tile, m) in view
+            .local_tiles
+            .iter()
+            .zip(&local.view_proj)
+            .take(local_count)
+        {
+            self.queue
+                .write_buffer(&tile.globals, 0, bytemuck::bytes_of(m));
         }
 
         let triangles = view
@@ -394,6 +458,10 @@ struct SkyUniform {
     horizon: [f32; 4],
     ground: [f32; 4],
     params: [f32; 4],
+}
+
+fn flag(b: bool) -> f32 {
+    if b { 1.0 } else { 0.0 }
 }
 
 fn rgb(c: [f32; 4]) -> Vec3 {

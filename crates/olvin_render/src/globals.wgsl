@@ -13,12 +13,17 @@ struct Light {
     color_spot_scale: vec4<f32>,
     // xyz: direction the light travels; w: spot cone offset.
     direction_spot_offset: vec4<f32>,
+    // x: first local atlas tile + 1 (0: no shadow); y: bias in texels;
+    // z: texel size per metre of distance; w = 1: point light (six tiles).
+    shadow: vec4<f32>,
 };
 
 struct Globals {
     view_proj: mat4x4<f32>,
     // World to the sun's shadow atlas (clip space of the whole map), per cascade.
     shadow_view_proj: array<mat4x4<f32>, 4>,
+    // World to the spot / point light atlas (4x4 tiles), per tile.
+    local_view_proj: array<mat4x4<f32>, 16>,
     inv_view_proj: mat4x4<f32>,
     // Perspective: (eye, 1); orthographic: (direction towards the camera, 0).
     camera: vec4<f32>,
@@ -44,8 +49,15 @@ struct Globals {
     // Per cascade: world-space normal offset for the shadow lookup.
     shadow_offsets: vec4<f32>,
     // x: cascade count (> 1: a 2x2 atlas of tiles); y: filter (0 hard, 1 PCF
-    // 3x3, 2 rotated disc); z: filter radius in texels.
+    // 3x3, 2 rotated disc, 3 PCSS); z: filter radius in texels.
+    // w: tan of the sun's angular radius (PCSS).
     shadow_cfg: vec4<f32>,
+    // Per cascade: world size of a shadow texel.
+    shadow_texel: vec4<f32>,
+    // Per cascade: world length of the depth range 0..1.
+    shadow_depth: vec4<f32>,
+    // x: 1 / local atlas size.
+    local_cfg: vec4<f32>,
     // rgb: procedural zenith; w: cos of the sun disc's radius.
     sky_zenith: vec4<f32>,
     // rgb: procedural horizon; w: cos of the disc's soft outer edge.
@@ -63,6 +75,7 @@ struct Globals {
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
 @group(0) @binding(3) var sky_texture: texture_2d<f32>;
 @group(0) @binding(4) var sky_sampler: sampler;
+@group(0) @binding(5) var local_shadow_map: texture_depth_2d;
 
 // Hemisphere ambient (the settings' sky / ground ambient) along `d`.
 fn hemisphere(d: vec3<f32>) -> vec3<f32> {

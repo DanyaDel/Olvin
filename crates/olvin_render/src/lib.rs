@@ -22,7 +22,10 @@ mod texture;
 pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
 pub use gl_check::{GlCheck, GlCheckInput, check_gl};
-pub use light::{Light, LightKind, MAX_CASCADES, MAX_LIGHTS};
+pub use light::{
+    DEFAULT_LIGHT_SIZE, DEFAULT_SHADOW_BIAS, Light, LightKind, MAX_CASCADES, MAX_LIGHTS,
+    MAX_LOCAL_TILES,
+};
 pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
 pub use overlay::{Overlay, OverlayQuad, OverlayRenderer, begin_overlay_pass};
@@ -139,6 +142,11 @@ pub enum ShadowFilter {
     /// 16 taps over a rotated disc: smooth penumbrae at large radii. Needs
     /// [`RenderTier::Full`]; Compat hardware falls back to `Pcf`.
     Soft,
+    /// Percentage-closer soft shadows for the sun: a blocker search sizes the
+    /// filter, so penumbrae widen with the distance from the occluder (see
+    /// `Light::size`). Local lights filter like `Soft`. Needs
+    /// [`RenderTier::Full`]; Compat hardware falls back to `Pcf`.
+    Pcss,
 }
 
 /// Glow around bright areas (post-processing, Full tier only).
@@ -198,6 +206,16 @@ pub struct RenderSettings {
     pub shadow_filter: ShadowFilter,
     /// Filter reach in shadow texels (1 = the classic 3×3 PCF kernel).
     pub shadow_filter_radius: f32,
+    /// Angular diameter of the fallback sun in degrees, for
+    /// [`ShadowFilter::Pcss`] (the sun `Light` has its own `size`).
+    pub shadow_light_size: f32,
+    /// Most point + spot lights' shadow maps are drawn for: spot shadows
+    /// cost one tile each, point shadows six. Compat hardware halves them.
+    pub max_spot_shadows: u32,
+    pub max_point_shadows: u32,
+    /// Side of the atlas holding every spot / point light tile (4×4 tiles);
+    /// clamped to the device's limit.
+    pub local_shadow_size: u32,
     /// Use `Light` components; off = only the fallback sun (editor's Solid view).
     pub scene_lights: bool,
 }
@@ -223,6 +241,10 @@ impl Default for RenderSettings {
             shadow_cascades: 4,
             shadow_filter: ShadowFilter::Pcf,
             shadow_filter_radius: 1.0,
+            shadow_light_size: 3.0,
+            max_spot_shadows: 4,
+            max_point_shadows: 2,
+            local_shadow_size: 2048,
             scene_lights: true,
         }
     }

@@ -7,7 +7,7 @@ use crate::pipelines::{
     create_layouts, create_mesh_pipeline, create_shadow_pipeline, create_sky_pipeline,
     shadow_texture,
 };
-use crate::shader::{DEFAULT_SURFACE_SHADER, mesh_source};
+use crate::shader::{DEFAULT_SURFACE_SHADER, for_device, mesh_source};
 use crate::{Material, RenderTier, TextureData};
 
 use super::assets::{material_bind_group, material_uniform, upload_texture};
@@ -31,9 +31,15 @@ impl RenderCore {
             immediate_size: 0,
         });
         let target = (color, samples, depth);
+        let tier = tier_of_device(&device);
+        let pcss_shader = tier == RenderTier::Full;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh"),
-            source: wgpu::ShaderSource::Wgsl(mesh_source(DEFAULT_SURFACE_SHADER).into()),
+            source: wgpu::ShaderSource::Wgsl(
+                for_device(&mesh_source(DEFAULT_SURFACE_SHADER), pcss_shader)
+                    .into_owned()
+                    .into(),
+            ),
         });
         let pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target, false);
         let blend_pipeline = create_mesh_pipeline(&device, &pipeline_layout, &module, target, true);
@@ -76,7 +82,6 @@ impl RenderCore {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let tier = tier_of_device(&device);
         let dummy_shadow = shadow_texture(&device, 1);
         let solid = |rgba, srgb| {
             upload_texture(&device, &queue, &TextureData::solid(rgba, srgb), u32::MAX).view
@@ -119,6 +124,7 @@ impl RenderCore {
             encode_srgb: !color.is_srgb(),
             hdr_output: false,
             tier,
+            pcss_shader,
             time: None,
             start: Instant::now(),
         }
@@ -159,7 +165,12 @@ impl RenderCore {
             })
         };
         let globals = uniform("olvin globals", size_of::<Globals>() as u64);
-        let bind = self.main_bind_group(&globals, &self.dummy_shadow, &self.defaults.base);
+        let bind = self.main_bind_group(
+            &globals,
+            &self.dummy_shadow,
+            &self.dummy_shadow,
+            &self.defaults.base,
+        );
         ViewData {
             globals,
             bind,
@@ -170,6 +181,10 @@ impl RenderCore {
             cascade_count: 0,
             shadow_tile: 1,
             shadow_map: None,
+            local_map: None,
+            local_tiles: Vec::new(),
+            local_count: 0,
+            local_tile: 1,
             sky_bound: None,
             sky_active: false,
         }
@@ -179,6 +194,7 @@ impl RenderCore {
         &self,
         globals: &wgpu::Buffer,
         shadow: &wgpu::TextureView,
+        local: &wgpu::TextureView,
         sky: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -204,6 +220,10 @@ impl RenderCore {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.sky_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(local),
                 },
             ],
         })

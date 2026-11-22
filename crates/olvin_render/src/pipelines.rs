@@ -43,7 +43,7 @@ fn instance_layout(attributes: &[wgpu::VertexAttribute]) -> wgpu::VertexBufferLa
     }
 }
 
-/// Group 0 (view: globals, shadow map, sky) and group 1 (material).
+/// Group 0 (view: globals, shadow map, sky, local light shadow atlas) and group 1 (material).
 pub(crate) fn create_layouts(
     device: &wgpu::Device,
 ) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
@@ -100,6 +100,16 @@ pub(crate) fn create_layouts(
             },
             texture(3),
             sampler(4),
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: fragment,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     });
     let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

@@ -2,6 +2,7 @@
 //! and compiling surface shaders into pipelines.
 
 use crate::pipelines::create_mesh_pipeline;
+use crate::shader::for_device;
 use crate::{
     BlendMode, Material, Materials, MeshData, Meshes, Shaders, TextureData, TextureHandle,
     Textures, Vertex,
@@ -192,7 +193,9 @@ impl RenderCore {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("surface shader"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    for_device(source, self.pcss_shader).into_owned().into(),
+                ),
             });
         let opaque = create_mesh_pipeline(
             &self.device,

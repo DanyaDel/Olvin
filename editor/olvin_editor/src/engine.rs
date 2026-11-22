@@ -482,6 +482,8 @@ fn editor_quality(
 ) -> RenderSettings {
     if !prefs.viewport_shadows {
         settings.shadow_distance = 0.0;
+        settings.max_spot_shadows = 0;
+        settings.max_point_shadows = 0;
     }
     if !prefs.viewport_fog {
         settings.fog = None;

@@ -356,6 +356,16 @@ pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
     });
     settings.shadow_distance = env.shadow_distance;
     settings.shadow_map_size = env.shadow_resolution.clamp(256, 8192);
+    settings.shadow_filter = match env.shadow_filter {
+        olvin_scene::file::ShadowFilter::Hard => olvin_render::ShadowFilter::Hard,
+        olvin_scene::file::ShadowFilter::Pcf => olvin_render::ShadowFilter::Pcf,
+        olvin_scene::file::ShadowFilter::Soft => olvin_render::ShadowFilter::Soft,
+        olvin_scene::file::ShadowFilter::Pcss => olvin_render::ShadowFilter::Pcss,
+    };
+    settings.shadow_cascades = env.shadow_cascades.clamp(1, 4);
+    settings.max_spot_shadows = env.max_spot_shadows.min(4);
+    settings.max_point_shadows = env.max_point_shadows.min(2);
+    settings.local_shadow_size = env.local_shadow_resolution.clamp(512, 8192);
 }
 
 /// The renderer's light for a scene light.
@@ -371,6 +381,8 @@ pub fn runtime_light(d: &LightDesc) -> olvin_render::Light {
         range: d.range,
         spot_angle_deg: d.spot_angle,
         shadows: d.shadows,
+        shadow_bias: d.shadow_bias.clamp(0.0, 16.0),
+        size: d.size.clamp(0.0, 60.0),
     }
 }
 

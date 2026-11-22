@@ -143,6 +143,27 @@ pub struct Environment {
     pub shadow_distance: f32,
     /// Shadow map resolution (512..4096).
     pub shadow_resolution: u32,
+    /// How shadow edges are filtered.
+    pub shadow_filter: ShadowFilter,
+    /// Cascades the sun's shadow is split into (1..4).
+    pub shadow_cascades: u32,
+    /// Spot and point lights that cast shadows at most (the most important
+    /// ones win; fewer on weak hardware).
+    pub max_spot_shadows: u32,
+    pub max_point_shadows: u32,
+    /// Resolution of the atlas holding spot and point shadows (4x4 tiles).
+    pub local_shadow_resolution: u32,
+}
+
+/// Shadow edge filtering (see `olvin_render::ShadowFilter`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShadowFilter {
+    Hard,
+    #[default]
+    Pcf,
+    Soft,
+    /// Soft shadows that widen with the distance from the occluder (sun).
+    Pcss,
 }
 
 /// The background of the scene (Unity's skybox).
@@ -199,6 +220,11 @@ impl Default for Environment {
             skybox: Sky::Color,
             shadow_distance: 60.0,
             shadow_resolution: 2048,
+            shadow_filter: ShadowFilter::Pcf,
+            shadow_cascades: 4,
+            max_spot_shadows: 4,
+            max_point_shadows: 2,
+            local_shadow_resolution: 2048,
         }
     }
 }
@@ -361,7 +387,22 @@ pub struct LightDesc {
     pub intensity: f32,
     pub range: f32,
     pub spot_angle: f32,
+    /// Casts shadows (point and spot lights since shadows landed for them).
     pub shadows: bool,
+    /// Shadow bias in shadow-map texels (normal offset of the lookup).
+    #[serde(default = "default_shadow_bias")]
+    pub shadow_bias: f32,
+    /// Sun: angular diameter in degrees, the softness of PCSS shadows.
+    #[serde(default = "default_light_size")]
+    pub size: f32,
+}
+
+fn default_shadow_bias() -> f32 {
+    1.5
+}
+
+fn default_light_size() -> f32 {
+    3.0
 }
 
 impl LightDesc {
@@ -372,7 +413,9 @@ impl LightDesc {
             intensity: 1.0,
             range: 10.0,
             spot_angle: 30.0,
-            shadows: true,
+            shadows: kind == LightKind::Directional,
+            shadow_bias: default_shadow_bias(),
+            size: default_light_size(),
         }
     }
 }
@@ -1198,6 +1241,54 @@ mod tests {
             "{text}"
         );
         assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+    }
+
+    #[test]
+    fn old_scene_without_shadow_fields_loads_with_defaults() {
+        // The fixtures predate the light and environment shadow settings.
+        let scene = SceneFile::parse(V2).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let sun = scene
+            .entities
+            .iter()
+            .find_map(|e| e.light.as_ref())
+            .unwrap();
+        assert!(sun.shadows);
+        assert_eq!((sun.shadow_bias, sun.size), (1.5, 3.0));
+        let env = &scene.environment;
+        assert_eq!(env.shadow_filter, ShadowFilter::Pcf);
+        assert_eq!(
+            (
+                env.shadow_cascades,
+                env.max_spot_shadows,
+                env.max_point_shadows
+            ),
+            (4, 4, 2)
+        );
+        assert_eq!(env.local_shadow_resolution, 2048);
+    }
+
+    #[test]
+    fn light_and_shadow_settings_round_trip() {
+        let mut scene = SceneFile::parse(V2).unwrap();
+        let mut spot = EntityDesc::new(77, "Lamp");
+        let mut light = LightDesc::new(LightKind::Spot);
+        assert!(!light.shadows, "only the sun casts shadows by default");
+        light.shadows = true;
+        light.shadow_bias = 3.25;
+        light.size = 7.5;
+        spot.light = Some(light.clone());
+        scene.entities.push(spot);
+        scene.environment.shadow_filter = ShadowFilter::Pcss;
+        scene.environment.shadow_cascades = 3;
+        scene.environment.max_spot_shadows = 1;
+        scene.environment.max_point_shadows = 0;
+        scene.environment.local_shadow_resolution = 1024;
+        let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        let back = SceneFile::parse(&text).unwrap();
+        assert_eq!(back, scene);
+        let lamp = back.entities.iter().find(|e| e.id == 77).unwrap();
+        assert_eq!(lamp.light.as_ref(), Some(&light));
     }
 
     #[test]

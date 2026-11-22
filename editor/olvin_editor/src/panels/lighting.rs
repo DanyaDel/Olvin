@@ -2,7 +2,7 @@
 //! environment itself is edited in Settings → Rendering (`environment_ui`).
 
 use egui::{DragValue, RichText};
-use olvin_scene::file::{Environment, FogDesc, LightKind, Sky};
+use olvin_scene::file::{Environment, FogDesc, LightKind, ShadowFilter, Sky};
 
 use super::inspector::{drag, grid, row, section};
 use crate::{EditorState, Panel};
@@ -98,9 +98,62 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
                     ui.selectable_value(&mut env.shadow_resolution, r, r.to_string());
                 }
             });
+            row(ui, "Filter", |ui| {
+                egui::ComboBox::from_id_salt("shadow-filter")
+                    .selected_text(filter_label(env.shadow_filter))
+                    .show_ui(ui, |ui| {
+                        for f in [
+                            ShadowFilter::Hard,
+                            ShadowFilter::Pcf,
+                            ShadowFilter::Soft,
+                            ShadowFilter::Pcss,
+                        ] {
+                            ui.selectable_value(&mut env.shadow_filter, f, filter_label(f));
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "PCSS: soft edges that widen with the distance from the occluder \
+                         (the sun's Size sets how much). Needs a Vulkan / Metal / DirectX \
+                         GPU; on OpenGL it falls back to PCF.",
+                    );
+            });
+            row(ui, "Cascades", |ui| {
+                for c in 1..=4 {
+                    ui.selectable_value(&mut env.shadow_cascades, c, c.to_string());
+                }
+            });
+            row(ui, "Spot Shadows", |ui| {
+                for n in 0..=4 {
+                    ui.selectable_value(&mut env.max_spot_shadows, n, n.to_string());
+                }
+            });
+            row(ui, "Point Shadows", |ui| {
+                for n in 0..=2 {
+                    ui.selectable_value(&mut env.max_point_shadows, n, n.to_string());
+                }
+            });
+            row(ui, "Local Res.", |ui| {
+                for r in [1024, 2048, 4096] {
+                    ui.selectable_value(&mut env.local_shadow_resolution, r, r.to_string());
+                }
+            });
         });
-        ui.weak("Shorter distance = sharper shadows; the sun's Shadows toggle is in its Light.");
+        ui.weak(
+            "Shorter distance = sharper shadows. Lights cast shadows with their own Cast \
+             Shadows toggle; only the most important spot / point lights up to the limits \
+             above get one (fewer on OpenGL).",
+        );
     });
+}
+
+fn filter_label(f: ShadowFilter) -> &'static str {
+    match f {
+        ShadowFilter::Hard => "Hard",
+        ShadowFilter::Pcf => "PCF",
+        ShadowFilter::Soft => "Soft",
+        ShadowFilter::Pcss => "PCSS",
+    }
 }
 
 pub(crate) fn presets(ui: &mut egui::Ui, state: &mut EditorState) {

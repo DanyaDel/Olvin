@@ -3,7 +3,8 @@
 //
 // WebGL2 limits: 9 vertex attributes (4 vertex + 5 instance), 5 varyings,
 // group 0 = view globals, group 1 = material (uniform + 4 textures + sampler),
-// 6 sampled textures in the fragment stage.
+// 7 sampled textures in the fragment stage (shadow atlases for the sun and
+// for spot / point lights, sky, 4 material textures).
 //
 // Lighting, Unity built-in style: hemisphere ambient + roughness-faded sky
 // reflection, a sun with cascaded PCF shadows, up to 16 point / spot / extra

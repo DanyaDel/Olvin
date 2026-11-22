@@ -607,9 +607,17 @@ fn light_ui(ui: &mut egui::Ui, l: &mut LightDesc) {
                 drag(ui, &mut l.spot_angle, 1.0..=179.0, 0.5, "°")
             });
         }
-        row(ui, "Shadows", |ui| {
+        row(ui, "Cast Shadows", |ui| {
             ui.checkbox(&mut l.shadows, "");
         });
+        if l.shadows {
+            row(ui, "Shadow Bias", |ui| {
+                drag(ui, &mut l.shadow_bias, 0.0..=16.0, 0.05, " texels")
+            });
+            if l.kind == LightKind::Directional {
+                row(ui, "Size", |ui| drag(ui, &mut l.size, 0.0..=60.0, 0.1, "°"));
+            }
+        }
     });
     ui.horizontal_wrapped(|ui| {
         ui.weak("Temperature");
@@ -637,8 +645,14 @@ fn light_ui(ui: &mut egui::Ui, l: &mut LightDesc) {
             }
         }
     });
+    if l.shadows {
+        ui.weak(
+            "Bias: raise against acne, lower if shadows detach from their casters. \
+             Size: the sun's softness with the PCSS filter.",
+        );
+    }
     if l.kind != LightKind::Directional && l.shadows {
-        ui.weak("Only the sun (first Directional light) casts shadows for now.");
+        ui.weak("Only the most important spot / point lights get a shadow map (Settings → Rendering → Shadows).");
     }
 }
 

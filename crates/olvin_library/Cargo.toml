@@ -1,0 +1,20 @@
+[package]
+name = "olvin_library"
+description = "Olvin built-in preset library: packs of ready prefabs, scripts, shaders and looks, imported into a project's assets/"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_assets = { path = "../olvin_assets" }
+serde.workspace = true
+ron.workspace = true
+log.workspace = true
+include_dir = "0.7"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+glam.workspace = true
+olvin = { path = "../olvin", default-features = false, features = ["window", "scene", "physics", "script", "lua", "input"] }

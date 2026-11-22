@@ -86,6 +86,9 @@ pub struct EditorApp {
     title: String,
     tinted: bool,
     top_bar: TopBarRects,
+    /// Width the workspace tabs and their "+" wanted last frame, so the play
+    /// controls can move right of them instead of cutting them off.
+    tabs_wanted_w: f32,
 }
 
 impl EditorApp {
@@ -118,6 +121,7 @@ impl EditorApp {
             title: String::new(),
             tinted: false,
             top_bar: TopBarRects::default(),
+            tabs_wanted_w: 0.0,
         }
     }
 
@@ -335,18 +339,20 @@ impl EditorApp {
         let mut action = None;
         let count = self.layout.workspaces.len();
         // Bring the active tab into view when it changes (a click, a new one).
+        // Also when the strip gets another width (the window was resized).
         let seen = ui.id().with("ws-seen");
-        let reveal =
-            ui.data(|d| d.get_temp::<(usize, usize)>(seen)) != Some((self.layout.active, count));
-        ui.data_mut(|d| d.insert_temp(seen, (self.layout.active, count)));
+        let now = (self.layout.active, count, width.round() as i32);
+        let reveal = ui.data(|d| d.get_temp::<(usize, usize, i32)>(seen)) != Some(now);
+        ui.data_mut(|d| d.insert_temp(seen, now));
         let plus_w = 34.0;
-        egui::ScrollArea::horizontal()
+        let out = egui::ScrollArea::horizontal()
             .id_salt("ws-tabs")
             .max_width((width - plus_w).max(0.0))
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| {
                 self.workspace_tab_list(ui, &mut action, reveal);
             });
+        self.tabs_wanted_w = out.content_size.x + plus_w;
         menu(ui, "+", |ui| self.new_workspace_menu(ui)).on_hover_text("New Workspace");
         if let Some(action) = action {
             self.apply_ws(action);
@@ -901,7 +907,11 @@ impl EditorApp {
                 ui.add_space(10.0);
                 let start = ui.cursor().left();
                 rects.menus_end = start;
+                // Centred over the window, but never over the tabs: they push
+                // the controls right as far as the window allows, and only
+                // scroll when even that is not enough.
                 let play_left = (bar.center().x - PLAY_W / 2.0)
+                    .max(start + self.tabs_wanted_w + BAR_GAP)
                     .max(start + MIN_TABS_W + BAR_GAP)
                     .min(gear_left - BAR_GAP - PLAY_W);
                 let tabs = egui::Rect::from_min_max(

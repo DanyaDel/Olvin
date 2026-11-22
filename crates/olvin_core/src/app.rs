@@ -20,6 +20,8 @@ pub struct App {
     events: HashSet<TypeId>,
     runner: Option<Runner>,
     started: bool,
+    /// `update` closes the profiler frame itself (off when a host does).
+    profile_frames: bool,
 }
 
 impl Default for App {
@@ -37,7 +39,9 @@ impl App {
             events: HashSet::new(),
             runner: None,
             started: false,
+            profile_frames: true,
         };
+        crate::profile::init_from_env();
         app.insert_resource(Time::default());
         app.insert_resource(AppExit::default());
         app.insert_resource(ProjectPaths::detect().clone());
@@ -111,8 +115,19 @@ impl App {
         }
     }
 
+    /// Whether [`Self::update`] marks a profiler frame boundary (default). A
+    /// host that drives several updates per frame, or its own, turns it off
+    /// and calls [`crate::profile::new_frame`] itself.
+    pub fn set_profile_frames(&mut self, on: bool) -> &mut Self {
+        self.profile_frames = on;
+        self
+    }
+
     /// Runs one frame.
     pub fn update(&mut self) {
+        if self.profile_frames {
+            crate::profile::new_frame();
+        }
         self.startup();
         for stage in Stage::FRAME {
             self.schedule.run(stage, &mut self.resources);

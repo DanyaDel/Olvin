@@ -6,6 +6,7 @@ mod events;
 pub mod logging;
 mod paths;
 mod plugin;
+pub mod profile;
 mod resources;
 mod schedule;
 mod surface;

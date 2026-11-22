@@ -495,10 +495,12 @@ fn apply_commands(rt: &mut ScriptRuntime, env: &mut Env<'_>) {
 /// Runs one `update` pass now. `dt` overrides the frame delta (deterministic
 /// tests, replays, headless tools); the plugin calls it with `None`.
 pub fn run_update(res: &Resources, dt: Option<f32>) {
+    olvin_core::profile_scope!("script update pass");
     run_pass(res, Phase::Update, dt);
 }
 
 /// Runs one `fixed_update` pass now (the plugin does this before each physics step).
 pub fn run_fixed_update(res: &Resources) {
+    olvin_core::profile_scope!("script fixed_update pass");
     run_pass(res, Phase::Fixed, None);
 }

@@ -194,6 +194,7 @@ impl Plugin for PhysicsPlugin {
 /// simulate, pull dynamic poses. [`CollisionEvents`] (if present) holds this
 /// frame's events afterwards; controller hits go to `Events<ControllerHit>`.
 pub fn step(res: &Resources, dt: f32) {
+    olvin_core::profile_scope!("physics step");
     let steps = {
         let mut physics = res.fetch_mut::<Physics>();
         let mut world = res.fetch_mut::<World>();
@@ -208,7 +209,11 @@ pub fn step(res: &Resources, dt: f32) {
         physics.consume(dt)
     };
     for _ in 0..steps {
-        run_fixed_systems(res);
+        {
+            olvin_core::profile_scope!("physics fixed systems");
+            run_fixed_systems(res);
+        }
+        olvin_core::profile_scope!("physics fixed step");
         let mut physics = res.fetch_mut::<Physics>();
         let mut world = res.fetch_mut::<World>();
         create_bodies(&mut world, &mut physics);

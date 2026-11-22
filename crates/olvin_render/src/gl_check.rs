@@ -65,14 +65,32 @@ pub fn warning(adapter: &str) -> String {
     )
 }
 
-/// Whether the window runs on Wayland: the display handle if it says so,
-/// else `WAYLAND_DISPLAY`.
+/// Whether the session is Wayland: the display handle says so, or
+/// `WAYLAND_DISPLAY` is set. The second also covers a window that runs through
+/// Xwayland, where NVIDIA's GL fails the same way ("gl not compatible with
+/// provided surface").
 pub fn is_wayland(handle: &impl HasDisplayHandle) -> bool {
-    match handle.display_handle().map(|h| h.as_raw()) {
-        Ok(RawDisplayHandle::Wayland(_)) => true,
-        Ok(_) => false,
-        Err(_) => std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
-    }
+    let handle_says = matches!(
+        handle.display_handle().map(|h| h.as_raw()),
+        Ok(RawDisplayHandle::Wayland(_))
+    );
+    handle_says || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+}
+
+/// Extra hint for a failed device init: with GL forced under Wayland on the
+/// proprietary NVIDIA driver wgpu finds no adapter at all ("gl not compatible
+/// with provided surface"), so [`check_gl`] never gets to run.
+pub fn failure_hint(wayland: bool, wgpu_backend: Option<&str>) -> Option<&'static str> {
+    let forced_gl = wgpu_backend.is_some_and(|b| {
+        let b = b.to_lowercase();
+        b == "gl" || b == "opengl" || b == "gles"
+    });
+    (wayland && forced_gl).then_some(
+        "WGPU_BACKEND forces OpenGL, which cannot present on the proprietary NVIDIA driver \
+         under Wayland (wgpu limitation). Fix: unset WGPU_BACKEND (or set WGPU_BACKEND=vulkan), \
+         or run on Mesa's software GL with \
+         __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json WGPU_BACKEND=gl",
+    )
 }
 
 /// `WGPU_BACKEND` is set to something.
@@ -83,6 +101,15 @@ pub fn backend_forced() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_init_with_forced_gl_on_wayland_gets_a_hint() {
+        assert!(failure_hint(true, Some("gl")).is_some());
+        assert!(failure_hint(true, Some("GL")).is_some());
+        assert!(failure_hint(true, Some("vulkan")).is_none());
+        assert!(failure_hint(true, None).is_none());
+        assert!(failure_hint(false, Some("gl")).is_none());
+    }
 
     fn input(backend: wgpu::Backend, vendor: u32, name: &str) -> GlCheckInput<'_> {
         GlCheckInput {

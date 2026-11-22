@@ -66,6 +66,7 @@ pub(crate) fn init(res: &mut Resources) {
         return;
     };
     let settings = res.fetch::<RenderSettings>().clone();
+    let wayland = crate::gl_check::is_wayland(&handle);
     match pollster::block_on(Renderer::new(handle, size, &settings)) {
         Ok((renderer, info)) => {
             log::info!(
@@ -79,6 +80,10 @@ pub(crate) fn init(res: &mut Resources) {
         }
         Err(err) => {
             log::error!("renderer init failed: {err}");
+            let backend = std::env::var("WGPU_BACKEND").ok();
+            if let Some(hint) = crate::gl_check::failure_hint(wayland, backend.as_deref()) {
+                log::error!("{hint}");
+            }
             res.fetch_mut::<AppExit>().requested = true;
         }
     }

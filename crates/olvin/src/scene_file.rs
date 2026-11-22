@@ -1,11 +1,12 @@
 //! Scenes saved by olvin-editor (`assets/scenes/*.scene.ron`).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use olvin_core::Resources;
 use olvin_ecs::{Component, Entity, EntityBuilder, World};
 use olvin_render::{Color, MeshData, MeshHandle, MeshRenderer, Meshes, RenderSettings, Vertex};
+pub use olvin_scene::PrefabInstanceOf;
 pub use olvin_scene::file::*;
 use olvin_scene::primitives::Primitive;
 use olvin_scene::{Camera, MeshGeometry, Name, SceneId, Tag, Transform};
@@ -114,7 +115,99 @@ pub fn spawn(res: &Resources, scene: &SceneFile) -> usize {
 }
 
 /// [`spawn`], returning the entity of every spawned scene object by its id.
+///
+/// Prefab instances are expanded first (see [`olvin_scene::prefab`]); their
+/// assets are read from the `RenderAssets` root. A missing or broken prefab
+/// is logged and its object spawns empty.
 pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
+    let scene = &*expand_prefabs(res, scene);
+    let entities = spawn_entities(res, scene);
+    spawn_environment(res, scene);
+    spawn_csg(res, scene);
+    spawn_animation(res, scene);
+    entities
+}
+
+/// The scene with its prefab instances expanded (borrowed when there are none).
+fn expand_prefabs<'a>(res: &Resources, scene: &'a SceneFile) -> std::borrow::Cow<'a, SceneFile> {
+    if !scene.entities.iter().any(|e| e.prefab.is_some()) {
+        return std::borrow::Cow::Borrowed(scene);
+    }
+    let root = res
+        .get::<crate::render_assets::RenderAssets>()
+        .and_then(|a| a.root().map(Path::to_path_buf));
+    let mut expanded = scene.clone();
+    for warning in expanded.expand_prefabs(&mut prefab_loader(root)) {
+        log::warn!("{warning}");
+    }
+    std::borrow::Cow::Owned(expanded)
+}
+
+/// Reads prefab assets (`*.prefab.ron`, paths relative to the assets root),
+/// each file once.
+fn prefab_loader(root: Option<PathBuf>) -> impl FnMut(&str) -> Result<SceneFile, String> {
+    let mut cache: HashMap<String, Result<SceneFile, String>> = HashMap::new();
+    move |rel| {
+        cache
+            .entry(rel.to_owned())
+            .or_insert_with(|| match &root {
+                Some(root) => SceneFile::load(root.join(rel)),
+                None => Err("no assets folder to read it from".into()),
+            })
+            .clone()
+    }
+}
+
+/// Spawns the prefab at `asset` (a `*.prefab.ron` path relative to the assets
+/// root) at `transform` and returns its root entity. Gameplay code uses it to
+/// create objects at run time; the root carries [`PrefabInstanceOf`] and its
+/// [`SceneId`] is fresh (above every id in the world). Errors (missing or
+/// broken file, no assets root) are returned, never panics.
+pub fn instantiate_prefab(
+    res: &Resources,
+    asset: &str,
+    transform: Transform,
+) -> Result<Entity, String> {
+    let id = {
+        let world = res.fetch::<World>();
+        world
+            .query::<&SceneId>()
+            .iter()
+            .map(|s| s.0)
+            .filter(|id| !olvin_scene::prefab::is_member_id(*id))
+            .max()
+            .map_or(1, |m| m + 1)
+    };
+    let (y, x, z) = transform.rotation.to_euler(glam::EulerRot::YXZ);
+    let mut root = EntityDesc::new(id, asset.rsplit('/').next().unwrap_or(asset));
+    root.name = root.name.trim_end_matches(".prefab.ron").to_owned();
+    root.position = transform.translation;
+    root.rotation = glam::Vec3::new(x, y, z).map(f32::to_degrees);
+    root.scale = transform.scale;
+    root.prefab = Some(PrefabInstance::new(asset));
+    let mut scene = SceneFile {
+        entities: vec![root],
+        ..Default::default()
+    };
+    let assets_root = res
+        .get::<crate::render_assets::RenderAssets>()
+        .and_then(|a| a.root().map(Path::to_path_buf));
+    let warnings = scene.expand_prefabs(&mut prefab_loader(assets_root));
+    if scene.entities.len() == 1 && !warnings.is_empty() {
+        return Err(warnings.join("; "));
+    }
+    for warning in warnings {
+        log::warn!("{warning}");
+    }
+    let entities = spawn_entities(res, &scene);
+    spawn_csg(res, &scene);
+    entities
+        .get(&id)
+        .copied()
+        .ok_or_else(|| format!("prefab `{asset}`: the root is inactive"))
+}
+
+fn spawn_entities(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
     let worlds = scene.world_matrices();
     let registry = res.get::<SceneComponents>();
     let mut meshes = res.fetch_mut::<Meshes>();
@@ -253,9 +346,15 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
                 e.name
             );
         }
+        if let Some(p) = &e.prefab {
+            b.add(PrefabInstanceOf(p.asset.clone()));
+        }
         entities.insert(e.id, world.spawn(b.build()));
     }
+    entities
+}
 
+fn spawn_environment(res: &Resources, scene: &SceneFile) {
     if let Some(mut settings) = res.get_mut::<RenderSettings>() {
         apply_lighting(scene, &mut settings);
         if let (Some(mut assets), Some(mut textures)) = (
@@ -272,8 +371,12 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
                 .and_then(|p| assets.texture(p, false, &mut textures));
         }
     }
+}
 
-    // CSG: one static mesh per face colour and material, one mesh collider for the level.
+/// CSG: one static mesh per face colour and material, one mesh collider for the level.
+fn spawn_csg(res: &Resources, scene: &SceneFile) {
+    let mut meshes = res.fetch_mut::<Meshes>();
+    let mut world = res.fetch_mut::<World>();
     let brushes: Vec<_> = scene
         .csg_brushes()
         .into_iter()
@@ -324,7 +427,10 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
             },
         ));
     }
-    // The scene's object animation (F-curves), played by `AnimPlugin`.
+}
+
+/// The scene's object animation (F-curves), played by `AnimPlugin`.
+fn spawn_animation(res: &Resources, scene: &SceneFile) {
     if !scene.animation.curves.is_empty()
         && let Some(mut player) = res.get_mut::<olvin_anim::ActionPlayer>()
     {
@@ -335,7 +441,6 @@ pub fn spawn_ids(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
             .collect();
         *player = olvin_anim::ActionPlayer::new(scene.animation.clone(), bases);
     }
-    entities
 }
 
 /// Applies the scene's sun and [`Environment`](olvin_scene::file::Environment)
@@ -604,8 +709,17 @@ mod tests {
             shape: Shape::Cube,
             color: [1.0; 4],
         });
+        // A prefab instance expands against the assets folder found from the scene path.
         SceneFile {
-            entities: vec![e],
+            entities: vec![EntityDesc::new(1, "PrefabRoot"), EntityDesc::new(2, "Part")],
+            ..Default::default()
+        }
+        .save(dir.join("assets/prefabs/thing.prefab.ron"))
+        .unwrap();
+        let mut thing = EntityDesc::new(4, "Placed");
+        thing.prefab = Some(PrefabInstance::new("prefabs/thing.prefab.ron"));
+        SceneFile {
+            entities: vec![e, thing],
             ..Default::default()
         }
         .save(&path)
@@ -625,10 +739,168 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         };
-        assert_eq!(ids.len(), 1);
+        assert_eq!(ids.len(), 3, "the thing and the two nodes of the prefab");
         let root = res.fetch::<RenderAssets>().root().map(Path::to_path_buf);
         assert_eq!(root, Some(dir.join("assets")));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A project's `assets/` with `prefabs/crate.prefab.ron` (Crate > Lid), a game world
+    /// and the resources spawning needs.
+    fn prefab_project(name: &str) -> (PathBuf, Resources) {
+        use crate::render_assets::RenderAssets;
+        let assets = std::env::temp_dir()
+            .join(format!("olvin-prefab-{}-{name}", std::process::id()))
+            .join("assets");
+        let _ = std::fs::remove_dir_all(&assets);
+        let mut crate_ = EntityDesc::new(1, "Crate");
+        crate_.mesh = Some(MeshDesc {
+            shape: Shape::Cube,
+            color: [1.0; 4],
+        });
+        let mut lid = EntityDesc::new(2, "Lid");
+        lid.parent = Some(1);
+        lid.position = Vec3::Y;
+        lid.mesh = crate_.mesh.clone();
+        SceneFile {
+            entities: vec![crate_, lid],
+            ..Default::default()
+        }
+        .save(assets.join("prefabs/crate.prefab.ron"))
+        .unwrap();
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        res.insert(RenderAssets::new(Some(assets.clone())));
+        (assets, res)
+    }
+
+    fn instance(id: u64, name: &str, asset: &str, at: Vec3) -> EntityDesc {
+        let mut e = EntityDesc::new(id, name);
+        e.position = at;
+        e.prefab = Some(PrefabInstance::new(asset));
+        e
+    }
+
+    #[test]
+    fn prefab_instances_spawn_with_overrides_and_keep_the_root_id() {
+        let (assets, res) = prefab_project("spawn");
+        let mut a = instance(
+            10,
+            "A",
+            "prefabs/crate.prefab.ron",
+            Vec3::new(5.0, 0.0, 0.0),
+        );
+        let mut b = instance(11, "B", "prefabs/crate.prefab.ron", Vec3::ZERO);
+        let p = b.prefab.as_mut().unwrap();
+        p.overrides.insert(
+            "2".into(),
+            std::collections::BTreeMap::from([("position".into(), "(0.0,4.0,0.0)".into())]),
+        );
+        a.parent = None;
+        let scene = SceneFile {
+            entities: vec![a, b],
+            ..Default::default()
+        };
+        let ids = spawn_ids(&res, &scene);
+        assert_eq!(ids.len(), 4, "two roots and two lids");
+        let world = res.fetch::<World>();
+        assert_eq!(find(&world, 10), Some(ids[&10]));
+        assert_eq!(
+            world.get::<&PrefabInstanceOf>(ids[&10]).unwrap().0,
+            "prefabs/crate.prefab.ron"
+        );
+        assert!(
+            world.get::<&MeshRenderer>(ids[&10]).is_ok(),
+            "from the asset"
+        );
+        let lid = |root: u64| {
+            let id = olvin_scene::prefab::member_id(root, 2);
+            let e = find(&world, id).unwrap();
+            assert_eq!(world.get::<&Parent>(e).unwrap().0, ids[&root]);
+            let y = world.get::<&Transform>(e).unwrap().translation.y;
+            (world.get::<&Name>(e).unwrap().0.clone(), y)
+        };
+        assert_eq!(lid(10), ("Lid".into(), 1.0));
+        assert_eq!(lid(11), ("Lid".into(), 4.0), "the override");
+        let at = world.get::<&GlobalTransform>(ids[&10]).unwrap().0.w_axis.x;
+        assert_eq!(at, 5.0);
+        let _ = std::fs::remove_dir_all(assets.parent().unwrap());
+    }
+
+    #[test]
+    fn broken_and_recursive_prefabs_are_skipped_not_fatal() {
+        let (assets, res) = prefab_project("broken");
+        // A prefab that contains itself, and one that is not RON at all.
+        let mut me = EntityDesc::new(1, "Me");
+        let mut inner = instance(2, "Inner", "prefabs/loop.prefab.ron", Vec3::ZERO);
+        inner.parent = Some(1);
+        me.position = Vec3::X;
+        SceneFile {
+            entities: vec![me, inner],
+            ..Default::default()
+        }
+        .save(assets.join("prefabs/loop.prefab.ron"))
+        .unwrap();
+        std::fs::write(assets.join("prefabs/bad.prefab.ron"), "(entities: [ (id: ").unwrap();
+        let scene = SceneFile {
+            entities: vec![
+                instance(1, "Loop", "prefabs/loop.prefab.ron", Vec3::ZERO),
+                instance(2, "Bad", "prefabs/bad.prefab.ron", Vec3::ZERO),
+                instance(3, "Gone", "prefabs/nope.prefab.ron", Vec3::ZERO),
+                instance(4, "Fine", "prefabs/crate.prefab.ron", Vec3::ZERO),
+            ],
+            ..Default::default()
+        };
+        let ids = spawn_ids(&res, &scene);
+        // Loop: its root and the empty inner root; Bad and Gone: an empty object each;
+        // Fine: root and lid.
+        assert_eq!(ids.len(), 2 + 1 + 1 + 2);
+        for id in [1, 2, 3, 4] {
+            assert!(ids.contains_key(&id));
+        }
+        // No assets folder at all: still no panic.
+        let mut bare = Resources::default();
+        bare.insert(World::new());
+        bare.insert(Meshes::default());
+        bare.insert(RenderSettings::default());
+        assert_eq!(spawn_ids(&bare, &scene).len(), 4);
+        let _ = std::fs::remove_dir_all(assets.parent().unwrap());
+    }
+
+    #[test]
+    fn instantiate_prefab_places_a_fresh_instance_at_runtime() {
+        let (assets, res) = prefab_project("instantiate");
+        spawn(
+            &res,
+            &SceneFile {
+                entities: vec![EntityDesc::new(7, "Existing")],
+                ..Default::default()
+            },
+        );
+        let at = Transform::from_xyz(1.0, 2.0, 3.0)
+            .with_rotation(glam::Quat::from_rotation_y(1.0))
+            .with_scale(Vec3::splat(2.0));
+        let first = instantiate_prefab(&res, "prefabs/crate.prefab.ron", at).unwrap();
+        let second = instantiate_prefab(&res, "prefabs/crate.prefab.ron", at).unwrap();
+        assert_ne!(first, second);
+        let world = res.fetch::<World>();
+        let (id1, id2) = (
+            world.get::<&SceneId>(first).unwrap().0,
+            world.get::<&SceneId>(second).unwrap().0,
+        );
+        assert_eq!((id1, id2), (8, 9), "ids continue after the scene's");
+        let t = *world.get::<&Transform>(first).unwrap();
+        assert!(t.translation.abs_diff_eq(Vec3::new(1.0, 2.0, 3.0), 1e-6));
+        assert!(t.rotation.abs_diff_eq(at.rotation, 1e-5));
+        assert_eq!(t.scale, Vec3::splat(2.0));
+        assert_eq!(world.query::<&Parent>().iter().count(), 2, "both lids");
+        assert!(world.get::<&PrefabInstanceOf>(first).is_ok());
+        drop(world);
+        let err = instantiate_prefab(&res, "prefabs/nope.prefab.ron", at).unwrap_err();
+        assert!(err.contains("nope.prefab.ron"), "{err}");
+        let _ = std::fs::remove_dir_all(assets.parent().unwrap());
     }
 
     #[test]

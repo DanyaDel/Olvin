@@ -592,6 +592,8 @@ impl PlaySession {
         assets_dir: Option<std::path::PathBuf>,
     ) -> Self {
         let mut app = App::new();
+        // The editor cuts profiler frames itself, once per editor frame.
+        app.set_profile_frames(false);
         app.add_plugin(EcsPlugin)
             .add_plugin(TransformPlugin)
             .add_plugin(PhysicsPlugin::default());

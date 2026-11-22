@@ -136,6 +136,14 @@ plugin = "olvin_editor_console::ConsolePlugin"
 default = true
 
 [[editor_module]]
+id = "profiler"
+name = "Profiler"
+description = "Frame time graph, render counters (draw calls, triangles) and per-system timings from puffin scopes"
+crate = "olvin_editor_profiler"
+path = "editor/olvin_editor_profiler"
+plugin = "olvin_editor_profiler::ProfilerPlugin"
+
+[[editor_module]]
 id = "animator"
 name = "Animator"
 description = "A timeline with Transform keys, viewport preview and the Animation workspace"

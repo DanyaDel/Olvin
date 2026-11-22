@@ -21,6 +21,7 @@ fn renders_a_lit_cube_offscreen() {
     };
     let (stats, at) = h.render(&world, &settings);
     assert_eq!((stats.draw_calls, stats.instances), (1, 1));
+    assert_eq!(stats.triangles, 12, "one cube");
     let lit = at(SIZE / 2, SIZE / 2);
     // Red dominates; the dielectric highlight may tint green/blue a little.
     assert!(

@@ -17,6 +17,7 @@ const SIZE: egui::Vec2 = egui::vec2(1600.0, 1700.0);
 fn plugins() -> Vec<Box<dyn EditorPlugin>> {
     vec![
         Box::new(olvin_editor_console::ConsolePlugin),
+        Box::new(olvin_editor_profiler::ProfilerPlugin),
         Box::new(olvin_editor_animator::AnimatorPlugin),
         Box::new(olvin_editor_csg::CsgPlugin),
         Box::new(olvin_editor_modeling::ModelingPlugin),
@@ -1276,4 +1277,39 @@ fn camera_navigation_keys_and_view_gizmo_are_stable() {
     h.run_steps(5);
     // Still alive: the object can be picked and moved.
     assert!(state(&mut h).scene.get(3).unwrap().position.is_finite());
+}
+
+#[test]
+fn profiler_panel_opens_and_shows_frame_time_counters_and_scopes() {
+    let p = project("profiler");
+    let mut h = editor(&p);
+    h.get_by_label("WINDOW").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Add Panel").click();
+    h.run_steps(3);
+    h.get_by_label("⏱ Profiler").click();
+    h.run_steps(5);
+    {
+        let stats = olvin_editor::olvin::render::RenderStats {
+            draw_calls: 7,
+            instances: 4242,
+            culled: 31,
+            triangles: 123_456,
+        };
+        state(&mut h).render_stats.insert(1, stats);
+    }
+    h.run_steps(10);
+    // Frame time line and the four render counters.
+    h.get_by_label_contains("fps");
+    h.get_by_label("Draw calls");
+    h.get_by_label("7");
+    h.get_by_label("4 242");
+    h.get_by_label("31");
+    h.get_by_label("123 456");
+    // The editor's own frame scope shows up in the scope table.
+    h.get_by_label("editor frame");
+    // Pausing keeps the numbers on screen.
+    h.get_by_label_contains("Pause").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Resume");
 }

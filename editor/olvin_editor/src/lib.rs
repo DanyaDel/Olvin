@@ -28,6 +28,7 @@ pub use workspace::Tab;
 pub use eframe::egui;
 pub use egui_dock;
 pub use glam;
+pub use olvin;
 pub use olvin_scene;
 
 /// Window and taskbar icon: `assets/logo/png/olvin-icon-256.png` (mark on the dark tile).

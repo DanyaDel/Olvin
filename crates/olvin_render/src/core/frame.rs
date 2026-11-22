@@ -303,7 +303,19 @@ impl RenderCore {
             }
         }
 
+        let triangles = view
+            .main
+            .ranges
+            .iter()
+            .chain(&view.blend.ranges)
+            .filter_map(|r| {
+                let mesh = gpu.meshes.get(r.mesh as usize)?.as_ref()?;
+                let instances = r.instances.end - r.instances.start;
+                Some(u64::from(mesh.index_count / 3) * u64::from(instances))
+            })
+            .sum();
         RenderStats {
+            triangles,
             draw_calls: (view.main.ranges.len() + view.blend.ranges.len()) as u32,
             instances: view.main.count + view.blend.count,
             culled,

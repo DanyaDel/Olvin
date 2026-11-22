@@ -1,0 +1,12 @@
+[package]
+name = "olvin_editor_profiler"
+description = "Olvin editor plugin: profiler and stats panel (frame time, scopes, draw calls, triangles)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true
+# Scopes are recorded by the engine crates only with this feature (puffin, pure Rust).
+olvin = { workspace = true, default-features = false, features = ["profile"] }

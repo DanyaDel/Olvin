@@ -592,6 +592,19 @@ pub(crate) fn test_frame(
 mod tests {
     use super::*;
 
+    /// The licence copies shipped in the package match those next to the fonts.
+    #[test]
+    fn packaged_licences_match_the_font_licences() {
+        assert_eq!(
+            include_str!("../licenses/Inter-OFL.txt"),
+            include_str!("../../../assets/fonts/Inter-OFL.txt")
+        );
+        assert_eq!(
+            include_str!("../licenses/JetBrainsMono-OFL.txt"),
+            include_str!("../../../assets/fonts/JetBrainsMono-OFL.txt")
+        );
+    }
+
     #[test]
     fn text_tokens_meet_4_5_to_1_on_every_surface() {
         for kind in ThemeKind::ALL {

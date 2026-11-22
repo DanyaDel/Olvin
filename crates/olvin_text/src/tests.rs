@@ -233,3 +233,12 @@ fn absurd_sizes_do_not_panic_or_wipe_the_atlas() {
         assert!(atlas.len() >= cached);
     }
 }
+
+/// The licence copy shipped in the package matches the one next to the font.
+#[test]
+fn packaged_licence_matches_the_font_licence() {
+    assert_eq!(
+        include_str!("../licenses/Inter-OFL.txt"),
+        include_str!("../../../assets/fonts/Inter-OFL.txt")
+    );
+}

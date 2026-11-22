@@ -37,6 +37,11 @@ impl ArchiveFormat {
     }
 }
 
+/// The licence of the font the engine bakes into games with the `gui` feature.
+const INTER_OFL: &str = include_str!("../../../assets/fonts/Inter-OFL.txt");
+/// What the engine ships that is not Olvin's own.
+const THIRD_PARTY: &str = include_str!("../../../THIRD_PARTY.md");
+
 #[derive(Clone, Debug, Default)]
 pub struct BuildOptions {
     /// `cargo build --release` (otherwise the dev profile).
@@ -55,6 +60,8 @@ pub struct BuildReport {
     pub binary: PathBuf,
     /// Files copied from `assets/`.
     pub assets: usize,
+    /// Files in `licenses/` (third-party notices; 0 means no folder).
+    pub licenses: usize,
     pub archive: Option<PathBuf>,
     /// `/dist` was appended to the project's `.gitignore` (see [`Project::build`]).
     pub gitignore_updated: bool,
@@ -90,6 +97,7 @@ impl Project {
                 0
             }
         };
+        let licenses = self.copy_licenses(&out)?;
         let archive = options
             .archive
             .map(|format| pack(&out, self.name(), format))
@@ -98,9 +106,31 @@ impl Project {
             out_dir: out,
             binary,
             assets,
+            licenses,
             archive,
             gitignore_updated,
         })
+    }
+
+    /// Fills `<out>/licenses/`: the engine's own third-party notices when the
+    /// game enables a feature that bakes in a font (`gui` pulls the built-in
+    /// Inter, OFL 1.1, whose licence requires the text to travel with it), plus
+    /// the project's own `licenses/` folder, if it has one. Returns the number
+    /// of files, 0 (and no folder) when nothing is needed.
+    fn copy_licenses(&self, out: &Path) -> Result<usize> {
+        let dest = out.join("licenses");
+        let mut count = 0;
+        if self.olvin_features().iter().any(|f| f == "gui") {
+            fs::create_dir_all(&dest)?;
+            fs::write(dest.join("Inter-OFL.txt"), INTER_OFL)?;
+            fs::write(dest.join("THIRD_PARTY.md"), THIRD_PARTY)?;
+            count += 2;
+        }
+        let own = self.root().join("licenses");
+        if own.is_dir() {
+            count += copy_tree(&own, &dest)?;
+        }
+        Ok(count)
     }
 
     /// Runs `cargo build` and returns the path of the game's executable.
@@ -300,7 +330,7 @@ mod tests {
         fs::create_dir_all(root.join("olvin/src")).unwrap();
         fs::write(
             root.join("olvin/Cargo.toml"),
-            "[package]\nname = \"olvin\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+            "[package]\nname = \"olvin\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[features]\ngui = []\n",
         )
         .unwrap();
         fs::write(root.join("olvin/src/lib.rs"), "").unwrap();
@@ -462,6 +492,34 @@ mod tests {
         let report = game.build(&options(&dir)).unwrap();
         assert_eq!(report.assets, 0);
         assert!(report.out_dir.join("assets").is_dir());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `gui` bakes Inter into the game: its OFL text must travel with the build.
+    #[test]
+    fn gui_games_get_the_font_licence() {
+        let dir = temp_dir("licenses");
+        let game = tiny_game(&dir);
+        let plain = game.build(&options(&dir)).unwrap();
+        assert_eq!(plain.licenses, 0);
+        assert!(!plain.out_dir.join("licenses").exists());
+
+        let manifest = game.root().join("Cargo.toml");
+        let text = fs::read_to_string(&manifest).unwrap().replace(
+            "olvin = { path = \"olvin\" }",
+            "olvin = { path = \"olvin\", features = [\"gui\"] }",
+        );
+        fs::write(&manifest, text).unwrap();
+        fs::create_dir_all(game.root().join("licenses")).unwrap();
+        fs::write(game.root().join("licenses/MyFont-OFL.txt"), "mine").unwrap();
+        let game = Project::open(game.root()).unwrap();
+        let report = game.build(&options(&dir)).unwrap();
+        assert_eq!(report.licenses, 3);
+        let licenses = report.out_dir.join("licenses");
+        let inter = fs::read_to_string(licenses.join("Inter-OFL.txt")).unwrap();
+        assert!(inter.contains("SIL OPEN FONT LICENSE Version 1.1"));
+        assert!(licenses.join("THIRD_PARTY.md").is_file());
+        assert!(licenses.join("MyFont-OFL.txt").is_file());
         fs::remove_dir_all(dir).unwrap();
     }
 

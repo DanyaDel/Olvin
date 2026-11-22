@@ -320,7 +320,7 @@ impl Project {
             .context("the `olvin` dependency is missing or not a table")
     }
 
-    fn olvin_features(&self) -> Vec<String> {
+    pub(crate) fn olvin_features(&self) -> Vec<String> {
         self.olvin()
             .and_then(|o| o.get("features"))
             .and_then(Item::as_array)

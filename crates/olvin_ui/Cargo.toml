@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# Embedded OFL fonts: their licence texts travel in the package (see THIRD_PARTY.md).
+include = ["src/**", "tests/**", "licenses/**", "Cargo.toml"]
 
 [dependencies]
 egui.workspace = true

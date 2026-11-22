@@ -253,6 +253,9 @@ fn run(cli: Cli) -> Result<()> {
                 report.out_dir.display(),
                 report.assets
             );
+            if report.licenses > 0 {
+                println!("licenses: {} files in licenses/", report.licenses);
+            }
             if let Some(archive) = report.archive {
                 println!("archive: {}", archive.display());
             }

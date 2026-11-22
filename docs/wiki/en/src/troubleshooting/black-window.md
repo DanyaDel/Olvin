@@ -10,6 +10,8 @@ The window opened but it is black, no frame shows, or the renderer does not star
 
 **What the engine does:** at startup `olvin_render::check_gl` detects the case (vendor 0x10de, not Mesa or nouveau, GL, Wayland). If `WGPU_BACKEND` is unset the renderer re-creates its instance with Vulkan only; if it is set or Vulkan is missing it logs one warning with advice.
 
+If GL is forced and no adapter is found at all (`gl not compatible with provided surface`), the log gets a "WGPU_BACKEND forces OpenGL..." hint with the same advice after that error.
+
 **Fix:** do not set `WGPU_BACKEND` (Vulkan is the default). The GL path can be checked on Mesa:
 
 ```sh

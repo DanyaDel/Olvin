@@ -10,6 +10,8 @@
 
 **Что делает движок:** `olvin_render::check_gl` на старте определяет случай (vendor 0x10de, не Mesa и не nouveau, GL, Wayland). Если `WGPU_BACKEND` не задан, рендер пересоздаёт instance только с Vulkan; если задан или Vulkan нет, пишет одно предупреждение с советом.
 
+Если GL задан принудительно и адаптер не найден вовсе (`gl not compatible with provided surface`), после этой ошибки в логе печатается подсказка «WGPU_BACKEND forces OpenGL…» с теми же советами.
+
 **Решение:** не задавайте `WGPU_BACKEND` (Vulkan по умолчанию). Проверить GL-путь можно на Mesa:
 
 ```sh

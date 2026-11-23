@@ -48,6 +48,11 @@ pub struct WindowPlugin {
     /// Initial mode. At run time change [`WindowSettings`] instead; to start
     /// from a saved file use [`WindowPlugin::with_settings`].
     pub mode: WindowMode,
+    /// Whether the window is shown when created (off for smoke tests).
+    pub visible: bool,
+    /// Lets the event loop be created off the main thread (X11 and Wayland
+    /// only, ignored elsewhere). For tests: libtest runs them on workers.
+    pub any_thread: bool,
 }
 
 impl WindowPlugin {
@@ -76,6 +81,8 @@ impl Default for WindowPlugin {
             height: 720,
             resizable: true,
             mode: WindowMode::Windowed,
+            visible: true,
+            any_thread: false,
         }
     }
 }
@@ -92,8 +99,38 @@ impl Plugin for WindowPlugin {
     }
 }
 
+fn build_event_loop(any_thread: bool) -> Result<EventLoop<()>, winit::error::EventLoopError> {
+    let mut builder = EventLoop::builder();
+    #[cfg(all(
+        unix,
+        not(target_vendor = "apple"),
+        not(target_os = "android"),
+        not(target_os = "redox")
+    ))]
+    if any_thread {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+    }
+    #[cfg(not(all(
+        unix,
+        not(target_vendor = "apple"),
+        not(target_os = "android"),
+        not(target_os = "redox")
+    )))]
+    let _ = any_thread;
+    builder.build()
+}
+
 fn run(app: App, config: WindowPlugin) {
-    let event_loop = EventLoop::new().expect("failed to create event loop");
+    let event_loop = match build_event_loop(config.any_thread) {
+        Ok(event_loop) => event_loop,
+        Err(err) => {
+            log::error!("could not create the event loop (no display?): {err}");
+            return;
+        }
+    };
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut runner = Runner {
         app,
@@ -235,6 +272,7 @@ impl ApplicationHandler for Runner {
             .with_title(&self.config.title)
             .with_inner_size(LogicalSize::new(wanted.width, wanted.height))
             .with_resizable(self.config.resizable)
+            .with_visible(self.config.visible)
             .with_fullscreen(fullscreen_for(&wanted, monitor));
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),

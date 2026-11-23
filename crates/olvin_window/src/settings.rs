@@ -88,6 +88,7 @@ impl WindowSettings {
     }
 
     pub fn to_ron(&self) -> String {
+        // invariant: plain data (enums, strings, numbers) always serializes.
         ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
             .expect("window settings always serialize")
     }

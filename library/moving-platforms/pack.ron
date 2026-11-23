@@ -1,0 +1,19 @@
+(
+  id: "moving-platforms",
+  name: "Moving Platforms",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A platform that travels between waypoints (loop or ping-pong, speed, wait) and carries the player, plus a spinning obstacle script.",
+  tags: ["platform", "moving", "spinner", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/moving-platforms/MovingPlatform.prefab.ron",
+    "prefabs/moving-platforms/Spinner.prefab.ron",
+    "scripts/moving-platforms/platform.lua",
+    "scripts/moving-platforms/spinner.lua",
+    "scenes/moving-platforms/demo.scene.ron",
+  ],
+  notes: "Open scenes/moving-platforms/demo.scene.ron and press Play, then step onto the platform. In MovingPlatform.prefab.ron the Body moves between the children Point1..PointN (drag them in the editor; add Point3, Point4 for a longer route). Tune speed, wait, mode (pingpong or loop) and carry in the Inspector. Body is a plain collider moved through its Transform (the engine teleports it every frame): a character controller stalls on a Kinematic body, and would not be carried by one anyway, so the script moves the player standing on the Body by the same step (feet_offset = distance from the player's origin to its feet). Keep the root unrotated and unscaled. Messages: start and stop. Spinner.prefab.ron is a kinematic bar that turns (speed, axis).",
+)

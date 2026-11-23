@@ -590,3 +590,174 @@ fn the_last_reached_checkpoint_is_the_respawn_point() {
     );
     assert_clean_log();
 }
+
+// --- Moving platforms ------------------------------------------------------------
+
+/// Walks onto the platform waiting at the near edge and stops there.
+fn board_platform(rig: &mut Rig) {
+    rig.key(KeyCode::KeyW, true);
+    assert!(
+        rig.until(200, |r| r.pos("Player").z < -4.2),
+        "on the platform"
+    );
+    rig.key(KeyCode::KeyW, false);
+    rig.frames(20);
+    assert!(
+        rig.pos("Player").y > 0.8,
+        "standing on it: {}",
+        rig.pos("Player")
+    );
+}
+
+#[test]
+fn the_platform_carries_the_player_over_the_pit() {
+    let mut rig = rig("moving-platforms", |_| {});
+    let body0 = rig.world_pos("Body");
+    board_platform(&mut rig);
+    // It waits, then travels 6 m at 2 m/s towards -Z.
+    assert!(
+        rig.until(400, |r| r.world_pos("Body").z < body0.z - 5.9),
+        "arrived"
+    );
+    let body = rig.world_pos("Body");
+    let player = rig.pos("Player");
+    assert!(
+        (player.z - body.z).abs() < 1.8 && (player.x - body.x).abs() < 1.8,
+        "still on it: player {player}, platform {body}"
+    );
+    assert!(
+        player.y > 0.8 && player.z < -8.0,
+        "carried across the pit: {player}"
+    );
+    // Walk off on the far side.
+    rig.hold(&[KeyCode::KeyW], 80);
+    assert!(
+        rig.pos("Player").z < -13.5 && rig.pos("Player").y > 0.8,
+        "on the far slab: {}",
+        rig.pos("Player")
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn without_carry_the_player_is_left_behind() {
+    let mut rig = rig("moving-platforms", |assets| {
+        replace_in(
+            assets,
+            "scenes/moving-platforms/demo.scene.ron",
+            "\"carry\":\"true\"",
+            "\"carry\":\"false\"",
+        );
+    });
+    board_platform(&mut rig);
+    rig.frames(300);
+    let (body, player) = (rig.world_pos("Body"), rig.pos("Player"));
+    assert!(body.z < -10.5, "the platform left: {body}");
+    assert!(
+        player.z > -6.5 || player.y < -1.0,
+        "the player did not ride: {player}"
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn the_platform_waits_and_comes_back() {
+    let mut rig = rig("moving-platforms", |_| {});
+    let z0 = rig.world_pos("Body").z;
+    rig.frames(60 * 3 + 30);
+    assert!(
+        (rig.world_pos("Body").z - z0).abs() > 0.1,
+        "left after the wait"
+    );
+    assert!(
+        rig.until(60 * 7, |r| r.world_pos("Body").z < z0 - 5.9),
+        "far point"
+    );
+    rig.frames(60 * 3);
+    assert!(
+        rig.until(60 * 7, |r| (r.world_pos("Body").z - z0).abs() < 0.05),
+        "back at the start"
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn the_spinner_turns() {
+    let mut rig = rig("moving-platforms", |_| {});
+    let a = rig.transform("Spinner").rotation;
+    rig.frames(60);
+    let b = rig.transform("Spinner").rotation;
+    let turned = a.angle_between(b).to_degrees();
+    assert!((turned - 60.0).abs() < 3.0, "60 deg/s: {turned}");
+    assert_clean_log();
+}
+
+// --- Enemy AI --------------------------------------------------------------------
+
+#[test]
+fn the_guard_patrols_between_its_points() {
+    let mut rig = rig("enemy-ai", |_| {});
+    let start = rig.pos("Guard");
+    rig.frames(60 * 4);
+    let moved = rig.pos("Guard");
+    assert!(horizontal(moved - start) > 3.0, "walked {start} -> {moved}");
+    assert!((moved.z + 8.0).abs() < 1.0, "stays on its line");
+    assert!(
+        rig.until(60 * 12, |r| r.pos("Guard").x > 5.0),
+        "reaches the other point"
+    );
+    assert!(
+        rig.until(60 * 12, |r| r.pos("Guard").x < -5.0),
+        "and comes back"
+    );
+    assert_eq!(rig.sent("enemy_alert"), 0, "the player is far away");
+    assert_clean_log();
+}
+
+#[test]
+fn the_guard_chases_hits_and_gives_up() {
+    let mut rig = rig("enemy-ai", |_| {});
+    // In its view cone: it faces +X at first, so wait for it to turn towards -X, then stand in front.
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -3.0));
+    assert!(rig.until(60 * 6, |r| r.sent("enemy_alert") > 0), "spotted");
+    assert!(
+        rig.until(60 * 6, |r| r.num("health") < 100.0),
+        "hit the player"
+    );
+    assert!(
+        horizontal(rig.pos("Guard") - rig.pos("Player")) < 2.6,
+        "stands next to the player"
+    );
+    let damaged = rig.sent("damaged");
+    rig.frames(60 * 3);
+    assert!(
+        rig.sent("damaged") > damaged,
+        "hits again after the cooldown"
+    );
+    assert!(rig.num("health") <= 80.0);
+    // Far away: gives up and patrols again.
+    rig.teleport("Player", Vec3::new(0.0, 1.0, 16.0));
+    assert!(rig.until(60 * 10, |r| r.sent("enemy_lost") > 0), "gave up");
+    assert!(
+        rig.until(60 * 10, |r| r.pos("Guard").z < -7.5),
+        "back on its patrol line: {}",
+        rig.pos("Guard")
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn a_wall_hides_the_player_and_the_enemy_can_be_killed() {
+    let mut rig = rig("enemy-ai", |_| {});
+    // Behind the wall (z = -14), 10 m from the guard: in range, out of sight.
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -17.0));
+    rig.frames(60 * 4);
+    assert_eq!(rig.sent("enemy_alert"), 0, "no line of sight");
+    // Damage reaches the guard: 40 health, removed at 0.
+    assert!(rig.exists("Guard"));
+    rig.send("damage", 100.0, Some("Guard"));
+    rig.frames(3);
+    assert!(!rig.exists("Guard"));
+    assert_eq!(rig.sent("died"), 1);
+    assert_clean_log();
+}

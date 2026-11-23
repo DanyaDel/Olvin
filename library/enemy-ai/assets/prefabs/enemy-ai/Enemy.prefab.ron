@@ -1,0 +1,14 @@
+// Enemy: Character Controller body + enemy.lua (patrol, chase, attack) + health.lua (40 HP, removed on death).
+// Set `patrol` in the Inspector: "x,z;x,z" in world coordinates, or entity names "PointA;PointB".
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Enemy", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0, push_mass: 80.0)),
+            scripts: [(name: "enemy-ai/enemy", params: {"patrol": "", "patrol_speed": "2.0", "patrol_wait": "1.0", "chase_speed": "4.5", "sight_range": "12.0", "fov": "150.0", "lose_range": "18.0", "lose_time": "4.0", "attack_range": "1.8", "attack_damage": "10.0", "attack_cooldown": "1.2", "eye_height": "0.6", "player": "Player", "attack_sound": ""}), (name: "health-damage/health", params: {"max_health": "40.0", "start_health": "0.0", "invulnerable_time": "0.2", "var": "", "destroy_on_death": "true", "respawn_delay": "-1.0", "hurt_sound": "", "death_sound": ""})]),
+        (id: 2, name: "Body", parent: Some(1), position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.8, 0.9, 0.8),
+            mesh: Some((shape: Capsule, color: (0.75, 0.15, 0.15, 1.0)))),
+        (id: 3, name: "Eyes", parent: Some(1), position: (0.0, 0.55, -0.4), rotation: (0.0, 0.0, 0.0), scale: (0.5, 0.12, 0.2),
+            mesh: Some((shape: Cube, color: (1.0, 0.9, 0.2, 1.0)))),
+    ],
+)

@@ -1,0 +1,17 @@
+(
+  id: "enemy-ai",
+  name: "Enemy AI",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A simple enemy: patrols between points, spots the player by distance, view cone and line of sight, chases, attacks with a cooldown by sending damage messages and returns to patrol. Built on the character controller.",
+  tags: ["enemy", "ai", "patrol", "chase", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller", "health-damage"],
+  provides: [
+    "prefabs/enemy-ai/Enemy.prefab.ron",
+    "scripts/enemy-ai/enemy.lua",
+    "scenes/enemy-ai/demo.scene.ron",
+  ],
+  notes: "Open scenes/enemy-ai/demo.scene.ron and press Play, then walk towards the guard. Drop Enemy.prefab.ron into a scene and set patrol (world \"x,z;x,z\" or entity names \"A;B\"). Tune patrol_speed, chase_speed, sight_range, fov, lose_range, lose_time, attack_range, attack_damage, attack_cooldown. It sees through a ray from its eyes, so walls hide you. Hits are damage messages to the player: the player needs health.lua (health-damage pack: prefabs/health-damage/PlayerHealth.prefab.ron). The enemy itself has health.lua and is removed at 0 health. It uses the Character Controller (not a plain kinematic body) because that gives it gravity, steps and wall sliding for free. Broadcasts enemy_alert and enemy_lost.",
+)

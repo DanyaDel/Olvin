@@ -1,0 +1,14 @@
+// Moving platform: Body (a collider without Rigidbody, 4x0.5x4, top at the root's height; see platform.lua for why it is not Kinematic) travels between Point1..PointN (platform.lua).
+// Move the Point children in the editor to change the route; add Point3, Point4 ... for longer ones.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "MovingPlatform", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            scripts: [(name: "moving-platforms/platform", params: {"speed": "2.0", "wait": "1.0", "mode": "pingpong", "autostart": "true", "carry": "true", "body": "Body", "player": "Player", "feet_offset": "0.9"})]),
+        (id: 2, name: "Body", parent: Some(1), position: (0.0, -0.25, 0.0), rotation: (0.0, 0.0, 0.0), scale: (4.0, 0.5, 4.0),
+            mesh: Some((shape: Cube, color: (0.8, 0.55, 0.15, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 3, name: "Point1", parent: Some(1), position: (0.0, -0.25, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 4, name: "Point2", parent: Some(1), position: (0.0, -0.25, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    ],
+)

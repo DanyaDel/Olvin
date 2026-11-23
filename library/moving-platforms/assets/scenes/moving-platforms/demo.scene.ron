@@ -1,0 +1,23 @@
+// Demo: a platform ferries you over the pit (step on while it waits at your edge; it leaves after 3 s), a spinning bar waits on the far side. Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Slab A", position: (0.0, -0.5, 4.5), rotation: (0.0, 0.0, 0.0), scale: (14.0, 1.0, 15.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 11, name: "Slab B", position: (0.0, -0.5, -18.0), rotation: (0.0, 0.0, 0.0), scale: (14.0, 1.0, 10.0),
+            mesh: Some((shape: Cube, color: (0.38, 0.34, 0.34, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 12, name: "Pit Floor", position: (0.0, -8.5, -8.0), rotation: (0.0, 0.0, 0.0), scale: (14.0, 1.0, 14.0),
+            mesh: Some((shape: Cube, color: (0.2, 0.2, 0.22, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Platform", position: (0.0, 0.0, -8.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/moving-platforms/MovingPlatform.prefab.ron", overrides: {"": {"scripts": r#"[(name:"moving-platforms/platform",params:{"speed":"2.0","wait":"3.0","mode":"pingpong","autostart":"true","carry":"true","body":"Body","player":"Player","feet_offset":"0.9"})]"#}, "3": {"position": r#"(0.0,-0.25,3.0)"#}, "4": {"position": r#"(0.0,-0.25,-3.0)"#}}))),
+        (id: 21, name: "Spinner", position: (0.0, 0.0, -18.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/moving-platforms/Spinner.prefab.ron"))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/fps-controller/Player.prefab.ron"))),
+    ],
+)

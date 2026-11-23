@@ -1,0 +1,18 @@
+// Demo: a guard patrols along z = -8. Come within 12 m in front of it and it chases and hits you (health var). Hide behind the wall at z = -14 or outrun it (it gives up after 4 s out of sight). Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (40.0, 1.0, 40.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 11, name: "Wall", position: (0.0, 1.5, -14.0), rotation: (0.0, 0.0, 0.0), scale: (10.0, 3.0, 0.5),
+            mesh: Some((shape: Cube, color: (0.5, 0.5, 0.55, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Guard", position: (-6.0, 0.95, -8.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/enemy-ai/Enemy.prefab.ron", overrides: {"": {"scripts": r#"[(name:"enemy-ai/enemy",params:{"patrol":"-6,-8;6,-8","patrol_speed":"2.0","patrol_wait":"1.0","chase_speed":"4.5","sight_range":"12.0","fov":"150.0","lose_range":"18.0","lose_time":"4.0","attack_range":"1.8","attack_damage":"10.0","attack_cooldown":"1.2","eye_height":"0.6","player":"Player","attack_sound":""}),(name:"health-damage/health",params:{"max_health":"40.0","start_health":"0.0","invulnerable_time":"0.2","var":"","destroy_on_death":"true","respawn_delay":"-1.0","hurt_sound":"","death_sound":""})]"#}}))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 10.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/health-damage/PlayerHealth.prefab.ron", overrides: {"": {"scripts": r#"[(name:"fps-controller/player",params:{"speed":"4.0","sprint_speed":"7.0","crouch_speed":"2.0","jump_height":"1.2","sensitivity":"0.12","max_pitch":"85.0","acceleration":"12.0","air_control":"0.35","camera":"Camera","lock_cursor":"true","crouch_depth":"0.5","head_bob":"0.0"}),(name:"health-damage/health",params:{"max_health":"100.0","start_health":"0.0","invulnerable_time":"0.5","var":"health","destroy_on_death":"false","respawn_delay":"-1.0","hurt_sound":"","death_sound":""})]"#}}))),
+    ],
+)

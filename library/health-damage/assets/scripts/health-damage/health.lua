@@ -4,8 +4,8 @@
 --   "damage"  value = amount; the sender (`from`) is the source
 --   "heal"    value = amount, up to max_health
 --   "kill"    dies at once          "revive"  back to full health
--- Broadcasts: "damaged" (value amount), "healed" (value amount) and "died"
--- (value = this entity's name), all from this entity.
+-- Broadcasts: "damaged" (value amount), "healed" (value amount), "died" and
+-- "revived" (value = this entity's name), all from this entity.
 --
 -- Mirrors the health into the shared variables `<var>` and `<var>_max`
 -- (default "health" / "health_max"; an empty `var` switches it off) so the game
@@ -68,6 +68,7 @@ return {
         self.health = self.params.max_health
         self.last_hit = ctx:elapsed()
         self:mirror(ctx)
+        ctx:send("revived", ctx:name())
     end,
 
     on_message = function(self, ctx, name, value)

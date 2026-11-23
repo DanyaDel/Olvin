@@ -302,20 +302,19 @@ struct LookUi {
 
 /// The looks the selector offers: the built-in ones, then the project's.
 fn look_choices(state: &EditorState) -> Vec<(String, String)> {
-    let mut all: Vec<(String, String)> = LookDesc::built_in()
-        .into_iter()
-        .map(|l| {
-            (
-                format!("builtin:{}", l.name),
-                format!("{} (built-in)", l.name),
-            )
-        })
-        .collect();
+    let mut all: Vec<(String, String)> = Vec::new();
+    // The project's own looks first: they are the ones being worked on.
     for path in &state.materials.looks {
         let name = path.rsplit('/').next().unwrap_or(path);
         let name = name.strip_suffix(".look.ron").unwrap_or(name);
         all.push((path.clone(), format!("{name}  ({path})")));
     }
+    all.extend(LookDesc::built_in().into_iter().map(|l| {
+        (
+            format!("builtin:{}", l.name),
+            format!("{} (built-in)", l.name),
+        )
+    }));
     all
 }
 

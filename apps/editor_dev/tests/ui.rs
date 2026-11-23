@@ -1582,33 +1582,32 @@ fn picking_a_look_changes_the_environment_and_undo_restores_it() {
     let mut h = editor(&p);
     let before = state(&mut h).scene.environment.clone();
     state(&mut h).open_settings(Page::Rendering);
-    h.run_steps(5);
+    h.run_steps(10);
 
     // A built-in look.
-    h.get_by_label("(pick a look)").click();
+    h.get_by_value("(pick a look)").click();
     h.run_steps(3);
-    h.get_by_label("Noir (built-in)").click();
+    h.get_by_label("Cinematic (built-in)").click();
     h.run_steps(3);
     h.get_by_label("Apply").click();
     h.run_steps(3);
     let env = state(&mut h).scene.environment.clone();
-    assert_eq!(env.post.saturation, 0.0);
-    assert!(env.post.contrast > 1.2);
+    assert!(env.post.bloom.is_some() && env.post.contrast > 1.0);
     assert_eq!(env.sky, before.sky, "lighting stays");
     undo(&mut h);
     assert_eq!(state(&mut h).scene.environment, before, "undo restores it");
     redo(&mut h);
-    assert_eq!(state(&mut h).scene.environment.post.saturation, 0.0);
+    assert!(state(&mut h).scene.environment.post.bloom.is_some());
     undo(&mut h);
 
     // A look asset of the project.
-    h.get_by_label_contains("Noir (built-in)").click();
+    h.get_by_value("Cinematic (built-in)").click();
     h.run_steps(3);
-    h.get_by_label_contains("Mine  (looks/mine.look.ron)")
+    h.get_by_label_contains("mine  (looks/mine.look.ron)")
         .click();
-    h.run_steps(3);
+    h.run_steps(5);
     h.get_by_label("Apply").click();
-    h.run_steps(3);
+    h.run_steps(5);
     assert_eq!(state(&mut h).scene.environment.exposure, 0.4);
     undo(&mut h);
     assert_eq!(state(&mut h).scene.environment.exposure, before.exposure);

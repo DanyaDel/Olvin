@@ -230,6 +230,13 @@ impl Panel for Inspector {
         let mut prefab_actions = Vec::new();
         let mut log = None;
         let frame = state.anim_frame as f32;
+        let clips = state
+            .scene
+            .get(id)
+            .and_then(|e| e.model.as_ref())
+            .map(|m| m.path.clone())
+            .map(|path| state.engine_scene.model_clips(assets.clone(), &path))
+            .unwrap_or_default();
         let fx = &mut state.engine_scene.fx;
         let olvin_scene::file::SceneFile {
             entities,
@@ -297,7 +304,6 @@ impl Panel for Inspector {
                     log = material_section(ui, e, &mut state.materials);
                 }
                 if let Some(model) = &mut e.model {
-                    let clips = state.engine_scene.model_clips(assets.clone(), &model.path);
                     let preview = state.model_previews.entry(id).or_default();
                     section(ui, "🧍 Model", Some((&mut remove, "model")), |ui| {
                         grid(ui, "model", |ui| {

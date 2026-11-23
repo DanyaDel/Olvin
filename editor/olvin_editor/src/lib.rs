@@ -19,8 +19,8 @@ pub mod widgets;
 mod workspace;
 
 pub use app::{EditorApp, TopBarRects};
-pub use fx::{FxControl, FxPreview};
 pub use engine::ModelPreview;
+pub use fx::{FxControl, FxPreview};
 pub use registry::{
     EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
 };

@@ -140,6 +140,58 @@ Suggestions from users and the NLPA team. The first two are being built now, the
 - [ ] **Collaborative editing like Roblox Studio**: several people edit one scene in real time, teammates' cursors and selections, per-object locks, change history. The groundwork exists: scene operations are `SceneFile` snapshots with stable `SceneId`s; what is missing is network synchronisation of operations (CRDT or operational transforms) and a session server. (XL) [P3]
 - [ ] **Easy multiplayer**: ready "network object" and "owner" components, replication through `Events<T>` and the save registry, lobbies and joining by room code, presets for typical games (co-op, arena). Tied to the "Networking" item of phase 3 (`olvin_net`). (XL) [P3]
 
+## Phase 8. Security and build protection (P0–P3)
+
+Goal: cover the whole threat model, not one case at a time. Assets: money and access, game balance, assets and logic, player data, secrets, build integrity. A client that is in the player's hands can never be fully protected, so each item states what it gives: **protection** (the threat is closed), **deterrence** (raises the cost but does not lock anything), or **signal** (tampering becomes visible). Codes (B1, L2, …) are for linking from issues and commits. Out of scope: physical access to the player's machine, legal measures (EULA, store), compromise of the developer's machine (needs 2FA and signing keys kept off the working machine).
+
+### Build and distribution
+
+- [ ] **Strip in release (B1)**: `strip` in `[profile.release]` or a flag for `olvin-hub build`; debug symbols in a separate file so crash reports stay readable. Gives deterrence. (S) [P0]
+- [ ] **Hash manifest and archive signature (B2)**: SHA-256 of every build file, a signature (minisign or Ed25519), verified at startup. Gives protection against a swapped binary and a signal on patching. (M) [P0]
+- [ ] **Supply chain (B4)**: `Cargo.lock` in releases, `cargo audit` and `cargo deny` in CI. Gives protection against a swapped dependency. (S) [P0]
+- [ ] **Build paths and user name in the binary (B3)**: `--remap-path-prefix` in the build, a string check on the finished binary in CI. (S) [P1]
+- [ ] **Warning about third-party `build.rs` (B5)**: the hub warns when a crates.io dependency is added, because its `build.rs` runs on the developer's machine; optionally build in a container. (M) [P2]
+- [ ] **Signed `catalog.toml` (B6)**: the catalog is built into the binary now, but it needs a signature once it becomes downloadable. (S) [P2]
+
+### Binary
+
+- [ ] **String encryption (E1)**: sensitive literals (keys, addresses, check messages) are not plain text in `.rodata`. Gives deterrence. (S) [P1]
+- [ ] **Integrity check at startup (E2)**: hash comparison, and a signal when checks are patched. A patch is one jump, so this is only a signal. (S) [P2]
+- [ ] **Wiping keys from memory (E3)**: `zeroize` for keys and passwords, keep their lifetime short. Gives protection against a simple memory dump. (S) [P1]
+- [ ] **Audit of `unsafe` (E5)**: `olvin_script/src/lua/api.rs` (`with` and `lend`, two blocks with `transmute` and `NonNull`); Miri in CI, fuzzing of callback paths. Gives protection against undefined behaviour. (M) [P1]
+- [ ] **Debugger detection (E4)**: deterrence, not protection. (S) [P3]
+
+### Assets
+
+- [ ] **Encrypted asset packs (A1)**: AES-GCM, a hash of each file in the pack's table of contents. Gives protection against reading and tampering with scenes, prefabs and shaders. (L) [P1]
+- [ ] **Key outside the binary (A2)**: the key is derived from an online token or the licence; offline it stays deterrence. A built-in key is not protection. (M) [P1]
+- [ ] **On-demand loading (A3)**: decrypt as needed instead of holding the whole pack in memory. Gives deterrence against a memory dump. (M) [P2]
+
+### Lua scripts
+
+- [ ] **Close `load` and binary chunks (L2)**: remove `load`, `loadstring`, `collectgarbage`, or restrict `mode = "t"` in `crates/olvin_script/src/lua/mod.rs`; a test that a binary chunk is rejected. Gives protection against escaping the sandbox through bytecode. (S) [P0]
+- [ ] **Encrypt or move logic (L1)**: scripts are encrypted, or critical parts (checks, economy) move to Rust or the server. Gives deterrence. (M) [P1]
+- [ ] **Library pack verification (L5)**: signed `pack.ron` and files, review before install, a warning about a pack's Lua scripts. Gives protection against a malicious pack. (M) [P1]
+- [ ] **Lua limits and fuzzing (L3, L4)**: fuzz the callbacks, check that `string.dump` and neighbouring functions give no way out of the sandbox. Gives protection against resource exhaustion and escape. (M) [P2]
+
+### Saves and player data
+
+- [ ] **HMAC-signed saves (S1)**: the key is built in, so this is deterrence. Gives a signal that a save was edited. (S) [P1]
+- [ ] **Save binding (S2)**: to an account or machine, once there is online play. (M) [P2]
+- [ ] **Redacting paths and names in logs and crash files (S3)**: in `logging.rs` the backtrace and log may contain the path to the home folder. Reports are sent only with explicit consent. Gives protection of player data. (S) [P1]
+
+### Online (phase 3, `olvin_net`)
+
+- [ ] **Server is authoritative (N1)**: the client only requests actions, the server computes the state. Gives protection against cheating. (L) [P0 for co-op]
+- [ ] **TLS and signed requests (N2)**: the channel is encrypted and signed. Gives protection against interception. (M) [P0 for co-op]
+- [ ] **Nonces and timestamps (N3)**: protection against replayed requests. (S) [P1]
+- [ ] **Server secrets stay off the client (N4)**: no server key in any build, checked in CI. Gives protection against leaks. (S) [P0 for co-op]
+
+### Olvin's own tools
+
+- [ ] **Warning when opening a foreign project (T1)**: the editor and hub run `cargo` on the project, so they ask first whether the project is trusted. (S) [P2]
+- [ ] **`OLVIN_LIBRARY` as trusted input (T2)**: document that the library path is trusted. (S) [P3]
+
 ## Order of work (what to do first)
 
 1. **Phase 0** in full. Without CI and tests, everything after will break unnoticed.
@@ -158,7 +210,7 @@ Suggestions from users and the NLPA team. The first two are being built now, the
    - [x] Static colliders follow their `Transform` (S).
    - [x] Hub build: `dist/` outside the sources or in the template's `.gitignore` (S).
 3. After the slice, close the blockers from phases 1 and 2 (skeletal animation, UI, particles, post-processing, prefabs).
-4. Phase 4 (game build) right after the first slice, otherwise nobody can be shown the game.
+4. Phase 4 (game build) right after the first slice, otherwise nobody can be shown the game. The P0 items of phase 8 are done together with it, before the first public build.
 5. Phases 3, 5 and 6 in parallel, as the need appears.
 
 ## Definition of done

@@ -76,6 +76,48 @@ A pack that breaks one is skipped, listed in `Library::problems()`, and fails th
 3. A pack with scripts or prefabs should ship a demo scene (`scenes/<pack-id>/demo.scene.ron`) that opens and plays with no setup.
 4. In the editor: Window > Add Panel > Library, import, open the demo scene, press Play.
 
+## Gameplay packs
+
+Category Gameplay: Lua scripts and prefabs that work together. Every pack has a demo scene (`scenes/<id>/demo.scene.ron`; open it and press Play) and requires `fps-controller` for the player (an entity named `Player` or tagged `Player`). Scripts show their parameters in the Inspector. Sound is never shipped: every sound hook is an optional path parameter, empty by default.
+
+| Pack | What it gives |
+|---|---|
+| `interactive-door` | `Door` (slide or hinge; proximity, key press or message; lockable), `Switch` plate |
+| `pickups` | `Coin`, `HealthPack`, `Key` |
+| `health-damage` | `health.lua`, `HazardZone`, `SpikeTrap`, `PlayerHealth` (the fps player with health) |
+| `checkpoints` | `Checkpoint`, `KillPlane` |
+| `moving-platforms` | `MovingPlatform` (waypoints, carries the player), `Spinner` |
+| `enemy-ai` | `Enemy` (patrol, sight, chase, attack) |
+| `spawners` | `Spawner` (interval, message, waves), `Crate`, `lifetime.lua` |
+| `camera-effects` | `camera_shake`, `smooth_follow`, `look_at_target`, `trigger_zone` (+ prefabs) |
+| `gameplay-demo` | an arena using all of them |
+
+Messages (`ctx:send(name, value[, target])`; "to X" means send it to that entity, "broadcast" means no target):
+
+| Message | Value | Sent by | Understood by |
+|---|---|---|---|
+| `open`, `close`, `toggle`, `lock`, `unlock` | door id (string) or nothing | `door_switch`, `trigger_zone`, anything | doors (to the door, or broadcast with its `id`) |
+| `door_opened`, `door_closed`, `door_locked` | door id or name | doors | anyone |
+| `picked_up` | kind (`coin`, `health`, `key`, `custom`) | pickups | anyone |
+| `damage` | amount | hazards, `touch_damage`, enemies, kill plane | `health.lua` (to the victim) |
+| `heal` | amount | health packs | `health.lua` (to the target) |
+| `kill`, `revive` | | anyone | `health.lua` |
+| `damaged`, `healed` | amount | `health.lua` (broadcast) | camera shake (`listen`) |
+| `died`, `revived` | entity name | `health.lua` (broadcast) | enemies |
+| `respawn` | entity id | `health.lua` after `respawn_delay`, kill plane | the active checkpoint |
+| `checkpoint_reached`, `respawned` | checkpoint name | checkpoints | anyone |
+| `enemy_alert`, `enemy_lost` | enemy name | enemies | anyone |
+| `spawn`, `start`, `stop`, `clear` | | anyone | spawners (to the spawner); `start`/`stop` also platforms |
+| `spawned` | new root's entity id | the engine (`ctx:spawn_prefab`) | the requesting spawner |
+| `wave_started`, `waves_done` | wave number / spawner name | spawners | anyone |
+| `shake` | 0..1 or `vec3(strength, seconds, 0)` | `trigger_zone`, anyone | `camera_shake` (to the camera) |
+
+Shared variables (`ctx:var` / `ctx:set_var`; a game can mirror them into its HUD): `score` (coins), `keys` (count), `key_<id>` (true once picked up), `health` and `health_max` (`health.lua`, param `var`), `checkpoint` (name of the active checkpoint) and `checkpoint_pos` (vector).
+
+A health bar or score text is drawn by the game, not by Lua: read `ScriptVars` in a Rust system and call `gui.ui.set_text(node, ...)`, as `apps/vertical_slice/src/hud.rs` does for messages.
+
+Limits worth knowing: a character cannot walk on a Kinematic body (the physics controller stalls), so `MovingPlatform` moves a plain collider and carries the player in its script; scripts see the player by name or tag only.
+
 ## Licences
 
 Everything shipped here must be original work or under a licence compatible with MIT OR Apache-2.0 (CC0-1.0, MIT, Apache-2.0, CC-BY with attribution, OFL for fonts). Put the SPDX expression in `license`. Anything not written by the NLPA Collab goes into `THIRD_PARTY.md` at the repository root with its source and licence text, and the pack's `license` says so. Do not copy from the Unity Asset Store, Unreal Marketplace, Sketchfab downloads under non-free terms, or any "free for personal use" source.

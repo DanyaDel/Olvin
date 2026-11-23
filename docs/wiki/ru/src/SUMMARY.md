@@ -60,6 +60,7 @@
 # Справочник
 
 - [Lua API](reference/lua-api.md)
+- [Паки библиотеки](reference/library-packs.md)
 - [Настройки рендера](reference/render-settings.md)
 - [Фичи olvin](reference/olvin-features.md)
 - [CLI olvin-hub](reference/hub-cli.md)

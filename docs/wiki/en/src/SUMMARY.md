@@ -60,6 +60,7 @@
 # Reference
 
 - [Lua API](reference/lua-api.md)
+- [Library packs](reference/library-packs.md)
 - [Render settings](reference/render-settings.md)
 - [olvin features](reference/olvin-features.md)
 - [olvin-hub CLI](reference/hub-cli.md)

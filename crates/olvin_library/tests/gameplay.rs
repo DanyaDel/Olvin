@@ -3,7 +3,7 @@
 //! `HeadlessPlugins` + the Lua plugin + the pack's demo scene, fixed 1/60 s
 //! frames, keys and mouse fed into the `Input` resource like a window would.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use glam::EulerRot;
@@ -57,7 +57,6 @@ fn assert_clean_log() {
 
 struct Rig {
     app: App,
-    project: PathBuf,
     _dir: tempfile::TempDir,
     cursor: olvin::core::EventCursor,
     /// Every message sent so far: name, value, sender's name.
@@ -94,7 +93,6 @@ fn rig(pack: &str, edit: impl FnOnce(&Path)) -> Rig {
     assert!(spawned > 3, "the demo scene is not empty");
     let mut rig = Rig {
         app,
-        project: dir.path().to_path_buf(),
         _dir: dir,
         cursor: Default::default(),
         log: Vec::new(),
@@ -145,13 +143,6 @@ impl Rig {
         self.app.resources.fetch_mut::<Input>().set_key(key, down);
     }
 
-    /// One frame with the mouse moved by `delta` pixels.
-    fn mouse(&mut self, delta: Vec2) {
-        self.app.resources.fetch_mut::<Input>().mouse_delta = delta;
-        self.app.update();
-        self.app.resources.fetch_mut::<Input>().mouse_delta = Vec2::ZERO;
-    }
-
     /// Holds `keys` for `n` frames, then lets go.
     fn hold(&mut self, keys: &[KeyCode], n: usize) {
         for k in keys {
@@ -199,23 +190,6 @@ impl Rig {
             .0
             .w_axis
             .truncate()
-    }
-
-    /// Yaw in degrees of an entity's local rotation.
-    fn yaw(&self, name: &str) -> f32 {
-        self.transform(name)
-            .rotation
-            .to_euler(EulerRot::YXZ)
-            .0
-            .to_degrees()
-    }
-
-    fn pitch(&self, name: &str) -> f32 {
-        self.transform(name)
-            .rotation
-            .to_euler(EulerRot::YXZ)
-            .1
-            .to_degrees()
     }
 
     fn grounded(&self, name: &str) -> bool {

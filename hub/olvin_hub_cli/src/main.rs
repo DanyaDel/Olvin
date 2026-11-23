@@ -85,6 +85,12 @@ enum Cmd {
         /// Also pack the folder: tar.gz or zip
         #[arg(short, long, value_name = "FORMAT")]
         archive: Option<String>,
+        /// Release: also write debug symbols to <out's parent>/symbols/ (not shipped; needs objcopy)
+        #[arg(long)]
+        keep_symbols: bool,
+        /// Release: do not strip the executable
+        #[arg(long)]
+        no_strip: bool,
     },
     /// Projects the hub knows about
     Projects,
@@ -279,6 +285,8 @@ fn run(cli: Cli) -> Result<()> {
             release,
             out,
             archive,
+            keep_symbols,
+            no_strip,
         } => {
             let project = open(project.as_deref())?;
             let archive = archive.as_deref().map(ArchiveFormat::parse).transpose()?;
@@ -292,7 +300,9 @@ fn run(cli: Cli) -> Result<()> {
                 out,
                 archive,
                 target_dir: None,
-            })?;
+                keep_symbols,
+                no_strip,
+                })?;
             println!("game:    {}", report.binary.display());
             println!(
                 "folder:  {} ({} asset files)",
@@ -304,6 +314,12 @@ fn run(cli: Cli) -> Result<()> {
             }
             if let Some(archive) = report.archive {
                 println!("archive: {}", archive.display());
+            }
+            if let Some(symbols) = report.symbols {
+                println!(
+                    "symbols: {} (keep private: not in the folder or archive)",
+                    symbols.display()
+                );
             }
             if report.gitignore_updated {
                 println!("added /dist to .gitignore");

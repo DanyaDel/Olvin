@@ -3545,6 +3545,7 @@ dependencies = [
  "olvin_library",
  "serde",
  "serde_json",
+ "sha2",
  "tar",
  "toml",
  "toml_edit",

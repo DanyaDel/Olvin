@@ -52,6 +52,12 @@ pub struct BuildOptions {
     pub archive: Option<ArchiveFormat>,
     /// Cargo target directory (default: cargo's own choice, `CARGO_TARGET_DIR` included).
     pub target_dir: Option<PathBuf>,
+    /// Release only: also write the debug symbols to `<out's parent>/symbols/`
+    /// (never into the shipped folder or archive), so crash addresses stay
+    /// readable. Costs a slower build (line tables) and needs `objcopy` on Unix.
+    pub keep_symbols: bool,
+    /// Release only: leave the executable as cargo links it (no `strip`).
+    pub no_strip: bool,
 }
 
 #[derive(Debug)]
@@ -63,6 +69,9 @@ pub struct BuildReport {
     /// Files in `licenses/` (third-party notices; 0 means no folder).
     pub licenses: usize,
     pub archive: Option<PathBuf>,
+    /// Separate debug symbols of the shipped executable (`--keep-symbols`). Keep
+    /// them private: they are not in `out_dir` and not in the archive.
+    pub symbols: Option<PathBuf>,
     /// `/dist` was appended to the project's `.gitignore` (see [`Project::build`]).
     pub gitignore_updated: bool,
 }
@@ -79,7 +88,14 @@ impl Project {
     /// `.gitignore` that doesn't know `dist` gets `/dist` added (projects made
     /// before the template had it); no `.gitignore`, nothing is written.
     pub fn build(&self, options: &BuildOptions) -> Result<BuildReport> {
-        let exe = self.cargo_build(options)?;
+        if options.keep_symbols && !options.release {
+            bail!("--keep-symbols needs --release: a debug build is not stripped anyway");
+        }
+        if options.keep_symbols && options.no_strip {
+            bail!("--keep-symbols and --no-strip contradict each other");
+        }
+        let built = self.cargo_build(options)?;
+        let exe = built.exe.clone();
         let out = options.out.clone().unwrap_or_else(|| self.dist_dir());
         prepare_out(&out)?;
         let gitignore_updated = options.out.is_none() && ignore_dist(self.root())?;
@@ -98,6 +114,10 @@ impl Project {
             }
         };
         let licenses = self.copy_licenses(&out)?;
+        let symbols = options
+            .keep_symbols
+            .then(|| split_symbols(&built, &binary, &out, self.name()))
+            .transpose()?;
         let archive = options
             .archive
             .map(|format| pack(&out, self.name(), format))
@@ -108,6 +128,7 @@ impl Project {
             assets,
             licenses,
             archive,
+            symbols,
             gitignore_updated,
         })
     }
@@ -133,8 +154,8 @@ impl Project {
         Ok(count)
     }
 
-    /// Runs `cargo build` and returns the path of the game's executable.
-    fn cargo_build(&self, options: &BuildOptions) -> Result<PathBuf> {
+    /// Runs `cargo build` and returns the game's executable (and the debug files next to it).
+    fn cargo_build(&self, options: &BuildOptions) -> Result<Built> {
         let manifest = self.root().join("Cargo.toml");
         let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         cmd.args(["build", "--message-format=json-render-diagnostics"])
@@ -142,6 +163,9 @@ impl Project {
             .arg(&manifest);
         if options.release {
             cmd.arg("--release");
+            for (key, value) in release_profile(options) {
+                cmd.env(key, value);
+            }
         }
         if let Some(dir) = &options.target_dir {
             cmd.arg("--target-dir").arg(dir);
@@ -151,7 +175,7 @@ impl Project {
             .spawn()
             .context("could not start cargo")?;
         let manifest = manifest.canonicalize().unwrap_or(manifest);
-        let mut exe = None;
+        let mut built = None;
         for line in BufReader::new(
             child
                 .stdout
@@ -160,20 +184,46 @@ impl Project {
         )
         .lines()
         {
-            if let Some(path) = artifact_of(&line?, &manifest) {
-                exe = Some(path);
+            if let Some(artifact) = artifact_of(&line?, &manifest) {
+                built = Some(artifact);
             }
         }
         let status = child.wait()?;
         if !status.success() {
             bail!("cargo build failed ({status})");
         }
-        exe.context("cargo built no executable: does the project have a binary target?")
+        built.context("cargo built no executable: does the project have a binary target?")
     }
 }
 
-/// The executable of `manifest`'s package from one line of cargo's JSON output.
-fn artifact_of(line: &str, manifest: &Path) -> Option<PathBuf> {
+/// What cargo made for the game's binary target.
+struct Built {
+    exe: PathBuf,
+    /// Debug files cargo put next to it (`.pdb` on Windows).
+    pdb: Option<PathBuf>,
+}
+
+/// Profile settings the hub forces on a release build, as cargo env overrides
+/// (`CARGO_PROFILE_RELEASE_*` beat the project's `Cargo.toml`).
+///
+/// Stripped by default: symbol names make a binary far easier to read. With
+/// `--keep-symbols` cargo links an unstripped binary with line tables and the
+/// hub splits it afterwards (see [`split_symbols`]).
+fn release_profile(options: &BuildOptions) -> Vec<(&'static str, &'static str)> {
+    if options.keep_symbols {
+        vec![
+            ("CARGO_PROFILE_RELEASE_STRIP", "none"),
+            ("CARGO_PROFILE_RELEASE_DEBUG", "line-tables-only"),
+        ]
+    } else if options.no_strip {
+        Vec::new()
+    } else {
+        vec![("CARGO_PROFILE_RELEASE_STRIP", "symbols")]
+    }
+}
+
+/// The game's executable from one line of cargo's JSON output.
+fn artifact_of(line: &str, manifest: &Path) -> Option<Built> {
     let msg: serde_json::Value = serde_json::from_str(line).ok()?;
     if msg["reason"] != "compiler-artifact" {
         return None;
@@ -182,9 +232,104 @@ fn artifact_of(line: &str, manifest: &Path) -> Option<PathBuf> {
     let same = Path::new(msg["manifest_path"].as_str()?)
         .canonicalize()
         .is_ok_and(|p| p == manifest);
-    (is_bin && same)
-        .then(|| PathBuf::from(msg["executable"].as_str().unwrap_or_default()))
-        .filter(|p| !p.as_os_str().is_empty())
+    if !(is_bin && same) {
+        return None;
+    }
+    let exe = PathBuf::from(msg["executable"].as_str().unwrap_or_default());
+    let pdb = msg["filenames"]
+        .as_array()?
+        .iter()
+        .filter_map(|f| f.as_str())
+        .find(|f| f.ends_with(".pdb"))
+        .map(PathBuf::from);
+    (!exe.as_os_str().is_empty()).then_some(Built { exe, pdb })
+}
+
+/// Moves the debug information of a release build out of the shipped
+/// executable `binary` (already copied into `out`) into
+/// `<out's parent>/symbols/<name>-<build id>.debug`, where the build id is the
+/// start of the stripped executable's SHA-256. The symbols folder is a sibling
+/// of `out`, so neither the folder nor an archive of it contains them.
+///
+/// Unix: GNU `objcopy` (or `llvm-objcopy`; `$OBJCOPY` overrides). Windows: the
+/// `.pdb` cargo wrote is copied (the executable has no symbols in it). Other
+/// platforms are not supported yet and fail loudly rather than ship symbols.
+fn split_symbols(built: &Built, binary: &Path, out: &Path, name: &str) -> Result<PathBuf> {
+    let dir = out
+        .parent()
+        .context("the output folder has no parent for symbols/")?
+        .join("symbols");
+    fs::create_dir_all(&dir)?;
+    let partial = dir.join(format!(".{name}.partial"));
+    if cfg!(windows) {
+        let pdb = built
+            .pdb
+            .as_ref()
+            .context("cargo reported no .pdb: cannot keep symbols")?;
+        fs::copy(pdb, &partial)?;
+    } else if cfg!(unix) && !cfg!(target_os = "macos") {
+        let objcopy = objcopy().context(
+            "--keep-symbols needs objcopy (binutils) or llvm-objcopy on PATH, or $OBJCOPY",
+        )?;
+        run_tool(
+            Command::new(&objcopy)
+                .arg("--only-keep-debug")
+                .arg(&built.exe)
+                .arg(&partial),
+        )?;
+        run_tool(Command::new(&objcopy).arg("--strip-all").arg(binary))?;
+    } else {
+        bail!("--keep-symbols is not supported on this platform yet");
+    }
+    let id = build_id(binary)?;
+    let ext = if cfg!(windows) { "pdb" } else { "debug" };
+    let path = dir.join(format!("{name}-{id}.{ext}"));
+    fs::rename(&partial, &path)?;
+    Ok(path)
+}
+
+fn objcopy() -> Option<PathBuf> {
+    if let Some(custom) = std::env::var_os("OBJCOPY") {
+        return Some(PathBuf::from(custom));
+    }
+    ["objcopy", "llvm-objcopy"]
+        .into_iter()
+        .find(|tool| {
+            Command::new(tool)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .map(PathBuf::from)
+}
+
+fn run_tool(cmd: &mut Command) -> Result<()> {
+    let output = cmd.output().context("could not start the strip tool")?;
+    if !output.status.success() {
+        bail!(
+            "{:?} failed: {}",
+            cmd.get_program(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// First 16 hex digits of the file's SHA-256: names symbol files so a crash
+/// report from a shipped build finds the symbols of exactly that build.
+fn build_id(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)?;
+    Ok(hasher
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Appends `/dist` to `<root>/.gitignore` unless a line already covers it.
@@ -541,6 +686,102 @@ mod tests {
             !game.dist_dir().exists(),
             "nothing is laid out after a failed build"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A tiny game with a function whose symbol name is easy to look for.
+    fn probe_game(dir: &Path) -> Project {
+        let game = tiny_game(dir);
+        fs::write(
+            game.root().join("src/main.rs"),
+            "use olvin as _;\n#[inline(never)]\nfn olvin_probe_fn(x: usize) -> usize { x.wrapping_mul(31) }\n\
+             fn main() { println!(\"tiny\"); if std::env::args().count() > 99 { println!(\"{}\", olvin_probe_fn(std::env::args().count())); } }\n",
+        )
+        .unwrap();
+        game
+    }
+
+    fn contains(path: &Path, needle: &str) -> bool {
+        let bytes = fs::read(path).unwrap();
+        bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    /// Release builds are stripped by default; `no_strip` leaves the names in.
+    #[test]
+    fn release_strips_symbols_unless_asked_not_to() {
+        let dir = temp_dir("strip");
+        let game = probe_game(&dir);
+        let stripped = game
+            .build(&BuildOptions {
+                release: true,
+                ..options(&dir)
+            })
+            .unwrap();
+        assert!(!contains(&stripped.binary, "olvin_probe_fn"));
+        assert!(stripped.symbols.is_none());
+        let kept = game
+            .build(&BuildOptions {
+                release: true,
+                no_strip: true,
+                ..options(&dir)
+            })
+            .unwrap();
+        assert!(contains(&kept.binary, "olvin_probe_fn"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `keep_symbols`: the shipped binary is stripped, the symbols sit beside
+    /// the output folder, and an archive of the folder does not hold them.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn keep_symbols_goes_beside_the_folder_not_into_it() {
+        let dir = temp_dir("symbols");
+        let game = probe_game(&dir);
+        let out = dir.join("out/tiny-linux");
+        let report = game
+            .build(&BuildOptions {
+                release: true,
+                keep_symbols: true,
+                out: Some(out.clone()),
+                archive: Some(ArchiveFormat::TarGz),
+                ..options(&dir)
+            })
+            .unwrap();
+        let symbols = report.symbols.unwrap();
+        assert!(symbols.starts_with(dir.join("out/symbols")), "{symbols:?}");
+        assert!(!symbols.starts_with(&out));
+        let name = symbols.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("tiny-") && name.ends_with(".debug"), "{name}");
+        assert!(contains(&symbols, "olvin_probe_fn"), "names are in the symbols");
+        assert!(!contains(&report.binary, "olvin_probe_fn"), "and not in the game");
+        assert!(
+            fs::metadata(&symbols).unwrap().len() > fs::metadata(&report.binary).unwrap().len()
+        );
+        let run = Command::new(&report.binary).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "tiny");
+        let gz = flate2::read::GzDecoder::new(File::open(report.archive.unwrap()).unwrap());
+        for entry in tar::Archive::new(gz).entries().unwrap() {
+            let path = entry.unwrap().path().unwrap().display().to_string();
+            assert!(!path.contains("symbols") && !path.ends_with(".debug"), "{path}");
+        }
+
+        // Contradicting or pointless flags are refused before cargo runs.
+        let err = game
+            .build(&BuildOptions {
+                keep_symbols: true,
+                ..options(&dir)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("--release"), "{err}");
+        let err = game
+            .build(&BuildOptions {
+                release: true,
+                keep_symbols: true,
+                no_strip: true,
+                ..options(&dir)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("contradict"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }
 

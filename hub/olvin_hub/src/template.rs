@@ -15,8 +15,15 @@ log = "0.4"
 [profile.dev.package."*"]
 opt-level = 3
 
+# Release builds: no symbol names or debug info in the executable (`olvin-hub build
+# --keep-symbols` writes them to a separate file). `panic` stays "unwind" on
+# purpose: scripts and asset jobs catch panics (`catch_unwind`), and "abort"
+# would turn one failing script into a dead game; the crash report hook
+# runs either way.
 [profile.release]
 lto = "thin"
+strip = "symbols"
+debug = false
 
 # Standalone: never part of an enclosing workspace.
 [workspace]

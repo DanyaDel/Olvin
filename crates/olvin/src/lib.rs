@@ -19,6 +19,8 @@ pub use olvin_ecs as ecs;
 pub use olvin_game as game;
 #[cfg(feature = "gui")]
 pub use olvin_gui as gui;
+#[cfg(feature = "net")]
+pub mod net;
 #[cfg(feature = "input")]
 pub use olvin_input as input;
 #[cfg(feature = "physics")]
@@ -99,6 +101,8 @@ impl Plugin for DefaultPlugins {
         });
         #[cfg(feature = "audio")]
         app.add_plugin(self.audio.clone());
+        #[cfg(feature = "net")]
+        app.add_plugin(net::NetGluePlugin);
         // After input: the UI adds its actions to the map.
         #[cfg(all(feature = "gui", feature = "render"))]
         app.add_plugin(olvin_gui::GuiRenderPlugin::default());
@@ -174,6 +178,8 @@ impl Plugin for HeadlessPlugins {
         });
         #[cfg(feature = "audio")]
         app.add_plugin(self.audio.clone());
+        #[cfg(feature = "net")]
+        app.add_plugin(net::NetGluePlugin);
         // Headless: the UI is laid out, never drawn.
         #[cfg(feature = "gui")]
         app.add_plugin(olvin_gui::GuiPlugin);

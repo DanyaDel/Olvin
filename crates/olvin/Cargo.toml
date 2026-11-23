@@ -17,7 +17,7 @@ anim = ["dep:olvin_anim"]
 # Asset pipeline: .meta GUIDs, images, glTF import, AssetManager.
 assets = ["dep:olvin_assets"]
 # Colliders and rigidbodies simulated with Rapier.
-physics = ["dep:olvin_physics", "olvin_script?/physics", "olvin_game?/physics"]
+physics = ["dep:olvin_physics", "olvin_script?/physics", "olvin_game?/physics", "olvin_net?/physics"]
 # Unity-style behaviours in Rust (Scripts from scenes → instances).
 script = ["dep:olvin_script", "olvin_game?/script"]
 # Lua 5.4 behaviours with hot reload (`olvin::script::lua`, vendored Lua, no system library).
@@ -34,6 +34,9 @@ gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 
 # Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
 integrity = ["olvin_core/integrity"]
+# Netcode (`olvin::net`): transports, sessions, replication, messages, prediction.
+
+net = ["dep:olvin_net"]
 
 # Profiler scopes (puffin) over systems, render passes, physics and scripts; set OLVIN_PROFILE=1
 # or call `olvin::core::profile::set_enabled`. Off: the scopes compile to nothing.
@@ -56,6 +59,7 @@ olvin_script = { path = "../olvin_script", optional = true, default-features = f
 olvin_input = { path = "../olvin_input", optional = true }
 olvin_audio = { path = "../olvin_audio", optional = true }
 olvin_game = { path = "../olvin_game", optional = true }
+olvin_net = { workspace = true, optional = true }
 olvin_gui = { workspace = true, optional = true }
 olvin_text = { workspace = true, optional = true }
 glam.workspace = true

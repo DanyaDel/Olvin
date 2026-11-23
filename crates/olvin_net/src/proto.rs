@@ -73,4 +73,60 @@ pub enum Msg {
     Disconnect {
         reason: String,
     },
+    /// Reliable: an entity exists for this client, with all its replicated components.
+    Spawn(SpawnMsg),
+    /// Reliable: the entity is gone (despawned, or no longer relevant to this client).
+    Despawn {
+        net_id: u64,
+    },
+    /// Unreliable (reliable for entries too big for a datagram): changed components.
+    Snapshot(SnapshotMsg),
+    /// Client to server: snapshots received. `seq` is the newest; bit `i` of
+    /// `bits` says whether `seq - 1 - i` arrived too.
+    Ack {
+        seq: u32,
+        bits: u32,
+    },
+}
+
+/// How a client creates the copy of a replicated entity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SpawnKind {
+    /// An empty entity; the replicated components make it.
+    Bare,
+    /// Instantiate this prefab asset (`*.prefab.ron`, relative to `assets/`).
+    Prefab(String),
+    /// Adopt the level object with this `SceneId`, which both sides loaded from the scene.
+    Scene(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpawnMsg {
+    pub net_id: u64,
+    /// Server tick the state belongs to; older snapshots for it are ignored.
+    pub tick: u32,
+    pub kind: SpawnKind,
+    pub comps: Vec<CompData>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompData {
+    /// Index in the replication registry (registration order).
+    pub comp: u16,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotMsg {
+    pub seq: u32,
+    pub tick: u32,
+    pub entries: Vec<SnapEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SnapEntry {
+    pub net_id: u64,
+    pub comp: u16,
+    /// `None`: the component was removed.
+    pub data: Option<Vec<u8>>,
 }

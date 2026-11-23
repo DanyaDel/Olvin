@@ -14,10 +14,15 @@ physics = ["dep:olvin_physics"]
 [dependencies]
 olvin_core.workspace = true
 olvin_ecs.workspace = true
+olvin_scene = { workspace = true, features = ["serde"] }
 olvin_physics = { workspace = true, optional = true }
+glam.workspace = true
 serde.workspace = true
 log.workspace = true
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 sha2 = "0.11"
 hmac = "0.13"
 getrandom = "0.4"
+
+[dev-dependencies]
+ron.workspace = true

@@ -48,6 +48,8 @@ pub struct NetLimits {
     pub max_name_len: usize,
     /// Auth token length, bytes.
     pub max_token_len: usize,
+    /// Replicated entities a server tracks and a client accepts.
+    pub max_entities: usize,
 }
 
 impl Default for NetLimits {
@@ -59,6 +61,7 @@ impl Default for NetLimits {
             max_handshake_packet: 2048,
             max_name_len: 32,
             max_token_len: 512,
+            max_entities: 4096,
         }
     }
 }

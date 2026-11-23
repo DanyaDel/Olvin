@@ -60,6 +60,13 @@ pub(crate) struct ServerState {
     nonces: HashSet<Nonce>,
     nonce_order: VecDeque<Nonce>,
     pub tick: u32,
+    pub tick_accum: f32,
+    /// Bytes handed to the transports (sealed packets), all clients.
+    pub bytes_out: u64,
+    pub bytes_in: u64,
+    pub packets_out: u64,
+    /// Messages from clients for the layers above, in arrival order.
+    pub inbox: Vec<(ClientId, Channel, Msg)>,
     pub local_announced: bool,
 }
 
@@ -74,6 +81,11 @@ impl ServerState {
             nonces: HashSet::new(),
             nonce_order: VecDeque::new(),
             tick: 0,
+            tick_accum: 0.0,
+            bytes_out: 0,
+            bytes_in: 0,
+            packets_out: 0,
+            inbox: Vec::new(),
             local_announced: false,
         }
     }
@@ -151,6 +163,7 @@ impl ServerState {
             self.strike(ti, conn, "oversized packet");
             return;
         }
+        self.bytes_in += data.len() as u64;
         let (k, body) = match wire::unframe(&data) {
             Ok(x) => x,
             Err(e) => {
@@ -215,6 +228,7 @@ impl ServerState {
             Msg::Disconnect { reason } => {
                 self.remove_client(ctx, id, &clip(&reason), true);
             }
+            other => self.inbox.push((id, channel, other)),
         }
     }
 
@@ -560,6 +574,14 @@ impl ServerState {
     }
 
     /// Seals and sends `msg` to a connected client; false if it is not connected.
+    /// Largest unreliable packet the client's connection carries.
+    pub fn max_datagram(&self, id: ClientId) -> usize {
+        self.clients
+            .get(&id)
+            .and_then(|c| c.peer)
+            .map_or(512, |(ti, _)| self.transports[ti].max_datagram())
+    }
+
     pub fn send_to(&mut self, id: ClientId, channel: Channel, msg: &Msg) -> bool {
         let Some(rec) = self.clients.get_mut(&id) else {
             return false;
@@ -570,6 +592,8 @@ impl ServerState {
         let Some(bytes) = secure.seal(channel, msg) else {
             return false;
         };
+        self.bytes_out += bytes.len() as u64;
+        self.packets_out += 1;
         self.transports[ti].send(conn, channel, &bytes);
         true
     }

@@ -59,8 +59,16 @@ impl Plugin for NetPlugin {
             let now = clock(res);
             let mut net = res.fetch_mut::<Net>();
             net.update(now);
+            net.client_replicate(res);
             let mut events = res.fetch_mut::<olvin_core::Events<NetEvent>>();
             events.send_batch(net.events.drain(..));
+        });
+        // After gameplay: step the server's fixed tick and replicate.
+        app.add_system(Stage::PostUpdate, |res| {
+            let dt = res.fetch::<olvin_core::Time>().unscaled_delta();
+            let mut net = res.fetch_mut::<Net>();
+            let mut world = res.fetch_mut::<olvin_ecs::World>();
+            net.server_ticks(&mut world, dt);
         });
     }
 }

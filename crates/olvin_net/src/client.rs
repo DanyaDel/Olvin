@@ -35,6 +35,10 @@ pub(crate) struct ClientState {
     pub rtt: f32,
     pub reconnect: Option<(u32, [u8; 16])>,
     pub server_tick: u32,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    /// Messages from the server for the layers above.
+    pub inbox: Vec<(Channel, Msg)>,
 }
 
 const CONN: ConnId = ConnId(0);
@@ -58,6 +62,9 @@ impl ClientState {
             rtt: 0.0,
             reconnect,
             server_tick: 0,
+            bytes_in: 0,
+            bytes_out: 0,
+            inbox: Vec::new(),
         }
     }
 
@@ -142,6 +149,7 @@ impl ClientState {
         data: Vec<u8>,
         events: &mut Vec<NetEvent>,
     ) {
+        self.bytes_in += data.len() as u64;
         let max = match channel {
             Channel::Reliable => cfg.limits.max_reliable_packet,
             Channel::Unreliable => self.transport.max_datagram().max(64),
@@ -191,6 +199,7 @@ impl ClientState {
                         self.fail(events, &clip(&reason));
                         self.transport.close(CONN, "kicked");
                     }
+                    other => self.inbox.push((channel, other)),
                 }
             }
             _ => {}
@@ -264,6 +273,7 @@ impl ClientState {
         let Some(bytes) = self.secure.as_mut().and_then(|s| s.seal(channel, msg)) else {
             return false;
         };
+        self.bytes_out += bytes.len() as u64;
         self.transport.send(CONN, channel, &bytes);
         true
     }

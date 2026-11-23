@@ -7,6 +7,10 @@ use crate::client::{ClientState, Phase};
 use crate::config::{NetConfig, NetMode};
 use crate::proto::Msg;
 use crate::registry::NetRegistry;
+use crate::replicate::{
+    NetId, Owner, ReplClient, ReplServer, ReplicateOptions, Replicated, client::PrefabSpawner,
+    server::RelevancyFn,
+};
 use crate::server::{Ctx, ServerState};
 use crate::transport::{Channel, Transport};
 
@@ -76,6 +80,15 @@ pub struct Net {
     pub(crate) disconnected: Option<String>,
     failed_reported: bool,
     pub(crate) registry: NetRegistry,
+    pub(crate) repl: ReplState,
+    pub(crate) relevancy: Option<RelevancyFn>,
+    pub(crate) spawner: Option<PrefabSpawner>,
+}
+
+#[derive(Default)]
+pub(crate) struct ReplState {
+    pub server: Option<ReplServer>,
+    pub client: ReplClient,
 }
 
 impl Net {
@@ -97,7 +110,12 @@ impl Net {
             disconnected: None,
             failed_reported: false,
             registry: NetRegistry::default(),
+            repl: ReplState::default(),
+            relevancy: None,
+            spawner: None,
         };
+        // The owner of an entity travels like any component; it is always id 0.
+        net.replicate_with_named::<Owner>("Owner", ReplicateOptions::default());
         let transports = net.apply_simulation(transports);
         if net.cfg.is_server_mode() {
             net.start_server(transports, auth);
@@ -146,10 +164,109 @@ impl Net {
         if wants_socket && transports.is_empty() {
             self.failed = Some(self.no_transport_message());
         }
+        self.repl.server = Some(ReplServer::default());
         self.server = Some(ServerState::new(
             transports,
             auth.unwrap_or_else(|| Box::new(AllowAll)),
         ));
+    }
+
+    /// Registers `T` for replication under its short type name, with the defaults
+    /// (`Transform` gets a compact codec and interpolation). Register before the
+    /// first frame, in the same order on server and clients.
+    ///
+    /// ```
+    /// # use olvin_net::{Net, NetConfig};
+    /// # use olvin_scene::Transform;
+    /// # #[derive(Clone, serde::Serialize, serde::Deserialize)] struct Health(u32);
+    /// let mut net = Net::new(NetConfig::offline("g", 1), vec![], None);
+    /// net.replicate::<Transform>().replicate::<Health>();
+    /// ```
+    pub fn replicate<T>(&mut self) -> &mut Self
+    where
+        T: olvin_ecs::Component + Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        self.replicate_with(crate::replicate::default_options::<T>())
+    }
+
+    /// [`Net::replicate`] with explicit [`ReplicateOptions`].
+    pub fn replicate_with<T>(&mut self, opts: ReplicateOptions<T>) -> &mut Self
+    where
+        T: olvin_ecs::Component + Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        self.replicate_with_named(&crate::replicate::short_type_name::<T>(), opts)
+    }
+
+    /// Like [`Net::replicate_with`] under a name you choose (the name is the protocol).
+    pub fn replicate_with_named<T>(&mut self, name: &str, opts: ReplicateOptions<T>) -> &mut Self
+    where
+        T: olvin_ecs::Component + Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        self.registry.add_name("component", name);
+        self.registry
+            .components
+            .push(crate::replicate::new_entry(name, opts));
+        self
+    }
+
+    /// Server: decides which entities each client gets (interest management).
+    /// Return `false` to hide `entity` from `client`; hidden entities are
+    /// despawned there and spawned again when they become relevant.
+    pub fn set_relevancy(
+        &mut self,
+        f: impl Fn(&olvin_ecs::World, ClientId, olvin_ecs::Entity) -> bool + 'static,
+    ) {
+        self.relevancy = Some(Box::new(f));
+    }
+
+    /// Server: shows each client only entities within `radius` metres of an
+    /// entity it owns. Entities without a `Transform` are always visible, and so is
+    /// everything to a client that owns nothing yet.
+    pub fn set_relevancy_distance(&mut self, radius: f32) {
+        self.set_relevancy(crate::replicate::distance_relevancy(radius));
+    }
+
+    /// Client: how to create the copy of a replicated prefab. The `olvin` facade
+    /// installs one over `scene_file::instantiate_prefab`.
+    pub fn set_prefab_spawner(
+        &mut self,
+        f: impl Fn(
+            &olvin_core::Resources,
+            &str,
+            olvin_scene::Transform,
+        ) -> Result<olvin_ecs::Entity, String>
+        + 'static,
+    ) {
+        self.spawner = Some(Box::new(f));
+    }
+
+    /// Whether a prefab spawner is installed (the facade installs one if you did not).
+    pub fn has_prefab_spawner(&self) -> bool {
+        self.spawner.is_some()
+    }
+
+    /// The entity behind a network id (server: the real one; client: the copy).
+    pub fn entity(&self, id: NetId) -> Option<olvin_ecs::Entity> {
+        match &self.repl.server {
+            Some(rs) => rs.entity(id),
+            None => self.repl.client.entity(id),
+        }
+    }
+
+    /// Replicated entities this process tracks (server) or has copies of (client).
+    pub fn replicated_count(&self) -> usize {
+        match &self.repl.server {
+            Some(rs) => rs.len(),
+            None => self.repl.client.len(),
+        }
+    }
+
+    /// Whether `entity` is owned by the local player.
+    pub fn is_mine(&self, world: &olvin_ecs::World, entity: olvin_ecs::Entity) -> bool {
+        match (self.local_client(), world.get::<&Owner>(entity)) {
+            (Some(me), Ok(o)) => o.0 == me,
+            _ => false,
+        }
     }
 
     pub fn config(&self) -> &NetConfig {
@@ -308,6 +425,7 @@ impl Net {
     pub(crate) fn update(&mut self, now: f64) {
         self.now = now;
         self.registry.frozen = true;
+        let _ = Replicated::default;
         let hash = self.registry.signature();
         if let Some(server) = self.server.as_mut() {
             let mut ctx = Ctx {
@@ -324,7 +442,22 @@ impl Net {
                 });
                 ctx.events.push(NetEvent::Connected { id: ClientId::HOST });
             }
+            let before = ctx.events.len();
             server.poll(&mut ctx);
+            if let Some(rs) = self.repl.server.as_mut() {
+                for ev in &ctx.events[before..] {
+                    if let NetEvent::ClientJoined { id, .. } | NetEvent::ClientReconnected { id } =
+                        ev
+                    {
+                        rs.reset_client(*id);
+                    }
+                }
+                for (id, _, msg) in std::mem::take(&mut server.inbox) {
+                    if let Msg::Ack { seq, bits } = msg {
+                        rs.on_ack(id, seq, bits);
+                    }
+                }
+            }
         }
         if let Some(client) = self.client.as_mut() {
             let before = self.events.len();
@@ -332,6 +465,7 @@ impl Net {
             for ev in &self.events[before..] {
                 if let NetEvent::Disconnected { reason } | NetEvent::ConnectFailed { reason } = ev {
                     self.disconnected = Some(reason.clone());
+                    self.repl.client.needs_clear = true;
                 }
             }
         }

@@ -1611,7 +1611,9 @@ fn picking_a_look_changes_the_environment_and_undo_restores_it() {
     assert_eq!(state(&mut h).scene.environment.exposure, 0.4);
     undo(&mut h);
     assert_eq!(state(&mut h).scene.environment.exposure, before.exposure);
+}
 
+#[test]
 fn particle_system_add_edit_undo_and_presets() {
     use olvin_editor::olvin_scene::file::ParticleDesc;
     let p = project("particles");

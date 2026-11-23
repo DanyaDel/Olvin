@@ -13,6 +13,7 @@ olvin_core = { path = "crates/olvin_core" }
 olvin_ecs = { path = "crates/olvin_ecs" }
 olvin_scene = { path = "crates/olvin_scene" }
 olvin_window = { path = "crates/olvin_window" }
+olvin_net = { path = "crates/olvin_net" }
 olvin_render = { path = "crates/olvin_render" }
 olvin_csg = { path = "crates/olvin_csg" }
 olvin_physics = { path = "crates/olvin_physics" }

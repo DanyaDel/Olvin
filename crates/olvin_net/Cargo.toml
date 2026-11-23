@@ -1,0 +1,23 @@
+[package]
+name = "olvin_net"
+description = "Olvin netcode: transports, sessions, replication, messages, prediction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# CharacterMotor prediction on top of olvin_physics::move_character.
+physics = ["dep:olvin_physics"]
+
+[dependencies]
+olvin_core.workspace = true
+olvin_ecs.workspace = true
+olvin_physics = { workspace = true, optional = true }
+serde.workspace = true
+log.workspace = true
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+sha2 = "0.11"
+hmac = "0.13"
+getrandom = "0.4"

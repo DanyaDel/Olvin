@@ -480,7 +480,9 @@ impl GpuSim {
                 self.emitters.insert(entity, g);
             }
             seen.push(entity);
-            let g = self.emitters.get_mut(&entity).expect("just inserted");
+            let Some(g) = self.emitters.get_mut(&entity) else {
+                continue;
+            };
             let steps: Vec<GpuStep> = emitter.steps_after(g.applied).copied().collect();
             for (n, step) in steps.iter().enumerate().take(MAX_STEPS as usize) {
                 let births = step.births.min(max);
@@ -594,7 +596,8 @@ impl GpuSim {
         queue.submit([encoder.finish()]);
         staging
             .slice(..)
-            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            // A failed map shows up below: `get_mapped_range` errors then.
+            .map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         let out = bytemuck::cast_slice(&staging.slice(..).get_mapped_range().ok()?).to_vec();
         Some(out)

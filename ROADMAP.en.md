@@ -192,6 +192,23 @@ Goal: cover the whole threat model, not one case at a time. Assets: money and ac
 - [ ] **Warning when opening a foreign project (T1)**: the editor and hub run `cargo` on the project, so they ask first whether the project is trusted. (S) [P2]
 - [ ] **`OLVIN_LIBRARY` as trusted input (T2)**: document that the library path is trusted. (S) [P3]
 
+## Phase 9. The 2D engine and a separate 2D editor
+
+Owner's decision (2026-11-23): first **finish the 3D editor**, then take on 2D. The engine is built from separate elements, so **the 2D editor is a separate editor element** (`olvin_editor_2d`, its own workspaces and window theme), not a mode of the 3D viewport. The feel to aim for is **Adobe Flash/Animate and Clickteam Fusion**: a friendly interface for people who are not programmers, with a frame timeline, a symbol library and a "condition -> action" event editor; a game is built with the mouse.
+
+What exists: sprites, atlases, tilemaps, `Camera2d`, text (`olvin_render::sprite`, `olvin_text`). What does not: 2D components in the scene format and the inspector, 2D physics, 2D editors, 2D animation, library packs.
+
+- [ ] **Finish the 3D editor (prerequisite)**: material previews (#41), several scenes at once (#44), configurable hotkeys (#45), skinned animation in the editor (#8), picking the prefab root in the viewport, undo for asset file operations, post-processing effects in the editor viewport (visible only in the game today), a shader graph editor (#22), terrain (#21). (L) [P1]
+- [ ] **2D core**: `Sprite`, `Tilemap`, `SpriteAnimator` components in the scene format (serde defaults), `Camera2d` with pixel-perfect mode, layers and sorting, Lua bindings (`ctx:` for sprites and animation). (M) [P1]
+- [ ] **2D physics** on `rapier2d`: `Rigidbody2D`, `Collider2D` (circle, box, capsule, polygon, tilemap colliders), triggers and events, a character controller for platformers and top-down; shares the event machinery with 3D (`CollisionEvents`). (M) [P1]
+- [ ] **The 2D editor as a separate element**: an orthographic scene with a pixel grid, snapping and guides; a layer hierarchy; an inspector for 2D components; a symbol library (reusable clips and prefabs, like Flash symbols). (L) [P1]
+- [ ] **Sprite editor**: slicing a sheet by grid or by outline, pivot, 9-slice, PNG/GIF/Aseprite import, batch processing. (M)
+- [ ] **Tilemap editor**: brushes, fill, layers, auto-tiling (neighbour rules), colliders from tiles, obstacle and trigger layers. (L)
+- [ ] **A 2D animation editor with a timeline** (like Flash): frames and keyframes, layers, tweening, frame-by-frame animation, sound on the timeline, frame events, nested clips, onion skin; shares the format with the 3D animator where they overlap (`Action`). (L)
+- [ ] **An event editor** (like Clickteam Fusion): a "conditions -> actions" table with no code (key pressed, collision, timer, variable; move, play a sound, create an object, change scene), compiled to Lua and to nodes; for people who do not write code. Related to the "gameplay node editor" item of phase 3. (L)
+- [ ] **2D library packs**: a platformer, a top-down (Zelda-like), a shoot-em-up, a grid puzzle; ready enemies, pickups, checkpoints, a camera with bounds; a "2D game" project template in the hub. (M)
+- [ ] **2D effects**: 2D lights and shadows, sprite normals, a pixel mode and palettes, parallax, 2D particles, looks for pixel art. (M) [P2]
+
 ## Order of work (what to do first)
 
 1. **Phase 0** in full. Without CI and tests, everything after will break unnoticed.

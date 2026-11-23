@@ -661,7 +661,6 @@ mod tests {
         assert_eq!(b.texture, c.texture);
         assert!(!c.playing);
         drop((a, b, c));
-        drop(get);
         drop(world);
         let _ = std::fs::remove_dir_all(&dir);
     }

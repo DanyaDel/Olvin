@@ -143,10 +143,13 @@ impl Default for ParticleDesc {
     }
 }
 
+/// A preset's menu name and constructor.
+pub type Preset = (&'static str, fn() -> ParticleDesc);
+
 /// Presets for the editor's menu and for code (scripts, library packs).
 impl ParticleDesc {
     /// Names and constructors of the presets, in menu order.
-    pub const PRESETS: &'static [(&'static str, fn() -> ParticleDesc)] = &[
+    pub const PRESETS: &'static [Preset] = &[
         ("Fire", Self::fire),
         ("Smoke", Self::smoke),
         ("Sparks", Self::sparks),

@@ -708,3 +708,53 @@ fn prefab_ui() {
     }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }
+
+/// The Particle System inspector and the live preview in the Scene view, in
+/// both themes (`$OLVIN_EDITOR_PARTICLE_SHOTS`).
+#[test]
+#[ignore = "renders PNGs with wgpu; run with --ignored"]
+fn particles_ui() {
+    let Some(out) = std::env::var_os("OLVIN_EDITOR_PARTICLE_SHOTS").map(PathBuf::from) else {
+        return;
+    };
+    use olvin_editor::olvin_scene::file::ParticleDesc;
+    fs::create_dir_all(&out).unwrap();
+    let project = std::env::temp_dir().join(format!(
+        "olvin-editor-particles-{}/yard",
+        std::process::id()
+    ));
+    demo_project(&project);
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        for open_curves in [false, true] {
+            let name = format!(
+                "{theme:?}-particles_{}.png",
+                if open_curves { "curves" } else { "main" }
+            )
+            .to_lowercase();
+            shot_with(&project, &out.join(name), theme, None, move |h| {
+                let state = h.state_mut().state_mut();
+                let id = state.create(olvin_editor::NewEntity::Empty, None);
+                let e = state.scene.get_mut(id).unwrap();
+                e.name = "Campfire".into();
+                e.position = Vec3::new(0.0, 0.5, 2.0);
+                e.particles = Some(ParticleDesc::fire());
+                state.select(Some(id));
+                h.run_steps(90);
+                if open_curves {
+                    for label in [
+                        "Main",
+                        "Emission",
+                        "Start values",
+                        "Color over Lifetime",
+                        "Size over Lifetime",
+                        "Shape",
+                    ] {
+                        h.get_by_label(label).click();
+                        h.run_steps(3);
+                    }
+                }
+            });
+        }
+    }
+    let _ = fs::remove_dir_all(project.parent().unwrap());
+}

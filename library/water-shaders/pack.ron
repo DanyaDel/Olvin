@@ -1,0 +1,18 @@
+(
+  id: "water-shaders",
+  name: "Stylised Water",
+  version: "1.0.0",
+  category: Shaders,
+  description: "Scrolling procedural normals, fresnel, foam bands on wave crests and tinted transparency. Ocean, pool and swamp materials.",
+  tags: ["water", "transparent", "stylised"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "water-shaders/materials/water_ocean.mat.ron",
+    "water-shaders/materials/water_pool.mat.ron",
+    "water-shaders/materials/water_swamp.mat.ron",
+    "water-shaders/shaders/water.wgsl",
+  ],
+  notes: "Materials set `alpha_blend: true`. No scene depth in a surface shader, so foam sits on wave crests instead of hugging the shore. Waves use world XZ.",
+)

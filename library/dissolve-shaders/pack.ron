@@ -1,0 +1,19 @@
+(
+  id: "dissolve-shaders",
+  name: "Dissolve",
+  version: "1.0.0",
+  category: Shaders,
+  description: "Noise-threshold dissolve with a glowing burning edge. One variant loops by time, one is driven by the colour's alpha for gameplay.",
+  tags: ["dissolve", "burn", "vfx"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "dissolve-shaders/materials/dissolve_driven.mat.ron",
+    "dissolve-shaders/materials/dissolve_fire.mat.ron",
+    "dissolve-shaders/materials/dissolve_ice.mat.ron",
+    "dissolve-shaders/shaders/dissolve.wgsl",
+    "dissolve-shaders/shaders/dissolve_driven.wgsl",
+  ],
+  notes: "Materials use `alpha_cutoff: 0.5`; emissive is the edge colour (values above 1 bloom). dissolve_driven.wgsl: alpha 1 = whole, 0 = gone.",
+)

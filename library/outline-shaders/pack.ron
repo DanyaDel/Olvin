@@ -1,0 +1,18 @@
+(
+  id: "outline-shaders",
+  name: "Outline Edge Shading",
+  version: "1.0.0",
+  category: Shaders,
+  description: "A stylised ink outline or neon edge at the silhouette, from the fresnel term. Not an inverted-hull outline: the surface shader contract cannot draw a second hull.",
+  tags: ["outline", "ink", "neon", "stylised"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "outline-shaders/materials/ink_orange.mat.ron",
+    "outline-shaders/materials/ink_white.mat.ron",
+    "outline-shaders/materials/neon_edge.mat.ron",
+    "outline-shaders/shaders/outline.wgsl",
+  ],
+  notes: "Fresnel based: hugs smooth convex shapes, thin on flat faces, no inner creases. emissive black = ink edge, any colour = glowing edge. Width is OL_WIDTH in the shader.",
+)

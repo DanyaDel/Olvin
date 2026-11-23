@@ -1,0 +1,6 @@
+(
+    base_color: (1.0, 0.35, 0.08, 1.0),
+    unlit: true,
+    alpha_blend: true,
+    shader: Some("hologram-shaders/shaders/hologram.wgsl"),
+)

@@ -1,0 +1,6 @@
+(
+    base_color: (0.02, 0.28, 0.4, 0.62),
+    roughness: 0.06,
+    alpha_blend: true,
+    shader: Some("water-shaders/shaders/water.wgsl"),
+)

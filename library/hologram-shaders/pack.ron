@@ -1,0 +1,18 @@
+(
+  id: "hologram-shaders",
+  name: "Hologram",
+  version: "1.0.0",
+  category: Shaders,
+  description: "Scanlines, fresnel glow, flicker and a translucent body for sci-fi projections. Three tints.",
+  tags: ["hologram", "sci-fi", "transparent"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "hologram-shaders/materials/hologram_alert.mat.ron",
+    "hologram-shaders/materials/hologram_cyan.mat.ron",
+    "hologram-shaders/materials/hologram_green.mat.ron",
+    "hologram-shaders/shaders/hologram.wgsl",
+  ],
+  notes: "Materials set `alpha_blend: true` and `unlit: true`; blended meshes cast no shadow.",
+)

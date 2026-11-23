@@ -3,13 +3,14 @@
 use super::*;
 
 /// A frame through the HDR target and the post chain.
-struct Frame {
+pub(super) struct Frame {
     pixels: Vec<u8>,
+    size: u32,
 }
 
 impl Frame {
-    fn at(&self, x: u32, y: u32) -> [u8; 3] {
-        let i = ((y * SIZE + x) * 4) as usize;
+    pub(super) fn at(&self, x: u32, y: u32) -> [u8; 3] {
+        let i = ((y * self.size + x) * 4) as usize;
         [self.pixels[i], self.pixels[i + 1], self.pixels[i + 2]]
     }
 
@@ -40,6 +41,16 @@ fn post_world_lut(
     lut: Option<TextureData>,
     build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
 ) -> Option<Frame> {
+    post_world_sized(SIZE, settings, lut, build)
+}
+
+/// [`post_world_lut`] with a render target of `size` x `size`.
+pub(super) fn post_world_sized(
+    size: u32,
+    settings: &RenderSettings,
+    lut: Option<TextureData>,
+    build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
+) -> Option<Frame> {
     let (device, queue) = device()?;
     let mut core = RenderCore::new(
         device.clone(),
@@ -50,7 +61,7 @@ fn post_world_lut(
     );
     core.set_hdr_output(true);
     let mut post = crate::PostProcess::new(&device, FORMAT);
-    post.resize(&device, (SIZE, SIZE));
+    post.resize(&device, (size, size));
     let (mut gpu, mut meshes, mut materials) = (
         GpuMeshes::default(),
         Meshes::default(),
@@ -74,8 +85,8 @@ fn post_world_lut(
         device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -92,7 +103,7 @@ fn post_world_lut(
     );
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: (SIZE * SIZE * 4) as u64,
+        size: (size * size * 4) as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -122,13 +133,13 @@ fn post_world_lut(
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(SIZE * 4),
+                bytes_per_row: Some(size * 4),
                 rows_per_image: None,
             },
         },
         wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size,
+            height: size,
             depth_or_array_layers: 1,
         },
     );
@@ -138,7 +149,7 @@ fn post_world_lut(
         .map_async(wgpu::MapMode::Read, |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
-    Some(Frame { pixels })
+    Some(Frame { pixels, size })
 }
 
 /// An emissive 8.0 square in the middle of a black frame, through the

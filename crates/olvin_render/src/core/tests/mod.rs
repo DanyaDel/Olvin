@@ -4,9 +4,10 @@
 mod blend;
 mod edge;
 mod fog;
+mod library;
 mod lighting;
 mod materials;
-mod post;
+pub(super) mod post;
 
 use super::*;
 use crate::{

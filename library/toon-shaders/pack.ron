@@ -1,0 +1,18 @@
+(
+  id: "toon-shaders",
+  name: "Toon Shading",
+  version: "1.0.0",
+  category: Shaders,
+  description: "Cel shading with banded diffuse, a hard specular blob and a rim light, lit by the sun and the scene's lights. Three ready materials.",
+  tags: ["toon", "cel", "stylised"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "toon-shaders/materials/toon_cream.mat.ron",
+    "toon-shaders/materials/toon_red.mat.ron",
+    "toon-shaders/materials/toon_teal.mat.ron",
+    "toon-shaders/shaders/toon.wgsl",
+  ],
+  notes: "Use `unlit: true` (the shader lights itself, no shadows). roughness sets the highlight size, metallic the rim strength, emissive the rim colour.",
+)

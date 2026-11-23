@@ -1,0 +1,7 @@
+(
+    base_color: (0.75, 0.75, 0.78, 1.0),
+    roughness: 0.5,
+    metallic: 0.3,
+    alpha_cutoff: 0.5,
+    shader: Some("dissolve-shaders/shaders/dissolve_driven.wgsl"),
+)

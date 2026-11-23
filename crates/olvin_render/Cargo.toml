@@ -28,3 +28,7 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 ron.workspace = true
+serde = { workspace = true }
+olvin_scene = { workspace = true, features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "glsl-out"] }

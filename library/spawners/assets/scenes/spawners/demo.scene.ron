@@ -1,0 +1,19 @@
+// Demo: the middle spawner drops a crate every second (4 alive at most, each lives 5 s). The left one waits for the message spawn, the right one runs 2 waves of 3 once it gets start. Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (40.0, 1.0, 40.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Spawner (interval)", position: (0.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/spawners/Spawner.prefab.ron", overrides: {"": {"scripts": r#"[(name:"spawners/spawner",params:{"prefab":"prefabs/spawners/Crate.prefab.ron","mode":"interval","interval":"1.0","max_alive":"4","radius":"3.0","y_offset":"0.5","random_yaw":"true","wave_size":"3","waves":"0","wave_pause":"3.0","autostart":"true","seed":"7"})]"#}}))),
+        (id: 21, name: "Spawner (waves)", position: (10.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/spawners/Spawner.prefab.ron", overrides: {"": {"scripts": r#"[(name:"spawners/spawner",params:{"prefab":"prefabs/spawners/Crate.prefab.ron","mode":"waves","interval":"2.0","max_alive":"3","radius":"3.0","y_offset":"0.5","random_yaw":"true","wave_size":"3","waves":"2","wave_pause":"2.0","autostart":"false","seed":"11"})]"#}}))),
+        (id: 22, name: "Spawner (message)", position: (-10.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/spawners/Spawner.prefab.ron", overrides: {"": {"scripts": r#"[(name:"spawners/spawner",params:{"prefab":"prefabs/spawners/Crate.prefab.ron","mode":"message","interval":"2.0","max_alive":"3","radius":"3.0","y_offset":"0.5","random_yaw":"true","wave_size":"3","waves":"0","wave_pause":"3.0","autostart":"true","seed":"3"})]"#}}))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/fps-controller/Player.prefab.ron"))),
+    ],
+)

@@ -1,0 +1,19 @@
+(
+  id: "spawners",
+  name: "Spawners",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A spawner prefab and script that instantiates a prefab at random points around it: on a timer, on a message or in waves, with a cap on how many are alive. Uses the new ctx:spawn_prefab.",
+  tags: ["spawner", "wave", "prefab", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/spawners/Spawner.prefab.ron",
+    "prefabs/spawners/Crate.prefab.ron",
+    "scripts/spawners/spawner.lua",
+    "scripts/spawners/lifetime.lua",
+    "scenes/spawners/demo.scene.ron",
+  ],
+  notes: "Open scenes/spawners/demo.scene.ron and press Play. Drop Spawner.prefab.ron into a scene and set prefab (any *.prefab.ron under assets/), mode (interval, message, waves), interval, max_alive, radius. Messages it understands: spawn (one now), start, stop, clear; it broadcasts wave_started and waves_done. Add lifetime.lua (seconds) to what it makes so the level does not fill up. It uses ctx:spawn_prefab, which is capped by the engine (16 per frame, 256 alive in total).",
+)

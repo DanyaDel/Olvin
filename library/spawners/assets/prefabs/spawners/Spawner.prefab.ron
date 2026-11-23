@@ -1,0 +1,10 @@
+// Spawner: makes `prefab` at random points within `radius` (spawner.lua): every `interval` seconds, on the message "spawn", or in waves. Never more than max_alive alive.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Spawner", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            scripts: [(name: "spawners/spawner", params: {"prefab": "prefabs/spawners/Crate.prefab.ron", "mode": "interval", "interval": "2.0", "max_alive": "5", "radius": "3.0", "y_offset": "0.5", "random_yaw": "true", "wave_size": "3", "waves": "0", "wave_pause": "3.0", "autostart": "true", "seed": "0"})]),
+        (id: 2, name: "Pad", parent: Some(1), position: (0.0, 0.05, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.2, 0.1, 1.2),
+            mesh: Some((shape: Cylinder, color: (0.2, 0.5, 0.8, 1.0)))),
+    ],
+)

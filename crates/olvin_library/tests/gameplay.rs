@@ -11,7 +11,7 @@ use olvin::core::Events;
 use olvin::input::Input;
 use olvin::prelude::*;
 use olvin::script::lua::{LuaLimits, LuaPlugin};
-use olvin::script::{ScriptMessage, ScriptValue, ScriptVars};
+use olvin::script::{ScriptMessage, ScriptSpawned, ScriptValue, ScriptVars};
 use olvin::window::KeyCode;
 use olvin_library::{ImportOptions, Library};
 
@@ -270,6 +270,18 @@ impl Rig {
             .translation = to;
     }
 
+    /// World position of the moving platform's Body in the arena (the guard has a "Body" too).
+    fn platform_body(&self) -> Vec3 {
+        let root = self.entity("Platform");
+        let world = self.app.resources.fetch::<World>();
+        let found = world
+            .query::<(&Name, &olvin::transform::Parent, &GlobalTransform)>()
+            .iter()
+            .find(|(n, par, _)| n.0 == "Body" && par.0 == root)
+            .map(|(_, _, g)| g.0.w_axis.truncate());
+        found.expect("the platform's Body")
+    }
+
     /// Local transform of the child `child` of the entity `parent`.
     fn child(&self, parent: &str, child: &str) -> Transform {
         let p = self.entity(parent);
@@ -307,10 +319,12 @@ const PACKS: [&str; 4] = [
 fn the_gameplay_packs_are_well_formed() {
     let library = Library::embedded();
     assert!(library.problems().is_empty(), "{:?}", library.problems());
-    for id in PACKS {
+    for id in PACKS.into_iter().chain(["gameplay-demo"]) {
         let pack = library.get(id).unwrap_or_else(|| panic!("no pack {id}"));
         assert_eq!(pack.manifest.category, olvin_library::Category::Gameplay);
-        assert!(pack.headline_prefab().is_some(), "{id}: a headline prefab");
+        if id != "gameplay-demo" {
+            assert!(pack.headline_prefab().is_some(), "{id}: a headline prefab");
+        }
         assert!(pack.demo_scene().is_some(), "{id}: a demo scene");
         assert!(pack.lint().is_empty(), "{id}: {:?}", pack.lint());
         assert!(!pack.manifest.notes.as_deref().unwrap_or("").is_empty());
@@ -759,5 +773,316 @@ fn a_wall_hides_the_player_and_the_enemy_can_be_killed() {
     rig.frames(3);
     assert!(!rig.exists("Guard"));
     assert_eq!(rig.sent("died"), 1);
+    assert_clean_log();
+}
+
+// --- Spawners ----------------------------------------------------------------------
+
+impl Rig {
+    /// Prefab instances scripts made that are alive now.
+    fn spawned(&self) -> usize {
+        let world = self.app.resources.fetch::<World>();
+        world.query::<&ScriptSpawned>().iter().count()
+    }
+}
+
+#[test]
+fn the_interval_spawner_keeps_to_max_alive_and_refills() {
+    let mut rig = rig("spawners", |_| {});
+    let mut peak = 0;
+    let mut seen_after_expiry = false;
+    let mut first = None;
+    for frame in 0..60 * 14 {
+        rig.frames(1);
+        let n = rig.spawned();
+        peak = peak.max(n);
+        assert!(n <= 4, "more than max_alive = 4: {n} at frame {frame}");
+        if n == 4 && first.is_none() {
+            first = Some(frame);
+        }
+        // Crates live 5 s, so by then the earliest are gone and replaced.
+        if frame > 60 * 8 && n == 4 {
+            seen_after_expiry = true;
+        }
+    }
+    assert_eq!(peak, 4, "reaches the cap");
+    assert!(first.unwrap() > 60 * 3, "one per second, not all at once");
+    assert!(seen_after_expiry, "refills as crates expire");
+    // They stand around the spawner (radius 3 at (0, 0, -6)).
+    let world = rig.app.resources.fetch::<World>();
+    for (_, t) in world.query::<(&ScriptSpawned, &GlobalTransform)>().iter() {
+        let p = t.0.w_axis.truncate();
+        assert!(Vec3::new(p.x, 0.0, p.z + 6.0).length() < 4.5, "{p}");
+    }
+    drop(world);
+    assert_clean_log();
+}
+
+#[test]
+fn the_message_spawner_spawns_per_message_up_to_the_cap() {
+    let mut rig = rig("spawners", |_| {});
+    rig.send("stop", ScriptValue::Nil, Some("Spawner (interval)"));
+    rig.send("clear", ScriptValue::Nil, Some("Spawner (interval)"));
+    rig.frames(5);
+    let before = rig.spawned();
+    assert_eq!(before, 0);
+    for _ in 0..10 {
+        rig.send("spawn", ScriptValue::Nil, Some("Spawner (message)"));
+    }
+    rig.frames(10);
+    assert_eq!(rig.spawned(), 3, "max_alive = 3");
+    // A free slot after the crates expire (5 s).
+    rig.frames(60 * 6);
+    assert_eq!(rig.spawned(), 0);
+    rig.send("spawn", ScriptValue::Nil, Some("Spawner (message)"));
+    rig.frames(5);
+    assert_eq!(rig.spawned(), 1);
+    assert_clean_log();
+}
+
+#[test]
+fn the_wave_spawner_runs_its_waves_and_announces_the_end() {
+    let mut rig = rig("spawners", |_| {});
+    rig.send("stop", ScriptValue::Nil, Some("Spawner (interval)"));
+    rig.send("clear", ScriptValue::Nil, Some("Spawner (interval)"));
+    rig.frames(5);
+    rig.send("start", ScriptValue::Nil, Some("Spawner (waves)"));
+    rig.frames(10);
+    assert_eq!(rig.spawned(), 3, "a wave of three at once");
+    assert_eq!(rig.sent("wave_started"), 1);
+    // Crates live 5 s; 2 s pause; the second wave.
+    assert!(
+        rig.until(60 * 12, |r| r.sent("wave_started") == 2),
+        "second wave"
+    );
+    rig.frames(10);
+    assert_eq!(rig.spawned(), 3);
+    assert!(
+        rig.until(60 * 12, |r| r.sent("waves_done") == 1),
+        "done after the last crate is gone"
+    );
+    rig.frames(60 * 8);
+    assert_eq!(rig.sent("wave_started"), 2, "no third wave");
+    assert_eq!(rig.spawned(), 0);
+    assert_clean_log();
+}
+
+// --- Camera effects ------------------------------------------------------------------
+
+#[test]
+fn camera_shake_moves_the_camera_and_decays_to_exactly_the_rest_position() {
+    let mut rig = rig("camera-effects", |_| {});
+    let rest = rig.pos("Camera");
+    rig.frames(10);
+    assert!((rig.pos("Camera") - rest).length() < 1e-4, "no shake yet");
+    rig.send("shake", 1.0, Some("Camera"));
+    let mut peak = 0.0f32;
+    let mut late_peak = 0.0f32;
+    for i in 0..60 {
+        rig.frames(1);
+        let off = (rig.pos("Camera") - rest).length();
+        peak = peak.max(off);
+        if i > 25 {
+            late_peak = late_peak.max(off);
+        }
+    }
+    assert!(
+        peak > 0.02 && peak <= 0.22,
+        "shakes by up to max_offset 0.15: {peak}"
+    );
+    assert!(late_peak < peak * 0.5, "dying down: {late_peak} vs {peak}");
+    // 0.6 s at full trauma: well over by now.
+    rig.frames(20);
+    assert!(
+        (rig.pos("Camera") - rest).length() < 1e-4,
+        "back at rest: {}",
+        rig.pos("Camera")
+    );
+    // The strength is clamped and a vector message sets the duration.
+    rig.send("shake", Vec3::new(0.5, 2.0, 0.0), Some("Camera"));
+    let mut slow = 0.0f32;
+    for _ in 0..30 {
+        rig.frames(1);
+        slow = slow.max((rig.pos("Camera") - rest).length());
+    }
+    assert!(slow > 0.003, "a slower shake still shakes: {slow}");
+    rig.frames(150);
+    assert!((rig.pos("Camera") - rest).length() < 1e-4);
+    assert_clean_log();
+}
+
+#[test]
+fn the_trigger_zone_sends_its_message_to_the_camera() {
+    let mut rig = rig("camera-effects", |_| {});
+    let rest = rig.pos("Camera");
+    assert_eq!(rig.sent("shake"), 0);
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -4.0));
+    let mut moved = 0.0f32;
+    for _ in 0..30 {
+        rig.frames(1);
+        moved = moved.max((rig.pos("Camera") - rest).length());
+    }
+    assert_eq!(rig.sent("shake"), 1);
+    let shake = rig.log.iter().find(|m| m.0 == "shake").unwrap();
+    assert_eq!(shake.1, ScriptValue::Number(0.8));
+    assert_eq!(shake.2.as_deref(), Some("Shake Zone"));
+    assert!(moved > 0.01, "the camera shook: {moved}");
+    assert_clean_log();
+}
+
+#[test]
+fn the_follower_trails_the_player_and_the_turret_faces_it() {
+    let mut rig = rig("camera-effects", |_| {});
+    rig.frames(240);
+    let player = rig.world_pos("Player");
+    let ball = rig.world_pos("Follower");
+    assert!(
+        (ball - (player + Vec3::new(2.0, 1.5, 2.0))).length() < 0.1,
+        "settled beside the player: {ball} vs {player}"
+    );
+    // The player jumps far away: the ball lags, then arrives.
+    rig.teleport("Player", Vec3::new(10.0, 1.0, -10.0));
+    rig.frames(10);
+    let lag =
+        (rig.world_pos("Follower") - (rig.world_pos("Player") + Vec3::new(2.0, 1.5, 2.0))).length();
+    assert!(lag > 5.0, "not instant: {lag}");
+    rig.frames(300);
+    let lag =
+        (rig.world_pos("Follower") - (rig.world_pos("Player") + Vec3::new(2.0, 1.5, 2.0))).length();
+    assert!(lag < 0.1, "arrived: {lag}");
+
+    // The turret head looks at the player, wherever it is.
+    for to in [Vec3::new(0.0, 1.0, 6.0), Vec3::new(10.0, 1.0, -10.0)] {
+        rig.teleport("Player", to);
+        rig.frames(120);
+        let head = rig.child("Turret", "Turret Head");
+        let at = rig.world_pos("Turret Head");
+        let want = (rig.world_pos("Player") - at).normalize();
+        let forward = head.rotation * Vec3::NEG_Z;
+        assert!(forward.dot(want) > 0.99, "facing {forward}, want {want}");
+    }
+    assert_clean_log();
+}
+
+// --- The combined arena -----------------------------------------------------------------
+
+#[test]
+fn the_arena_starts_with_every_system_running() {
+    let rig = rig("gameplay-demo", |_| {});
+    assert_eq!(rig.num("health"), 100.0);
+    assert_eq!(
+        rig.var("checkpoint"),
+        Some(ScriptValue::Str("Checkpoint Start".into()))
+    );
+    assert!(rig.exists("Guard") && rig.exists("Platform") && rig.exists("Door"));
+    assert!(rig.grounded("Player"));
+    assert_clean_log();
+}
+
+#[test]
+fn the_arena_pickups_door_and_key_work_together() {
+    let mut rig = rig("gameplay-demo", |_| {});
+    // Coins add to the score; the health pack heals what the lava took.
+    rig.teleport("Player", Vec3::new(-4.0, 1.0, 8.0));
+    rig.frames(20);
+    assert_eq!(rig.num("score"), 1.0);
+    rig.send("damage", 50.0, Some("Player"));
+    rig.frames(5);
+    assert_eq!(rig.num("health"), 50.0);
+    rig.teleport("Player", Vec3::new(-6.0, 1.0, 10.0));
+    rig.frames(10);
+    assert_eq!(rig.num("health"), 75.0);
+    // The vault door stays shut without the key.
+    let closed = rig.child("Door", "Hinge").translation;
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -34.0));
+    rig.frames(90);
+    assert_eq!(rig.child("Door", "Hinge").translation, closed);
+    assert!(rig.sent("door_locked") >= 1);
+    // Take the key, come back: it opens.
+    rig.teleport("Player", Vec3::new(10.0, 1.0, -4.0));
+    rig.frames(10);
+    assert_eq!(rig.var("key_gold"), Some(ScriptValue::Bool(true)));
+    rig.teleport("Player", Vec3::new(0.0, 1.0, 10.0));
+    rig.frames(10);
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -34.0));
+    rig.frames(90);
+    assert!(
+        rig.child("Door", "Hinge").translation.x - closed.x > 2.0,
+        "open"
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn dying_sends_you_back_to_the_last_checkpoint() {
+    let mut rig = rig("gameplay-demo", |_| {});
+    rig.teleport("Player", Vec3::new(0.0, 1.0, -26.0));
+    rig.frames(20);
+    assert_eq!(
+        rig.var("checkpoint"),
+        Some(ScriptValue::Str("Checkpoint Far".into()))
+    );
+    rig.teleport("Player", Vec3::new(10.0, 1.0, -34.0));
+    rig.frames(20);
+    rig.send("damage", 500.0, Some("Player"));
+    rig.frames(5);
+    assert_eq!(rig.num("health"), 0.0);
+    assert_eq!(rig.sent("died"), 1);
+    // respawn_delay 2 s: full health and back at the far checkpoint.
+    assert!(rig.until(60 * 4, |r| r.sent("respawned") > 0), "respawned");
+    rig.frames(30);
+    assert_eq!(rig.num("health"), 100.0);
+    let p = rig.pos("Player");
+    assert!(p.distance(Vec3::new(0.0, 0.92, -26.0)) < 0.4, "{p}");
+    assert_clean_log();
+}
+
+#[test]
+fn falling_into_the_pit_respawns_and_the_platform_gives_a_ride() {
+    let mut rig = rig("gameplay-demo", |_| {});
+    rig.teleport("Player", Vec3::new(8.0, 1.0, -14.0));
+    assert!(
+        rig.until(300, |r| r.sent("respawned") > 0),
+        "the kill plane respawns"
+    );
+    rig.frames(60);
+    assert!(rig.pos("Player").distance(Vec3::new(0.0, 0.92, 14.0)) < 0.4);
+    // Step on the platform at its near end, ride it across.
+    let body = rig.platform_body();
+    rig.teleport("Player", Vec3::new(0.0, 1.0, body.z));
+    rig.frames(20);
+    assert!(
+        rig.until(60 * 16, |r| r.platform_body().z < -19.9),
+        "arrives"
+    );
+    let (p, b) = (rig.pos("Player"), rig.platform_body());
+    assert!(
+        p.y > 0.5 && (p.z - b.z).abs() < 1.8,
+        "player {p} platform {b}"
+    );
+    assert_clean_log();
+}
+
+#[test]
+fn the_guard_hurts_the_spawner_fills_and_damage_shakes_the_camera() {
+    let mut rig = rig("gameplay-demo", |_| {});
+    let rest = rig.pos("Camera");
+    rig.teleport("Player", Vec3::new(0.0, 1.0, 2.0));
+    assert!(
+        rig.until(60 * 8, |r| r.num("health") < 100.0),
+        "the guard hits"
+    );
+    assert!(rig.sent("enemy_alert") >= 1);
+    let mut moved = 0.0f32;
+    for _ in 0..30 {
+        rig.frames(1);
+        moved = moved.max((rig.pos("Camera") - rest).length());
+    }
+    assert!(moved > 0.005, "damage shook the camera: {moved}");
+    // Far from the guard the spawner on the far slab fills up to its cap.
+    rig.teleport("Player", Vec3::new(0.0, 1.0, 14.0));
+    rig.frames(60 * 8);
+    let crates = rig.spawned();
+    assert!((1..=3).contains(&crates), "{crates} crates");
     assert_clean_log();
 }

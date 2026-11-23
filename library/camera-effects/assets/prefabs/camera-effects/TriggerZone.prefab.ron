@@ -1,0 +1,11 @@
+// Trigger zone: sends a message when the player enters or leaves (trigger_zone.lua). Set on_enter / on_exit, their values and target in the Inspector.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "TriggerZone", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (3.0, 3.0, 3.0)), center: (0.0, 1.5, 0.0), is_trigger: true, friction: 0.8, restitution: 0.0)),
+            scripts: [(name: "camera-effects/trigger_zone", params: {"filter": "Player", "on_enter": "", "on_enter_value": "", "on_exit": "", "on_exit_value": "", "target": "", "once": "false"})]),
+        (id: 2, name: "Marker", parent: Some(1), position: (0.0, 0.03, 0.0), rotation: (0.0, 0.0, 0.0), scale: (3.0, 0.06, 3.0),
+            mesh: Some((shape: Cube, color: (0.9, 0.6, 0.1, 1.0)))),
+    ],
+)

@@ -1,0 +1,22 @@
+(
+  id: "camera-effects",
+  name: "Camera Effects",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "Camera shake driven by messages, a smooth follow, a look-at-target script, and a reusable trigger zone that sends configurable messages when something enters or leaves.",
+  tags: ["camera", "shake", "follow", "trigger", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/camera-effects/TriggerZone.prefab.ron",
+    "prefabs/camera-effects/Turret.prefab.ron",
+    "prefabs/camera-effects/Follower.prefab.ron",
+    "scripts/camera-effects/camera_shake.lua",
+    "scripts/camera-effects/smooth_follow.lua",
+    "scripts/camera-effects/look_at_target.lua",
+    "scripts/camera-effects/trigger_zone.lua",
+    "scenes/camera-effects/demo.scene.ron",
+  ],
+  notes: "Open scenes/camera-effects/demo.scene.ron and press Play, then step on the yellow square. camera_shake.lua goes on the camera: send shake (value 0..1, or a vector strength,seconds,0) to it, or set listen to a message such as damaged. smooth_follow.lua and look_at_target.lua take a target entity name. trigger_zone.lua is glue for every pack: on_enter / on_exit message names, a value (number, true/false, \"x,y,z\" or text) and an optional target entity name, for example on_enter shake with value 0.8 and target Camera.",
+)

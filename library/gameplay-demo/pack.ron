@@ -1,0 +1,15 @@
+(
+  id: "gameplay-demo",
+  name: "Gameplay Demo Arena",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A small arena that uses every gameplay pack together with the first-person controller: doors, pickups, health and hazards, checkpoints, a moving platform, an enemy, a spawner and camera shake.",
+  tags: ["demo", "arena", "gameplay", "level"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller", "interactive-door", "pickups", "health-damage", "checkpoints", "moving-platforms", "enemy-ai", "spawners", "camera-effects"],
+  provides: [
+    "scenes/gameplay-demo/demo.scene.ron",
+  ],
+  notes: "Open scenes/gameplay-demo/demo.scene.ron and press Play. Collect coins and the key (east side, z = -4), mind the lava and the guard, ride the platform over the pit (it waits 3 s at each end), use the key on the vault door and take the treasure behind it. Falling or dying returns you to the last checkpoint. Everything is a prefab from the other packs: pull them apart and build your own level. See library/README.md (Gameplay packs) for the message and variable conventions.",
+)

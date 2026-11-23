@@ -1,0 +1,19 @@
+// Demo: step on the yellow square and the camera shakes (camera_shake.lua on the player's camera, started by a trigger zone). The turret on the left follows you with its head, the blue ball trails you. Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (40.0, 1.0, 40.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Shake Zone", position: (0.0, 0.0, -4.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/camera-effects/TriggerZone.prefab.ron", overrides: {"": {"scripts": r#"[(name:"camera-effects/trigger_zone",params:{"filter":"Player","on_enter":"shake","on_enter_value":"0.8","on_exit":"","on_exit_value":"","target":"Camera","once":"false"})]"#}}))),
+        (id: 21, name: "Turret", position: (-6.0, 0.0, -6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/camera-effects/Turret.prefab.ron"))),
+        (id: 22, name: "Follower", position: (3.0, 2.0, 5.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/camera-effects/Follower.prefab.ron"))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/fps-controller/Player.prefab.ron", overrides: {"2": {"scripts": r#"[(name:"camera-effects/camera_shake",params:{"max_offset":"0.15","duration":"0.6","frequency":"28.0","listen":"","listen_strength":"0.4"})]"#}}))),
+    ],
+)

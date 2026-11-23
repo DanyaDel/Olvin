@@ -90,6 +90,8 @@ impl ImageData {
     }
 
     fn to_dynamic(&self) -> DynamicImage {
+        // invariant: `pixels` is always `width * height` RGBA texels in the
+        // `format` (every constructor fills it from a decoded image).
         match self.format {
             ImageFormat::Rgba32Float => DynamicImage::ImageRgba32F(
                 image::Rgba32FImage::from_raw(self.width, self.height, self.floats())

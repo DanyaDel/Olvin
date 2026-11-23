@@ -102,8 +102,10 @@ impl EditorInstall {
             .filter(|m| ids.contains(&m.id))
             .collect();
 
-        let mut doc: DocumentMut = CARGO_TOML.parse().expect("template is valid TOML");
-        let deps = doc["dependencies"].as_table_mut().unwrap();
+        let mut doc: DocumentMut = CARGO_TOML.parse()?;
+        let deps = doc["dependencies"]
+            .as_table_mut()
+            .context("the editor template has no [dependencies] table")?;
         deps.insert(
             "olvin_editor",
             Item::Value(Value::InlineTable(

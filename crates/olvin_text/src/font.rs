@@ -68,6 +68,7 @@ impl Font {
     pub fn builtin() -> Font {
         static FONT: OnceLock<Font> = OnceLock::new();
         FONT.get_or_init(|| {
+            // invariant: `BUILTIN` is the font embedded in the binary.
             Self::wrap(FontArc::try_from_slice(BUILTIN).expect("built-in font is valid"))
         })
         .clone()

@@ -69,7 +69,9 @@ const CREATE: [(&str, Create); 4] = [
 
 fn spawn(state: &mut EditorState, parent: Option<u64>, name: &str, poly: PolyMesh) -> u64 {
     let id = state.create(NewEntity::Empty, parent);
-    let e = state.scene.get_mut(id).unwrap();
+    let Some(e) = state.scene.get_mut(id) else {
+        return id;
+    };
     e.name = name.to_owned();
     e.position = Vec3::new(0.0, 1.0, 0.0);
     e.mesh = Some(MeshDesc {

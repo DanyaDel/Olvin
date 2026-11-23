@@ -298,8 +298,9 @@ impl LayerState {
                 fade.time = advance(next, params, clips, fade.time, dt, events);
             }
             fade.elapsed += dt;
-            if fade.elapsed >= fade.duration {
-                let f = self.fade.take().unwrap();
+            if fade.elapsed >= fade.duration
+                && let Some(f) = self.fade.take()
+            {
                 self.current = f.to;
                 self.time = f.time;
             }

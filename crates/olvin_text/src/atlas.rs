@@ -87,6 +87,8 @@ impl GlyphAtlas {
         self.coverage.resize((self.width * self.height) as usize, 0);
         self.shelves.clear();
         self.glyphs.clear();
+        // invariant: the atlas is much larger than the white block and was
+        // just emptied, so the first allocation always fits.
         let [x, y, ..] = self
             .allocate(WHITE, WHITE)
             .expect("atlas fits its white block");

@@ -104,10 +104,13 @@ impl Project {
             fs::write(root.join(file), content)?;
         }
         let mut doc: DocumentMut = template::cargo_toml(name).parse()?;
-        doc["dependencies"].as_table_like_mut().unwrap().insert(
-            "olvin",
-            Item::Value(Value::InlineTable(engine.dependency())),
-        );
+        doc["dependencies"]
+            .as_table_like_mut()
+            .context("the project template has no [dependencies] table")?
+            .insert(
+                "olvin",
+                Item::Value(Value::InlineTable(engine.dependency())),
+            );
         let mut project = Self {
             root: root.to_path_buf(),
             doc,
@@ -301,11 +304,17 @@ impl Project {
     }
 
     fn deps_mut(&mut self) -> &mut dyn TableLike {
-        if self.doc.get("dependencies").is_none() {
+        // A hand-edited `dependencies = 5` is not a table: start a fresh one.
+        if !self
+            .doc
+            .get("dependencies")
+            .is_some_and(Item::is_table_like)
+        {
             self.doc["dependencies"] = toml_edit::table();
         }
         self.doc["dependencies"]
             .as_table_like_mut()
+            // invariant: made a table just above.
             .expect("[dependencies] is a table")
     }
 

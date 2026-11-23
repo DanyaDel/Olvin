@@ -512,7 +512,9 @@ fn create_brush(
     };
 
     let id = state.create(NewEntity::Empty, None);
-    let e = state.scene.get_mut(id).unwrap();
+    let Some(e) = state.scene.get_mut(id) else {
+        return;
+    };
     e.name = format!(
         "{} ({})",
         shape.label(),

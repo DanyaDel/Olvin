@@ -26,11 +26,12 @@ impl Panel for ModelingPanel {
                         }
                     }
                 }
-                if !has_mesh && state.selection.is_some() && ui.button("Make Editable").clicked() {
-                    let id = state.selection.unwrap();
-                    if let Err(e) = make_editable(state, id) {
-                        state.warn(e);
-                    }
+                if !has_mesh
+                    && let Some(id) = state.selection
+                    && ui.button("Make Editable").clicked()
+                    && let Err(e) = make_editable(state, id)
+                {
+                    state.warn(e);
                 }
             });
             ui.add_space(6.0);

@@ -1,0 +1,16 @@
+# Allowed non-test `.unwrap()` / `.expect(` per crate (checked by
+# tools/check_unwrap.py in CI, issue #56). Every remaining call has either an
+# `// invariant: ...` comment or a message that says why it cannot fail.
+# Lower a number when you remove a call; raising one needs a reason in review.
+# A crate that is not listed has an allowance of 0.
+[crates]
+olvin_assets = 3
+olvin_core = 4
+olvin_editor = 1
+olvin_hub = 2
+olvin_hub_gui = 1
+olvin_input = 1
+olvin_render = 4
+olvin_script = 1
+olvin_text = 2
+olvin_window = 1

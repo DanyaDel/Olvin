@@ -33,6 +33,7 @@ impl ScriptSchema {
     }
 
     pub fn to_ron(&self) -> String {
+        // invariant: plain data (strings, numbers, vectors) always serializes.
         ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
             .expect("schemas always serialize")
     }

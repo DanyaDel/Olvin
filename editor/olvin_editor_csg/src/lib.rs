@@ -120,7 +120,9 @@ pub(crate) fn default_brush(shape: BrushShape) -> BrushDesc {
 
 fn spawn(state: &mut EditorState, parent: Option<u64>, shape: BrushShape) -> u64 {
     let id = state.create(olvin_editor::NewEntity::Empty, parent);
-    let e = state.scene.get_mut(id).unwrap();
+    let Some(e) = state.scene.get_mut(id) else {
+        return id;
+    };
     e.name = shape.label().to_owned();
     e.scale = Vec3::splat(2.0);
     e.position = Vec3::new(0.0, 1.0, 0.0);
@@ -131,7 +133,9 @@ fn spawn(state: &mut EditorState, parent: Option<u64>, shape: BrushShape) -> u64
 /// A box with a subtractive child inside: walls, floor and ceiling at once.
 fn spawn_room(state: &mut EditorState, parent: Option<u64>) -> u64 {
     let id = spawn(state, parent, BrushShape::Box);
-    let e = state.scene.get_mut(id).unwrap();
+    let Some(e) = state.scene.get_mut(id) else {
+        return id;
+    };
     e.name = "Room".into();
     e.scale = Vec3::new(8.0, 4.0, 8.0);
     e.position = Vec3::new(0.0, 2.0, 0.0);
@@ -148,7 +152,7 @@ pub(crate) fn hollow(state: &mut EditorState, id: u64) -> Option<u64> {
     let color = state.scene.get(id)?.brush.as_ref()?.color;
     let inner = (scale - Vec3::splat(2.0 * wall)).max(Vec3::splat(0.01)) / scale;
     let child = state.create(olvin_editor::NewEntity::Empty, Some(id));
-    let e = state.scene.get_mut(child).unwrap();
+    let e = state.scene.get_mut(child)?;
     e.name = "Hollow".into();
     e.scale = inner;
     e.brush = Some(BrushDesc {

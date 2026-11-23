@@ -295,6 +295,8 @@ impl AssetManager {
                             }
                         }
                     })
+                    // invariant: the pool is built once at startup; with no
+                    // threads to spawn there is nothing to load with.
                     .expect("spawn asset loader thread")
             })
             .collect();

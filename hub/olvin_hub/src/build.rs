@@ -152,7 +152,14 @@ impl Project {
             .context("could not start cargo")?;
         let manifest = manifest.canonicalize().unwrap_or(manifest);
         let mut exe = None;
-        for line in BufReader::new(child.stdout.take().expect("stdout is piped")).lines() {
+        for line in BufReader::new(
+            child
+                .stdout
+                .take()
+                .context("cargo stdout is not captured")?,
+        )
+        .lines()
+        {
             if let Some(path) = artifact_of(&line?, &manifest) {
                 exe = Some(path);
             }

@@ -106,6 +106,19 @@ fn ensure_manager(res: &mut Resources) -> bool {
     }
 }
 
+/// A model whose state is `Ready`; the asset is there, but if it somehow is
+/// not, waiting one more frame beats a panic.
+fn ready(
+    manager: &AssetManager,
+    model: &Handle<ModelData>,
+    graph: Option<std::sync::Arc<AnimGraphDesc>>,
+) -> Outcome {
+    match manager.get(model) {
+        Some(data) => Outcome::Ready(data, graph),
+        None => Outcome::Wait,
+    }
+}
+
 enum Outcome {
     Wait,
     Ready(
@@ -144,19 +157,23 @@ fn build_pending(res: &mut Resources) {
         let mut world = res.fetch_mut::<World>();
         for (e, p) in world.query_mut::<(Entity, &mut PendingModel)>() {
             start(&mut manager, p);
-            let model = p.model.as_ref().expect("started");
-            let outcome = match (manager.state(model), &p.graph) {
-                (LoadState::Failed(err), _) => Outcome::Failed(err),
-                (LoadState::Loading, _) => Outcome::Wait,
-                (LoadState::Ready, None) => Outcome::Ready(manager.get(model).unwrap(), None),
-                (LoadState::Ready, Some(g)) => match manager.state(g) {
-                    LoadState::Loading => Outcome::Wait,
-                    LoadState::Ready => Outcome::Ready(manager.get(model).unwrap(), manager.get(g)),
-                    // A broken graph leaves the model in its rest pose.
-                    LoadState::Failed(err) => {
-                        log::warn!("{}: {err}", g.path());
-                        Outcome::Ready(manager.get(model).unwrap(), None)
-                    }
+            let Some(model) = p.model.as_ref() else {
+                continue;
+            };
+            let outcome = match manager.state(model) {
+                LoadState::Failed(err) => Outcome::Failed(err),
+                LoadState::Loading => Outcome::Wait,
+                LoadState::Ready => match &p.graph {
+                    None => ready(&manager, model, None),
+                    Some(g) => match manager.state(g) {
+                        LoadState::Loading => Outcome::Wait,
+                        LoadState::Ready => ready(&manager, model, manager.get(g)),
+                        // A broken graph leaves the model in its rest pose.
+                        LoadState::Failed(err) => {
+                            log::warn!("{}: {err}", g.path());
+                            ready(&manager, model, None)
+                        }
+                    },
                 },
             };
             if !matches!(outcome, Outcome::Wait) {
@@ -170,7 +187,9 @@ fn build_pending(res: &mut Resources) {
         };
         match outcome {
             Outcome::Ready(model, graph) => {
-                let handle = p.model.clone().expect("started");
+                let Some(handle) = p.model.clone() else {
+                    continue;
+                };
                 if let Err(err) = instantiate(res, e, &p, handle, &model, graph.as_deref()) {
                     log::error!("{}: {err}", p.desc.path);
                 }

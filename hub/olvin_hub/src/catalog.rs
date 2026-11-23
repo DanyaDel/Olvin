@@ -60,6 +60,7 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn builtin() -> Self {
+        // invariant: `catalog.toml` ships in the crate; a unit test parses it.
         Self::parse(include_str!("../catalog.toml")).expect("built-in catalog is valid")
     }
 

@@ -257,14 +257,14 @@ pub fn make_editable(state: &mut EditorState, id: u64) -> Result<(), String> {
     let name = e.name.clone();
     if e.brush.is_some() {
         let poly = brush_cage(e).ok_or("empty brush")?;
-        state.scene.get_mut(id).unwrap().poly = Some(poly);
+        state.scene.get_mut(id).ok_or("nothing selected")?.poly = Some(poly);
         return Ok(());
     }
     let Some(mesh) = &e.mesh else {
         return Err("only meshes and CSG brushes can be edited".into());
     };
     let (poly, color) = (from_shape(mesh.shape), mesh.color);
-    let e = state.scene.get_mut(id).unwrap();
+    let e = state.scene.get_mut(id).ok_or("nothing selected")?;
     e.mesh = Some(MeshDesc {
         shape: Shape::Cube,
         color,
@@ -306,7 +306,9 @@ pub fn detach_brush(state: &mut EditorState, id: u64) {
     let Some(poly) = e.poly.clone().or_else(|| brush_cage(e)) else {
         return;
     };
-    let e = state.scene.get_mut(id).unwrap();
+    let Some(e) = state.scene.get_mut(id) else {
+        return;
+    };
     e.brush = None;
     e.poly = Some(poly);
     e.mesh = Some(MeshDesc {

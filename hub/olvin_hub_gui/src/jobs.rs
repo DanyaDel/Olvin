@@ -4,7 +4,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use eframe::egui;
@@ -116,11 +116,16 @@ impl Hub {
                     .spawn()
                     .context("could not start cargo")?;
                 let log = Arc::new(Mutex::new(Vec::new()));
-                let stderr = child.stderr.take().expect("stderr is piped");
+                let stderr = child
+                    .stderr
+                    .take()
+                    .context("cargo stderr is not captured")?;
                 let sink = log.clone();
                 std::thread::spawn(move || {
                     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        sink.lock().unwrap().push(line);
+                        sink.lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push(line);
                     }
                 });
                 Ok(Build { child, log })
@@ -178,7 +183,11 @@ impl Hub {
             }
         }
         if let Some(build) = &mut self.build {
-            self.build_log = build.log.lock().unwrap().clone();
+            self.build_log = build
+                .log
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
             if let Ok(Some(status)) = build.child.try_wait() {
                 self.build = None;
                 if status.success() {

@@ -38,6 +38,7 @@ fn window_icon() -> egui::IconData {
         env!("CARGO_MANIFEST_DIR"),
         "/../../assets/logo/png/olvin-icon-256.png"
     ));
+    // invariant: PNG is embedded at build time from a checked-in file.
     eframe::icon_data::from_png_bytes(PNG).expect("olvin-icon-256.png is not a valid PNG")
 }
 

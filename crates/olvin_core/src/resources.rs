@@ -17,6 +17,7 @@ impl Resources {
         self.map
             .insert(TypeId::of::<T>(), RefCell::new(Box::new(value)))
             .map(|old| {
+                // invariant: the map is keyed by `TypeId::of::<T>()`.
                 *old.into_inner()
                     .downcast::<T>()
                     .expect("resource type mismatch")
@@ -25,6 +26,7 @@ impl Resources {
 
     pub fn remove<T: 'static>(&mut self) -> Option<T> {
         self.map.remove(&TypeId::of::<T>()).map(|old| {
+            // invariant: the map is keyed by `TypeId::of::<T>()`.
             *old.into_inner()
                 .downcast::<T>()
                 .expect("resource type mismatch")
@@ -37,12 +39,14 @@ impl Resources {
 
     pub fn get<T: 'static>(&self) -> Option<Ref<'_, T>> {
         let cell = self.map.get(&TypeId::of::<T>())?;
+        // invariant: the map is keyed by `TypeId::of::<T>()`.
         Some(Ref::map(cell.borrow(), |b| b.downcast_ref::<T>().unwrap()))
     }
 
     pub fn get_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         let cell = self.map.get(&TypeId::of::<T>())?;
         Some(RefMut::map(cell.borrow_mut(), |b| {
+            // invariant: the map is keyed by `TypeId::of::<T>()`.
             b.downcast_mut::<T>().unwrap()
         }))
     }

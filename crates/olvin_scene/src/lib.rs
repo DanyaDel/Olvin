@@ -14,6 +14,8 @@ pub mod particles;
 #[cfg(feature = "serde")]
 pub mod prefab;
 pub mod primitives;
+#[cfg(feature = "serde")]
+pub mod retro;
 
 use glam::camera::rh::{proj::directx, view};
 use glam::{Mat4, Quat, Vec3};

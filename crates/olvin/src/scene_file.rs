@@ -531,6 +531,7 @@ pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
         falloff: f.falloff,
         height: f.height,
     });
+    settings.retro = env.retro.map_or_else(Default::default, retro_settings);
     settings.shadow_distance = env.shadow_distance;
     settings.shadow_map_size = env.shadow_resolution.clamp(256, 8192);
     settings.shadow_filter = match env.shadow_filter {
@@ -543,6 +544,28 @@ pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
     settings.max_spot_shadows = env.max_spot_shadows.min(4);
     settings.max_point_shadows = env.max_point_shadows.min(2);
     settings.local_shadow_size = env.local_shadow_resolution.clamp(512, 8192);
+}
+
+/// The renderer's retro settings for a scene's retro block (on).
+pub fn retro_settings(d: olvin_scene::file::RetroDesc) -> olvin_render::RetroSettings {
+    olvin_render::RetroSettings {
+        enabled: true,
+        snap_resolution: d.snap_resolution,
+        snap_grid_m: d.snap_grid_m.max(0.0),
+        affine_strength: d.affine_strength.clamp(0.0, 1.0),
+        affine_fade_near: d.affine_fade_near.max(0.0),
+        color_bits: d.color_bits,
+        dither_strength: d.dither_strength.clamp(0.0, 2.0),
+        vertex_lighting: d.vertex_lighting,
+        shadows: d.shadows,
+        draw_distance: d.draw_distance.max(0.0),
+        dissolve: d.dissolve,
+        cull_small_px: d.cull_small_px.max(0.0),
+        force_nearest: d.force_nearest,
+        internal_resolution: d.internal_resolution,
+        pixel_scale: d.pixel_scale,
+        letterbox: d.letterbox,
+    }
 }
 
 /// The renderer's light for a scene light.

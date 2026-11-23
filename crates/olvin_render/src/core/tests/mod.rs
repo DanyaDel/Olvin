@@ -7,7 +7,9 @@ mod fog;
 mod library;
 mod lighting;
 mod materials;
+mod perf;
 pub(super) mod post;
+mod retro;
 mod skin;
 
 use super::*;

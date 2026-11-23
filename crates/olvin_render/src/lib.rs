@@ -15,6 +15,7 @@ mod pipelines;
 mod post;
 mod quad;
 mod renderer;
+mod retro;
 mod shader;
 mod skinning;
 mod sprite;
@@ -42,6 +43,7 @@ pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{
     RenderInfo, RenderStats, RenderTier, Renderer, begin_pass, begin_scene_pass, tier_of,
 };
+pub use retro::RetroSettings;
 pub use shader::{DEFAULT_SURFACE_SHADER, ShaderHandle, Shaders, validate_surface_shader};
 pub use skinning::{SkinnedMesh, skin_meshes};
 pub use sprite::{
@@ -255,6 +257,8 @@ pub struct RenderSettings {
     pub local_shadow_size: u32,
     /// Use `Light` components; off = only the fallback sun (editor's Solid view).
     pub scene_lights: bool,
+    /// The retro (PS1) look; materials can opt in or out one by one.
+    pub retro: RetroSettings,
 }
 
 impl Default for RenderSettings {
@@ -285,6 +289,7 @@ impl Default for RenderSettings {
             max_point_shadows: 2,
             local_shadow_size: 2048,
             scene_lights: true,
+            retro: RetroSettings::default(),
         }
     }
 }

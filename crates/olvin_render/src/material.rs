@@ -50,6 +50,8 @@ pub struct Material {
     pub unlit: bool,
     /// Custom surface shader, see `SURFACE_SHADER_CONTRACT`.
     pub shader: Option<ShaderHandle>,
+    /// The retro look for this material: `None` follows `RetroSettings::enabled`.
+    pub retro: Option<bool>,
 }
 
 impl Default for Material {
@@ -73,6 +75,7 @@ impl Default for Material {
             blend: BlendMode::Opaque,
             unlit: false,
             shader: None,
+            retro: None,
         }
     }
 }
@@ -118,7 +121,8 @@ impl Material {
                 flag(self.unlit),
                 flag(self.triplanar),
                 flag(self.normal_texture.is_some()),
-                0.0,
+                // 0 follows the settings, 1 retro on, 2 retro off.
+                self.retro.map_or(0.0, |on| if on { 1.0 } else { 2.0 }),
             ],
         }
     }
@@ -135,7 +139,7 @@ pub(crate) struct MaterialUniform {
     params: [f32; 4],
     /// scale xy, offset xy.
     uv: [f32; 4],
-    /// unlit, triplanar, has normal map, -.
+    /// unlit, triplanar, has normal map, retro (0 inherit, 1 on, 2 off).
     flags: [f32; 4],
 }
 

@@ -101,6 +101,7 @@ impl RenderCore {
             &[],
             &material_uniform(&device, &fallback),
             &fallback,
+            false,
         );
         Self {
             fallback_material,
@@ -188,6 +189,8 @@ impl RenderCore {
             local_tile: 1,
             sky_bound: None,
             sky_active: false,
+            retro_nearest: false,
+            retro_global: false,
         }
     }
 

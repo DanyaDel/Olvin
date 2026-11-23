@@ -301,6 +301,7 @@ impl RenderAssets {
             uv_offset: d.uv_offset,
             triplanar: d.triplanar,
             point_filter: d.point_filter,
+            retro: d.retro,
             alpha_cutoff: d.alpha_cutoff,
             blend: if d.alpha_blend {
                 olvin_render::BlendMode::Alpha

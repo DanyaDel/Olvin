@@ -41,5 +41,5 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
             color += globals.sun_color.rgb * (disc * 20.0 + glow);
         }
     }
-    return vec4<f32>(finish(color), 1.0);
+    return vec4<f32>(finish(color, in.clip.xy, globals.retro_a.x > 0.5), 1.0);
 }

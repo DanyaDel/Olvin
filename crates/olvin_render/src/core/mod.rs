@@ -64,6 +64,9 @@ pub(crate) struct Globals {
     sky_params: [f32; 4],
     height_fog_color: [f32; 4],
     height_fog: [f32; 4],
+    retro_a: [f32; 4],
+    retro_b: [f32; 4],
+    retro_c: [f32; 4],
     lights: [PackedLight; MAX_LIGHTS],
 }
 
@@ -93,6 +96,8 @@ struct GpuMaterial {
     material: Material,
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    /// The same with the nearest, mip-less sampler (retro `force_nearest`).
+    bind_nearest: wgpu::BindGroup,
 }
 
 /// A compiled surface shader: its opaque pipeline, and the alpha-blended
@@ -126,6 +131,15 @@ impl GpuMeshes {
             .get(handle.0 as usize)
             .and_then(Option::as_ref)
             .map(|t| (&t.view, t.generation))
+    }
+
+    /// Whether the material is drawn retro: its own flag, else `global`.
+    fn material_retro(&self, material: u32, global: bool) -> bool {
+        self.materials
+            .get(material as usize)
+            .and_then(Option::as_ref)
+            .and_then(|m| m.material.retro)
+            .unwrap_or(global)
     }
 
     fn is_blended(&self, material: u32) -> bool {
@@ -173,6 +187,10 @@ pub struct ViewData {
     /// Generation of the sky texture in `bind` (None = the default).
     sky_bound: Option<u64>,
     sky_active: bool,
+    /// Retro settings of the last `prepare`: nearest textures for retro
+    /// materials, and whether materials without an opinion are retro.
+    retro_nearest: bool,
+    retro_global: bool,
 }
 
 impl ViewData {

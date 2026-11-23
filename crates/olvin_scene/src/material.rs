@@ -41,6 +41,10 @@ pub struct MaterialDesc {
     pub alpha_blend: bool,
     /// Custom surface shader (`*.wgsl`), see [`SURFACE_SHADER_CONTRACT`].
     pub shader: Option<String>,
+    /// The retro (PS1) look for this material: `None` follows the scene's
+    /// retro setting, `Some(true)` / `Some(false)` force it on / off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retro: Option<bool>,
 }
 
 impl Default for MaterialDesc {
@@ -63,6 +67,7 @@ impl Default for MaterialDesc {
             unlit: false,
             alpha_blend: false,
             shader: None,
+            retro: None,
         }
     }
 }

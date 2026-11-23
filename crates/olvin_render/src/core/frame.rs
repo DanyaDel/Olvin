@@ -9,8 +9,8 @@ use olvin_transform::GlobalTransform;
 use crate::light::{CameraInfo, DEFAULT_SHADOW_BIAS, LightList, MAX_CASCADES, fit_cascades};
 use crate::pipelines::shadow_texture;
 use crate::{
-    Frustum, Light, LightKind, MeshRenderer, RenderSettings, RenderStats, RenderTier, ShadowFilter,
-    SkyMode, Tonemapping,
+    Fog, Frustum, Light, LightKind, MeshRenderer, RenderSettings, RenderStats, RenderTier,
+    RetroSettings, ShadowFilter, SkyMode, Tonemapping,
 };
 
 use super::instancing::{BlendItem, DrawRange, bucket_key};
@@ -158,6 +158,14 @@ impl RenderCore {
             cascade.casters.begin();
         }
         let mut culled = 0;
+        let retro = &settings.retro;
+        view.retro_nearest = retro.force_nearest;
+        view.retro_global = retro.enabled;
+        // Projected size of a metre at depth 1, in virtual-screen pixels.
+        let retro_px = Vec3::new(view_proj.x_axis.y, view_proj.y_axis.y, view_proj.z_axis.y)
+            .length()
+            * retro.snap_resolution[1] as f32
+            * 0.5;
         for (global, transform, renderer) in world
             .query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>()
             .iter()
@@ -200,11 +208,15 @@ impl RenderCore {
                     }
                 }
             }
-            if !frustum.intersects_sphere(center, radius) {
+            let depth = cam.view_plane.truncate().dot(center) + cam.view_plane.w;
+            if !frustum.intersects_sphere(center, radius)
+                || (gpu.material_retro(material, retro.enabled)
+                    && retro_culled(retro, depth, radius, retro_px))
+            {
                 culled += 1;
             } else if blended {
                 view.blend.items.push(BlendItem {
-                    depth: cam.view_plane.truncate().dot(center) + cam.view_plane.w,
+                    depth,
                     key: bucket_key(material, i),
                     instance,
                 });
@@ -233,7 +245,24 @@ impl RenderCore {
         }
 
         // Uniforms.
-        let fog = settings.fog;
+        let mut fog = settings.fog;
+        if retro.enabled && retro.draw_distance > 0.0 {
+            // The fog completes at the draw distance, so the cut is hidden
+            // (without fog: the background colour).
+            let end = retro.draw_distance;
+            fog = Some(match fog {
+                Some(f) => Fog {
+                    end: f.end.min(end),
+                    start: if f.start < end { f.start } else { end * 0.5 },
+                    ..f
+                },
+                None => Fog {
+                    color: settings.clear_color,
+                    start: end * 0.5,
+                    end,
+                },
+            });
+        }
         let height_fog = settings.height_fog;
         // Sampling matrices land in the cascade's tile of the atlas.
         let mut shadow_view_proj = [Mat4::IDENTITY; MAX_CASCADES];
@@ -351,6 +380,29 @@ impl RenderCore {
             height_fog: height_fog.map_or([0.0; 4], |f| {
                 [f.density.max(0.0), f.falloff.max(0.0), f.height, 0.0]
             }),
+            retro_a: [
+                flag(retro.enabled),
+                retro.snap_resolution[0] as f32,
+                retro.snap_resolution[1] as f32,
+                retro.snap_grid_m.max(0.0),
+            ],
+            retro_b: [
+                retro.affine_strength.clamp(0.0, 1.0),
+                retro.affine_fade_near.max(0.0),
+                // The post chain quantises the final image instead.
+                if self.hdr_output {
+                    0.0
+                } else {
+                    retro.color_levels()
+                },
+                retro.dither_strength.max(0.0),
+            ],
+            retro_c: [
+                flag(retro.vertex_lighting),
+                flag(retro.shadows),
+                retro.draw_distance.max(0.0),
+                flag(retro.dissolve),
+            ],
             lights: lights.lights,
         };
         self.queue
@@ -398,16 +450,24 @@ impl RenderCore {
     /// shows.
     pub fn draw(&self, view: &ViewData, gpu: &GpuMeshes, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_bind_group(0, &view.bind, &[]);
-        self.draw_ranges(gpu, pass, &view.main.buffer, &view.main.ranges, false);
+        self.draw_ranges(view, gpu, pass, &view.main.buffer, &view.main.ranges, false);
         if view.sky_active {
             pass.set_pipeline(&self.sky_pipeline);
             pass.draw(0..3, 0..1);
         }
-        self.draw_ranges(gpu, pass, &view.blend.buffer, &view.blend.ranges, true);
+        self.draw_ranges(
+            view,
+            gpu,
+            pass,
+            &view.blend.buffer,
+            &view.blend.ranges,
+            true,
+        );
     }
 
     fn draw_ranges(
         &self,
+        view: &ViewData,
         gpu: &GpuMeshes,
         pass: &mut wgpu::RenderPass<'_>,
         instances: &wgpu::Buffer,
@@ -418,6 +478,7 @@ impl RenderCore {
             return;
         }
         pass.set_vertex_buffer(1, instances.slice(..));
+        let (retro_nearest, retro_global) = (view.retro_nearest, view.retro_global);
         let mut bound_pipeline = None;
         let mut bound_material = None;
         for range in ranges {
@@ -446,7 +507,16 @@ impl RenderCore {
                     .materials
                     .get(range.material as usize)
                     .and_then(Option::as_ref)
-                    .map_or(&self.fallback_material, |m| &m.bind);
+                    .map_or(&self.fallback_material, |m| {
+                        if retro_nearest
+                            && m.material.retro.unwrap_or(retro_global)
+                            && !m.material.point_filter
+                        {
+                            &m.bind_nearest
+                        } else {
+                            &m.bind
+                        }
+                    });
                 pass.set_bind_group(1, bind, &[]);
                 bound_material = Some(range.material);
             }
@@ -455,6 +525,17 @@ impl RenderCore {
             pass.draw_indexed(0..mesh.index_count, 0, range.instances.clone());
         }
     }
+}
+
+/// Object-level retro culling: past the draw distance (even the nearest
+/// point of the bounding sphere), or too small on the virtual screen.
+/// `px_per_metre` is the projected size of one metre at depth 1.
+fn retro_culled(retro: &RetroSettings, depth: f32, radius: f32, px_per_metre: f32) -> bool {
+    (retro.draw_distance > 0.0 && depth - radius > retro.draw_distance)
+        || (retro.cull_small_px > 0.0
+            && retro.snap_resolution[1] > 0
+            && depth > radius
+            && radius * px_per_metre / depth < retro.cull_small_px)
 }
 
 #[derive(Default)]

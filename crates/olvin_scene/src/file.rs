@@ -16,6 +16,7 @@ pub use crate::anim::{
 pub use crate::particles::{BlendDesc, BurstDesc, ParticleDesc, ShapeDesc, SpaceDesc};
 pub use crate::prefab::{PrefabInstance, PrefabNode};
 pub use crate::primitives::Shape;
+pub use crate::retro::RetroDesc;
 use crate::{Camera, Transform};
 
 /// The version of the format this build writes. Bump it together with a new entry
@@ -172,6 +173,9 @@ pub struct Environment {
     /// colour grading.
     #[serde(skip_serializing_if = "PostDesc::is_default")]
     pub post: PostDesc,
+    /// The retro (PS1) render style; `None` = off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retro: Option<RetroDesc>,
 }
 
 /// Shadow edge filtering (see `olvin_render::ShadowFilter`).
@@ -360,6 +364,7 @@ impl Default for Environment {
             max_point_shadows: 2,
             local_shadow_resolution: 2048,
             post: PostDesc::default(),
+            retro: None,
         }
     }
 }

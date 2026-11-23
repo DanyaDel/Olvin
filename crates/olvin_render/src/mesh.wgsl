@@ -42,7 +42,8 @@ struct Material {
     params: vec4<f32>,
     // xy: scale; zw: offset.
     uv: vec4<f32>,
-    // x: unlit; y: triplanar; z: has a normal map.
+    // x: unlit; y: triplanar; z: has a normal map; w: retro look (0: follow
+    // the settings, 1: on, 2: off).
     flags: vec4<f32>,
 };
 
@@ -88,20 +89,85 @@ struct VertexOut {
     @location(2) world: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) tangent: vec4<f32>,
+    // Retro only. xy: uv * clip.w (screen-linear uv = this * the fragment's
+    // 1 / w); z: the sun's n.l at the vertex.
+    @location(5) retro_uv: vec4<f32>,
+    // Retro vertex lighting: ambient + local lights.
+    @location(6) vlight: vec3<f32>,
 };
+
+// Whether the PS1 look applies to this material.
+fn retro_on() -> bool {
+    let m = material.flags.w;
+    let inherited = globals.retro_a.x > 0.5;
+    let forced_on = m < 1.5;
+    return select(inherited, forced_on, m > 0.5);
+}
+
+// A point / spot light seen from `p`: xyz = direction towards it, w = the
+// attenuation (range window, inverse square, spot cone; no shadow).
+fn local_light(light: Light, p: vec3<f32>) -> vec4<f32> {
+    let range = light.position_range.w;
+    let dir = light.direction_spot_offset.xyz;
+    if (range <= 0.0) {
+        return vec4<f32>(-dir, 1.0);
+    }
+    let to_light = light.position_range.xyz - p;
+    let d2 = max(dot(to_light, to_light), 1e-8);
+    let l = to_light * inverseSqrt(d2);
+    let f = d2 / (range * range);
+    let window = clamp(1.0 - f * f, 0.0, 1.0);
+    let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
+    return vec4<f32>(l, window * window / (d2 + 1.0) * cone * cone);
+}
+
+// Gouraud lighting at a vertex: rgb = hemisphere ambient + the local lights'
+// diffuse (Lambert, no specular, no shadows); w = the sun's n.l.
+fn vertex_light(p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+    var sum = hemisphere(n);
+    let count = min(u32(globals.ground.w), MAX_LIGHTS);
+    for (var i = 0u; i < count; i++) {
+        let light = globals.lights[i];
+        let la = local_light(light, p);
+        sum += light.color_spot_scale.rgb * la.w * max(dot(n, la.xyz), 0.0);
+    }
+    return vec4<f32>(sum, max(dot(n, -globals.sun_dir.xyz), 0.0));
+}
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     let model = mat4x4<f32>(in.model_0, in.model_1, in.model_2, in.model_3);
-    let world = model * vec4<f32>(in.position, 1.0);
+    var world = model * vec4<f32>(in.position, 1.0);
+    let retro = retro_on();
+    if (retro && globals.retro_a.w > 0.0) {
+        // World-space grid: whole vertices jump between cells.
+        world = vec4<f32>(floor(world.xyz / globals.retro_a.w + 0.5) * globals.retro_a.w, 1.0);
+    }
     var out: VertexOut;
     out.clip = globals.view_proj * world;
+    if (retro && globals.retro_a.y > 0.0 && out.clip.w > 1e-4) {
+        // Snap x / y / w to the pixel corners of the virtual screen, then
+        // multiply w back so depth and perspective stay exact.
+        let res = globals.retro_a.yz;
+        let px = (out.clip.xy / out.clip.w * 0.5 + 0.5) * res;
+        out.clip = vec4<f32>(((round(px) / res) * 2.0 - 1.0) * out.clip.w, out.clip.zw);
+    }
     // Exact for uniform scale; non-uniform scale would need the inverse transpose.
     out.normal = (model * vec4<f32>(in.normal, 0.0)).xyz;
     out.color = in.color;
     out.world = world.xyz;
     out.uv = in.uv;
     out.tangent = vec4<f32>((model * vec4<f32>(in.tangent.xyz, 0.0)).xyz, in.tangent.w);
+    out.retro_uv = vec4<f32>(0.0);
+    out.vlight = vec3<f32>(0.0);
+    if (retro) {
+        out.retro_uv = vec4<f32>(in.uv * out.clip.w, 0.0, 0.0);
+        if (globals.retro_c.x > 0.5 && material.flags.x < 0.5) {
+            let vl = vertex_light(world.xyz, normalize(out.normal));
+            out.vlight = vl.rgb;
+            out.retro_uv.z = vl.w;
+        }
+    }
     return out;
 }
 
@@ -389,7 +455,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let geo_n = normalize(in.normal);
     let p = in.world;
     let v = normalize(globals.camera.xyz - p * globals.camera.w);
-    let uv = in.uv * material.uv.xy + material.uv.zw;
+    let retro = retro_on();
+    var mesh_uv = in.uv;
+    if (retro && globals.retro_b.x > 0.0) {
+        // PS1 affine mapping: uv * w interpolated perspective-correctly, times
+        // the fragment's 1 / w (`in.clip.w`), is the screen-linear uv. Fades
+        // back to perspective-correct for fragments nearer than retro_b.y.
+        let depth = 1.0 / max(in.clip.w, 1e-6);
+        let k = globals.retro_b.x * smoothstep(0.0, max(globals.retro_b.y, 1e-3), depth);
+        mesh_uv = mix(in.uv, in.retro_uv.xy * in.clip.w, k);
+    }
+    let uv = mesh_uv * material.uv.xy + material.uv.zw;
 
     // Textures, all in uniform control flow (branches on the material uniform).
     var n = geo_n;
@@ -443,10 +519,26 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if (s.color.a < material.params.z) {
         discard;
     }
+    if (retro && globals.retro_c.z > 0.0) {
+        // Draw distance: a hard cut (the fog is meant to hide it), optionally
+        // dissolving the last tenth with the Bayer pattern.
+        let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
+        let cut = globals.retro_c.z;
+        if (depth > cut || (globals.retro_c.w > 0.5 && (depth - cut * 0.9) / (cut * 0.1) > bayer4(in.clip.xy))) {
+            discard;
+        }
+    }
 
     var color: vec3<f32>;
     if (material.flags.x > 0.5) {
         color = s.color.rgb + s.emissive;
+    } else if (retro && globals.retro_c.x > 0.5) {
+        // Gouraud: the vertex colours interpolated, times the albedo.
+        var sun = in.retro_uv.z;
+        if (globals.retro_c.y > 0.5) {
+            sun *= sun_shadow(p, geo_n, in.clip.xy);
+        }
+        color = s.color.rgb * (in.vlight + globals.sun_color.rgb * sun) + s.emissive;
     } else {
         let sn = normalize(s.normal);
         let albedo = s.color.rgb;
@@ -506,5 +598,5 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         color = mix(color, fog_tint(globals.height_fog_color.rgb, v), fog);
     }
 
-    return vec4<f32>(finish(color), s.color.a);
+    return vec4<f32>(finish(color, in.clip.xy, retro), s.color.a);
 }

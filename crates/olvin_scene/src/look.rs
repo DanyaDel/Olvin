@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::file::{AoDesc, BloomDesc, Environment, FogDesc, HeightFogDesc};
+use crate::file::{AoDesc, BloomDesc, Environment, FogDesc, HeightFogDesc, RetroDesc};
 
 /// A picture look. Every field has a serde default (the neutral value), so a
 /// file only lists what it changes.
@@ -39,6 +39,8 @@ pub struct LookDesc {
     pub fog: Option<FogDesc>,
     /// Height fog of the look; `None` keeps the scene's own.
     pub height_fog: Option<HeightFogDesc>,
+    /// The retro (PS1) render style; `None` switches it off.
+    pub retro: Option<RetroDesc>,
 }
 
 impl Default for LookDesc {
@@ -60,6 +62,7 @@ impl Default for LookDesc {
             lut_strength: 1.0,
             fog: None,
             height_fog: None,
+            retro: None,
         }
     }
 }
@@ -69,6 +72,7 @@ impl LookDesc {
     pub fn apply_to(&self, env: &mut Environment) {
         env.exposure = self.exposure;
         env.filmic = self.filmic;
+        env.retro = self.retro;
         if self.fog.is_some() {
             env.fog = self.fog;
         }
@@ -107,6 +111,7 @@ impl LookDesc {
             lut_strength: post.lut_strength,
             fog: env.fog,
             height_fog: env.height_fog,
+            retro: env.retro,
         }
     }
 
@@ -131,7 +136,7 @@ impl LookDesc {
     }
 
     /// The looks that ship in the editor and need no files (the
-    /// `looks-cinematic` library pack carries the same ones as assets; Retro
+    /// `looks-cinematic` library pack carries the same ones as assets; PS1
     /// there also uses a posterising LUT).
     pub fn built_in() -> Vec<LookDesc> {
         let look = |name: &str, f: &dyn Fn(&mut LookDesc)| {
@@ -172,11 +177,14 @@ impl LookDesc {
                 l.gain = [1.04, 1.04, 1.04];
                 l.bloom = bloom(1.1, 0.18);
             }),
-            look("Retro PS1", &|l| {
+            // The retro render style (vertex snapping, affine textures, 15-bit
+            // dithered colour, vertex lighting, 320x240) plus a washed-out grade.
+            look("PS1", &|l| {
                 l.fxaa = false;
                 l.saturation = 0.7;
                 l.contrast = 1.15;
                 l.gamma = [1.05, 1.0, 0.95];
+                l.retro = Some(RetroDesc::ps1());
             }),
             look("Night Vision", &|l| {
                 l.exposure = 1.3;
@@ -281,7 +289,7 @@ mod tests {
     }
 
     /// The looks of the `looks-cinematic` library pack by file name: the
-    /// built-in ones, except that Retro PS1 and Night Vision grade through a
+    /// built-in ones, except that PS1 and Night Vision grade through a
     /// LUT strip of the pack instead of the simple controls.
     fn pack_files() -> Vec<(String, LookDesc)> {
         LookDesc::built_in()
@@ -289,7 +297,7 @@ mod tests {
             .map(|mut l| {
                 let file = l.name.to_lowercase().replace(' ', "_");
                 match l.name.as_str() {
-                    "Retro PS1" => {
+                    "PS1" => {
                         l.lut = Some("looks-cinematic/luts/retro_ps1.png".into());
                         l.saturation = 1.0;
                         l.contrast = 1.1;

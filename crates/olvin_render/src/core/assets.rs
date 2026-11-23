@@ -22,6 +22,7 @@ impl RenderCore {
         textures: &[Option<GpuTexture>],
         uniform: &wgpu::Buffer,
         material: &Material,
+        nearest: bool,
     ) -> wgpu::BindGroup {
         let samplers = (&self.linear_sampler, &self.point_sampler);
         material_bind_group(
@@ -32,6 +33,7 @@ impl RenderCore {
             textures,
             uniform,
             material,
+            nearest,
         )
     }
 
@@ -141,9 +143,13 @@ impl RenderCore {
                     .flatten()
                     .any(|t| replaced.contains(t))
                 {
-                    let bind = self.material_bind_group(&gpu.textures, &m.uniform, &m.material);
+                    let bind =
+                        self.material_bind_group(&gpu.textures, &m.uniform, &m.material, false);
+                    let bind_nearest =
+                        self.material_bind_group(&gpu.textures, &m.uniform, &m.material, true);
                     if let Some(m) = &mut gpu.materials[slot] {
                         m.bind = bind;
+                        m.bind_nearest = bind_nearest;
                     }
                 }
             }
@@ -161,7 +167,8 @@ impl RenderCore {
                 }
                 _ => self.material_uniform(&material),
             };
-            let bind = self.material_bind_group(&gpu.textures, &uniform, &material);
+            let bind = self.material_bind_group(&gpu.textures, &uniform, &material, false);
+            let bind_nearest = self.material_bind_group(&gpu.textures, &uniform, &material, true);
             put(
                 &mut gpu.materials,
                 handle.0,
@@ -169,6 +176,7 @@ impl RenderCore {
                     material,
                     uniform,
                     bind,
+                    bind_nearest,
                 },
             );
         }
@@ -248,7 +256,9 @@ pub(super) fn material_uniform(device: &wgpu::Device, material: &Material) -> wg
     })
 }
 
-/// Material uniform + its textures (defaults for missing ones) + sampler.
+/// Material uniform + its textures (defaults for missing ones) + sampler
+/// (`nearest`: the point sampler whatever the material says).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn material_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -257,6 +267,7 @@ pub(super) fn material_bind_group(
     textures: &[Option<GpuTexture>],
     uniform: &wgpu::Buffer,
     material: &Material,
+    nearest: bool,
 ) -> wgpu::BindGroup {
     let view = |handle: Option<TextureHandle>, default| {
         handle
@@ -268,7 +279,11 @@ pub(super) fn material_bind_group(
         binding,
         resource: wgpu::BindingResource::TextureView(view),
     };
-    let sampler = if material.point_filter { point } else { linear };
+    let sampler = if nearest || material.point_filter {
+        point
+    } else {
+        linear
+    };
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("material"),
         layout,

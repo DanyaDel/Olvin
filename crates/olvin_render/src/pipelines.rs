@@ -115,7 +115,12 @@ pub(crate) fn create_layouts(
     let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material"),
         entries: &[
-            uniform(0, fragment, size_of::<MaterialUniform>()),
+            // The vertex stage reads it for the retro flag.
+            uniform(
+                0,
+                wgpu::ShaderStages::VERTEX | fragment,
+                size_of::<MaterialUniform>(),
+            ),
             texture(1),
             texture(2),
             texture(3),

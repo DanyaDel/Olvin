@@ -72,6 +72,15 @@ struct Globals {
     // x: density at the base altitude (per metre); y: falloff per metre of
     // altitude; z: base altitude (world Y).
     height_fog: vec4<f32>,
+    // Retro (PS1) look. x = 1: on for materials that inherit; yz: virtual
+    // screen for vertex snapping in pixels (0: none); w: world snap grid (m).
+    retro_a: vec4<f32>,
+    // x: affine texture strength; y: affine fade distance (m); z: colour
+    // levels per channel - 1 (0: full colour); w: dither strength.
+    retro_b: vec4<f32>,
+    // x = 1: per-vertex lighting; y = 1: sun shadows with it; z: draw
+    // distance (m, 0: none); w = 1: dissolve before the cut.
+    retro_c: vec4<f32>,
     lights: array<Light, 16>,
 };
 
@@ -131,9 +140,33 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((max(c, vec3<f32>(0.0)) + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// 4x4 Bayer matrix at a pixel (`position.xy`), as a threshold in (0, 1).
+fn bayer4(pixel: vec2<f32>) -> f32 {
+    let x = u32(pixel.x) & 3u;
+    let y = u32(pixel.y) & 3u;
+    let a = x ^ y;
+    let v = ((a & 1u) << 3u) | ((y & 1u) << 2u) | (a & 2u) | ((y >> 1u) & 1u);
+    return (f32(v) + 0.5) / 16.0;
+}
+
+// Retro colour depth: display-encoded `c` rounded to the levels of
+// `retro_b.z` with an ordered dither of `retro_b.w` quantisation steps.
+fn retro_quantise(c: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let n = globals.retro_b.z;
+    let t = (bayer4(pixel) - 0.5) * globals.retro_b.w;
+    return clamp(floor(c * n + t + 0.5), vec3<f32>(0.0), vec3<f32>(n)) / n;
+}
+
 // Exposure, tonemapping, then sRGB when the target doesn't do it (HDR
-// output skips all of it).
-fn finish(c: vec3<f32>) -> vec3<f32> {
+// output skips all of it). `retro`: colour depth reduction and dither on the
+// display colour (not with HDR output: the post chain does it on the final image).
+fn finish(c: vec3<f32>, pixel: vec2<f32>, retro: bool) -> vec3<f32> {
     var color = c * globals.sky.w;
     if (globals.shadow_params.z > 0.5) {
         color = aces(color);
@@ -143,6 +176,10 @@ fn finish(c: vec3<f32>) -> vec3<f32> {
         return clamp(color, vec3<f32>(0.0), vec3<f32>(60000.0));
     }
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (retro && globals.retro_b.z > 0.5) {
+        let shown = retro_quantise(linear_to_srgb(color), pixel);
+        return select(srgb_to_linear(shown), shown, globals.sun_color.w > 0.5);
+    }
     if (globals.sun_color.w > 0.5) {
         color = linear_to_srgb(color);
     }

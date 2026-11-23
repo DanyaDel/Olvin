@@ -35,6 +35,10 @@ pub struct MaterialDesc {
     pub alpha_cutoff: f32,
     /// Ignores lights: colour + emissive only.
     pub unlit: bool,
+    /// Alpha-blended transparency (sorted, no shadows) instead of opaque;
+    /// the colour's alpha is the opacity.
+    #[serde(skip_serializing_if = "is_false")]
+    pub alpha_blend: bool,
     /// Custom surface shader (`*.wgsl`), see [`SURFACE_SHADER_CONTRACT`].
     pub shader: Option<String>,
 }
@@ -57,9 +61,14 @@ impl Default for MaterialDesc {
             point_filter: false,
             alpha_cutoff: 0.0,
             unlit: false,
+            alpha_blend: false,
             shader: None,
         }
     }
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl MaterialDesc {

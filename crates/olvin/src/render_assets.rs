@@ -285,7 +285,11 @@ impl RenderAssets {
             triplanar: d.triplanar,
             point_filter: d.point_filter,
             alpha_cutoff: d.alpha_cutoff,
-            blend: Default::default(),
+            blend: if d.alpha_blend {
+                olvin_render::BlendMode::Alpha
+            } else {
+                olvin_render::BlendMode::Opaque
+            },
             unlit: d.unlit,
             shader: d.shader.as_deref().and_then(|s| self.shader(s, r.shaders)),
         }

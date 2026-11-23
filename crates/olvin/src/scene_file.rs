@@ -472,6 +472,10 @@ pub fn apply_lighting(scene: &SceneFile, settings: &mut RenderSettings) {
     });
     let post = &env.post;
     settings.post.fxaa = post.fxaa;
+    settings.bloom = post.bloom.map(|b| olvin_render::Bloom {
+        threshold: b.threshold,
+        intensity: b.intensity,
+    });
     settings.post.ao = post.ao.map(|a| olvin_render::AmbientOcclusion {
         radius: a.radius,
         strength: a.strength,
@@ -924,7 +928,9 @@ mod tests {
         scene.environment.post.fxaa = false;
         scene.environment.post.ao = Some(Default::default());
         scene.environment.post.saturation = 0.5;
+        scene.environment.post.bloom = Some(Default::default());
         apply_lighting(&scene, &mut settings);
+        assert_eq!(settings.bloom.map(|b| b.intensity), Some(0.3));
         assert!(settings.height_fog.is_some());
         assert!(!settings.post.fxaa && settings.post.ao.is_some());
         assert_eq!(settings.post.grade.saturation, 0.5);

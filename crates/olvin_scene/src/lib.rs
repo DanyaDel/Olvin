@@ -6,6 +6,8 @@ pub mod anim;
 #[cfg(feature = "serde")]
 pub mod file;
 #[cfg(feature = "serde")]
+pub mod look;
+#[cfg(feature = "serde")]
 pub mod material;
 #[cfg(feature = "serde")]
 pub mod prefab;

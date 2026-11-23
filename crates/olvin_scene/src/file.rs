@@ -227,6 +227,9 @@ pub struct FogDesc {
 pub struct PostDesc {
     /// FXAA anti-aliasing.
     pub fxaa: bool,
+    /// Glow around bright areas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bloom: Option<BloomDesc>,
     /// Screen-space ambient occlusion (GTAO).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ao: Option<AoDesc>,
@@ -252,6 +255,7 @@ impl Default for PostDesc {
     fn default() -> Self {
         Self {
             fxaa: true,
+            bloom: None,
             ao: None,
             saturation: 1.0,
             contrast: 1.0,
@@ -267,6 +271,24 @@ impl Default for PostDesc {
 impl PostDesc {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// Bloom settings; see `olvin_render::Bloom`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BloomDesc {
+    /// Scene brightness (linear, before exposure) where glow starts.
+    pub threshold: f32,
+    /// How much of the blurred bright areas is added back.
+    pub intensity: f32,
+}
+
+impl Default for BloomDesc {
+    fn default() -> Self {
+        Self {
+            threshold: 1.0,
+            intensity: 0.3,
+        }
     }
 }
 
@@ -1627,6 +1649,20 @@ mod tests {
         let same = SceneFile::parse_with(&format!("(version: 2, {body})"), 2, chain).unwrap();
         assert_eq!(same.entities[0].name, "x");
         assert_eq!(same.entities[0].layer, 0);
+    }
+
+    #[test]
+    fn scenes_without_bloom_load_unchanged_and_stay_unwritten() {
+        let old = "(environment: (post: (fxaa: false, saturation: 0.5)), entities: [])";
+        let scene = SceneFile::parse(old).unwrap();
+        assert_eq!(scene.environment.post.bloom, None);
+        assert!(!scene.environment.post.fxaa);
+        let text = ron::to_string(&scene).unwrap();
+        assert!(!text.contains("bloom"), "{text}");
+        let mut with = scene.clone();
+        with.environment.post.bloom = Some(BloomDesc::default());
+        let back = SceneFile::parse(&ron::to_string(&with).unwrap()).unwrap();
+        assert_eq!(back, with);
     }
 
     #[test]

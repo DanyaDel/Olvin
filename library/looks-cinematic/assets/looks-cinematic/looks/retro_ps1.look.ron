@@ -1,0 +1,17 @@
+(
+    name: "Retro PS1",
+    exposure: 1.0,
+    filmic: true,
+    bloom: None,
+    fxaa: false,
+    ao: None,
+    saturation: 1.0,
+    contrast: 1.1,
+    lift: (0.0, 0.0, 0.0),
+    gamma: (1.0, 1.0, 1.0),
+    gain: (1.0, 1.0, 1.0),
+    lut: Some("looks-cinematic/luts/retro_ps1.png"),
+    lut_strength: 1.0,
+    fog: None,
+    height_fog: None,
+)

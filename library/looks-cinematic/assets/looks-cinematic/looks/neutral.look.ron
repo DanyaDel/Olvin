@@ -1,0 +1,17 @@
+(
+    name: "Neutral",
+    exposure: 1.0,
+    filmic: true,
+    bloom: None,
+    fxaa: true,
+    ao: None,
+    saturation: 1.0,
+    contrast: 1.0,
+    lift: (0.0, 0.0, 0.0),
+    gamma: (1.0, 1.0, 1.0),
+    gain: (1.0, 1.0, 1.0),
+    lut: None,
+    lut_strength: 1.0,
+    fog: None,
+    height_fog: None,
+)

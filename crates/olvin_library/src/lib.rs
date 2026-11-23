@@ -89,6 +89,14 @@ impl Library {
     pub fn embedded() -> Library {
         let mut lib = Library::default();
         for dir in EMBEDDED.dirs() {
+            // A folder with neither a manifest nor an `assets/` is not a pack
+            // (tool scripts, notes); one with `assets/` but no manifest is a
+            // pack missing its `pack.ron`, which `from_embedded` reports.
+            let has_manifest = dir.get_file(dir.path().join("pack.ron")).is_some();
+            let has_assets = dir.get_dir(dir.path().join("assets")).is_some();
+            if !has_manifest && !has_assets {
+                continue;
+            }
             match Pack::from_embedded(dir) {
                 Ok(pack) => lib.add(pack, &folder_name(dir.path())),
                 Err(e) => lib.problems.push(e),

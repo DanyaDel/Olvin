@@ -626,6 +626,18 @@ fn review() {
                 }
             });
         }
+        // The Library panel: cards, categories, an installed pack.
+        let name = format!("{theme:?}-library.png").to_lowercase();
+        if only.as_deref().is_none_or(|o| name.contains(o)) {
+            shot_with(&project, &out.join(name), theme, Some("Layout"), |h| {
+                h.get_by_label("WINDOW").click();
+                h.run_steps(3);
+                h.get_by_label_contains("Add Panel").click();
+                h.run_steps(3);
+                h.get_by_label("📦 Library").click();
+                h.run_steps(10);
+            });
+        }
         // The Code workspace with a file open (syntax colours on both themes).
         let name = format!("{theme:?}-code_open.png").to_lowercase();
         if only.as_deref().is_none_or(|o| name.contains(o)) {

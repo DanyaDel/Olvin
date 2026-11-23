@@ -201,7 +201,9 @@ impl Library {
         let mut lock = Lock::load(project).map_err(LibraryError::Lock)?;
         let index = AssetRoot::new(&assets);
         for pack_plan in &plan.packs {
-            let pack = self.get(&pack_plan.id).expect("resolved above");
+            let pack = self
+                .get(&pack_plan.id)
+                .ok_or_else(|| LibraryError::NotFound(pack_plan.id.clone()))?;
             let (pack_report, installed) = write_pack(
                 pack,
                 pack_plan,
@@ -323,15 +325,17 @@ pub fn free_name(assets: &Path, rel: &str) -> String {
         .or_else(|| file.rfind('.'))
         .unwrap_or(file.len());
     let (stem, ext) = file.split_at(split);
-    (2..)
-        .map(|n| {
-            let name = format!("{stem}-{n}{ext}");
-            if dir.is_empty() {
-                name
-            } else {
-                format!("{dir}/{name}")
-            }
-        })
-        .find(|candidate| !assets.join(candidate).exists())
-        .expect("unbounded range")
+    let mut n = 2u32;
+    loop {
+        let name = format!("{stem}-{n}{ext}");
+        let candidate = if dir.is_empty() {
+            name
+        } else {
+            format!("{dir}/{name}")
+        };
+        if !assets.join(&candidate).exists() {
+            return candidate;
+        }
+        n += 1;
+    }
 }

@@ -115,9 +115,13 @@ fn every_pack_manifest_is_sane() {
         let mut provided = pack.provides.clone();
         provided.sort();
         assert_eq!(provided, on_disk, "{folder}: provides != assets/ contents");
+        // Namespaced like `olvin_library` lints: `<pack-id>/...` or
+        // `<kind>/<pack-id>/...` (`prefabs/fps-controller/...`).
         for p in &pack.provides {
+            let mut parts = p.split('/');
+            let (a, b) = (parts.next(), parts.next());
             assert!(
-                p.starts_with(&format!("{folder}/")),
+                a == Some(folder.as_str()) || b == Some(folder.as_str()),
                 "{folder}: {p} is not namespaced"
             );
         }

@@ -652,3 +652,66 @@ fn character_api_motor_grounded_gravity_and_children() {
     let motor = world.get::<&olvin_physics::CharacterMotor>(hero).unwrap();
     assert_eq!(motor.velocity.x, 3.0);
 }
+
+#[test]
+fn spawn_prefab_queues_requests_and_keeps_to_the_sandbox() {
+    let (app, _lua) = app_with(
+        "Spawner",
+        r#"
+        return {
+            params = { { name = "n", kind = "int", default = 1 } },
+            update = function(self, ctx)
+                self.sent = 0
+                for i = 1, self.params.n do
+                    if ctx:spawn_prefab("prefabs/a/Crate.prefab.ron", i, 2, 3, 90) then
+                        self.sent = self.sent + 1
+                    end
+                end
+                ctx:set_var("sent", self.sent)
+            end,
+        }
+        "#,
+    );
+    spawn(&app, "Spawner", &[("n", "40")]);
+    step(&app);
+    // Capped per frame; the game drains the queue between frames.
+    assert_eq!(
+        app.resources.fetch::<ScriptVars>().get("sent"),
+        Some(&ScriptValue::Int(MAX_SPAWNS_PER_FRAME as i64))
+    );
+    let queue = app.resources.fetch_mut::<SpawnRequests>().take();
+    assert_eq!(queue.len(), MAX_SPAWNS_PER_FRAME);
+    assert_eq!(queue[1].transform.translation, Vec3::new(2.0, 2.0, 3.0));
+    assert!(
+        (queue[0].transform.rotation * Vec3::NEG_Z).x.abs() > 0.99,
+        "yaw 90"
+    );
+
+    // Alive cap: marked roots count against it.
+    {
+        let mut w = app.resources.fetch_mut::<World>();
+        for _ in 0..MAX_SPAWNED_ALIVE - 3 {
+            w.spawn((ScriptSpawned,));
+        }
+    }
+    step(&app);
+    assert_eq!(
+        app.resources.fetch::<ScriptVars>().get("sent"),
+        Some(&ScriptValue::Int(3))
+    );
+}
+
+#[test]
+fn spawn_prefab_refuses_paths_outside_assets() {
+    for path in ["../x.prefab.ron", "/abs/x.prefab.ron", "prefabs/x.lua"] {
+        let (app, _lua) = app_with(
+            "Bad",
+            &format!(
+                r#"return {{ update = function(self, ctx) ctx:spawn_prefab("{path}", 0, 0, 0) end }}"#
+            ),
+        );
+        spawn(&app, "Bad", &[]);
+        step(&app);
+        assert!(app.resources.fetch::<SpawnRequests>().is_empty(), "{path}");
+    }
+}

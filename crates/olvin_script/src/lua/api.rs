@@ -353,6 +353,41 @@ impl UserData for CtxHandle {
                 }
             })
         });
+        // Queues a prefab instance (made by the game after the pass; the
+        // requester then gets a "spawned" message with the root's id). False
+        // when the per-frame or alive cap is reached.
+        m.add_method(
+            "spawn_prefab",
+            |_, h, (path, x, y, z, yaw): (LuaString, f32, f32, f32, Option<f32>)| {
+                let path = checked_str(&path, "a prefab path")?;
+                crate::check_prefab_path(&path).map_err(mlua::Error::runtime)?;
+                if ![x, y, z].iter().all(|v| v.is_finite()) {
+                    return Err(mlua::Error::runtime("spawn_prefab: position is not finite"));
+                }
+                h.slot.with(|c| {
+                    let alive = c.world().query::<&crate::ScriptSpawned>().iter().count();
+                    let me = c.entity();
+                    let Some(mut queue) = c.res_mut::<crate::SpawnRequests>() else {
+                        return false;
+                    };
+                    if queue.len() >= crate::MAX_SPAWNS_PER_FRAME
+                        || alive + queue.len() >= crate::MAX_SPAWNED_ALIVE
+                    {
+                        return false;
+                    }
+                    queue.push(crate::SpawnRequest {
+                        asset: path,
+                        transform: Transform::from_xyz(x, y, z).with_rotation(quat_deg(
+                            0.0,
+                            yaw.unwrap_or(0.0),
+                            0.0,
+                        )),
+                        requester: me,
+                    });
+                    true
+                })
+            },
+        );
         m.add_method("destroy_self", |_, h, ()| h.slot.with(|c| c.destroy_self()));
 
         // Messages and shared variables.
@@ -445,6 +480,19 @@ fn add_physics<M: UserDataMethods<CtxHandle>>(m: &mut M) {
     m.add_method("velocity_xyz", |_, h, ()| {
         h.slot.with(|c| opt3(c.velocity().map(v3)))
     });
+    // Respawn: puts a body (this entity or another) at a position now and
+    // stops it (`Physics::teleport`: velocities and the character motor are
+    // zeroed). False when there is no such entity.
+    m.add_method("teleport_xyz", |_, h, (x, y, z): V3| {
+        h.slot.with(|c| teleport(c, c.entity(), Vec3::new(x, y, z)))
+    });
+    m.add_method(
+        "teleport_of_xyz",
+        |_, h, (id, x, y, z): (u64, f32, f32, f32)| {
+            h.slot
+                .with(|c| entity_from(id).is_some_and(|e| teleport(c, e, Vec3::new(x, y, z))))
+        },
+    );
     // Character controller: its motor's velocity (the character moves by it),
     // whether it stands on the ground, and the world's gravity (m/s², positive).
     m.add_method("motor_velocity_xyz", |_, h, ()| {
@@ -489,6 +537,23 @@ fn add_physics<M: UserDataMethods<CtxHandle>>(m: &mut M) {
             ))
         },
     );
+}
+
+/// Moves `e` to `at` (its local position) and tells physics to follow at once.
+#[cfg(feature = "physics")]
+fn teleport(c: &ScriptCtx<'_>, e: Entity, at: Vec3) -> bool {
+    if !c.world().contains(e) || !at.is_finite() {
+        return false;
+    }
+    let Some(mut t) = c.get_mut::<Transform>(e) else {
+        return false;
+    };
+    t.translation = at;
+    drop(t);
+    if let Some(mut physics) = c.res_mut::<olvin_physics::Physics>() {
+        physics.teleport(c.world(), e);
+    }
+    true
 }
 
 #[cfg(feature = "input")]

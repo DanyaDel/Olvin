@@ -915,6 +915,10 @@ impl PlaySession {
         let map = assets_dir.map(|d| olvin::input::InputMap::load_or_default(d.join("input.ron")));
         app.add_plugin(olvin::input::InputPlugin { map })
             .add_plugin(olvin::script::ScriptPlugin::default());
+        // Prefabs scripts spawn with `ctx:spawn_prefab`.
+        app.add_system(olvin::core::Stage::Update, |res| {
+            olvin::scene_file::run_prefab_spawns(res)
+        });
         // The project's Lua behaviours (`assets/scripts/**/*.lua`, library packs
         // keep theirs in subfolders). No hot reload: a session loads them once.
         if let Some(dir) = lua_dir {

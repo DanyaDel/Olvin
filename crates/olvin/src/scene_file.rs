@@ -211,6 +211,37 @@ pub fn instantiate_prefab(
         .ok_or_else(|| format!("prefab `{asset}`: the root is inactive"))
 }
 
+/// Carries out the prefab spawns scripts queued with `ctx:spawn_prefab`
+/// ([`olvin_script::SpawnRequests`]): instantiates each at its place, marks the
+/// root [`olvin_script::ScriptSpawned`] and sends the requester a `"spawned"`
+/// message whose value is the root's entity id. `DefaultPlugins` and
+/// `HeadlessPlugins` run it after the script pass; an app that builds its own
+/// plugin set adds it as an `Update` system. Failures are logged.
+#[cfg(feature = "script")]
+pub fn run_prefab_spawns(res: &Resources) {
+    use olvin_script::{ScriptMessage, ScriptSpawned, SpawnRequests};
+    let requests = match res.get_mut::<SpawnRequests>() {
+        Some(mut queue) if !queue.is_empty() => queue.take(),
+        _ => return,
+    };
+    for request in requests {
+        match instantiate_prefab(res, &request.asset, request.transform) {
+            Ok(root) => {
+                let _ = res.fetch_mut::<World>().insert_one(root, ScriptSpawned);
+                if let Some(mut events) = res.get_mut::<olvin_core::Events<ScriptMessage>>() {
+                    events.send(ScriptMessage {
+                        name: "spawned".to_owned(),
+                        value: olvin_script::ScriptValue::Int(root.to_bits().get() as i64),
+                        from: Some(root),
+                        target: Some(request.requester),
+                    });
+                }
+            }
+            Err(e) => log::warn!("spawn_prefab `{}`: {e}", request.asset),
+        }
+    }
+}
+
 fn spawn_entities(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
     let worlds = scene.world_matrices();
     let registry = res.get::<SceneComponents>();
@@ -967,6 +998,43 @@ mod tests {
         drop(world);
         let err = instantiate_prefab(&res, "prefabs/nope.prefab.ron", at).unwrap_err();
         assert!(err.contains("nope.prefab.ron"), "{err}");
+        let _ = std::fs::remove_dir_all(assets.parent().unwrap());
+    }
+
+    #[cfg(feature = "script")]
+    #[test]
+    fn script_spawn_requests_become_instances_and_a_message() {
+        use olvin_script::{ScriptMessage, ScriptSpawned, SpawnRequest, SpawnRequests};
+        let (assets, mut res) = prefab_project("spawn-requests");
+        res.insert(SpawnRequests::default());
+        res.insert(olvin_core::Events::<ScriptMessage>::default());
+        let requester = res.fetch_mut::<World>().spawn((Name("Spawner".into()),));
+        let mut cursor = olvin_core::EventCursor::default();
+        for asset in ["prefabs/crate.prefab.ron", "prefabs/nope.prefab.ron"] {
+            res.fetch_mut::<SpawnRequests>().push(SpawnRequest {
+                asset: asset.into(),
+                transform: Transform::from_xyz(4.0, 0.0, 0.0),
+                requester,
+            });
+        }
+        run_prefab_spawns(&res);
+        assert!(res.fetch::<SpawnRequests>().is_empty());
+        let world = res.fetch::<World>();
+        let marked: Vec<_> = world
+            .query::<(Entity, &ScriptSpawned)>()
+            .iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert_eq!(marked.len(), 1, "the broken prefab is logged, not spawned");
+        let events = res.fetch::<olvin_core::Events<ScriptMessage>>();
+        let sent: Vec<_> = events.read(&mut cursor).collect();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].name, "spawned");
+        assert_eq!(sent[0].target, Some(requester));
+        assert_eq!(
+            sent[0].value.as_f64(),
+            Some(marked[0].to_bits().get() as f64)
+        );
         let _ = std::fs::remove_dir_all(assets.parent().unwrap());
     }
 

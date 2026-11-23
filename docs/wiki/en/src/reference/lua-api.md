@@ -84,6 +84,7 @@ Ids come from lookups, from the `other` of callbacks and from `ctx:raycast`.
 | `ctx:find_by_name(name)` | the id of the first object with that name, or `nil` |
 | `ctx:find_by_tag(tag)` | the id of the first object with the tag, or `nil` |
 | `ctx:find_all_by_tag(tag)` | an array of ids |
+| `ctx:find_child(name)` | the id of this object's direct child with that name, or `nil` |
 | `ctx:alive(id)` | `true` if the object exists |
 | `ctx:name_of(id)` | the name or `nil` |
 | `ctx:has_tag(id, tag)` | `true` if the object has that tag |
@@ -95,7 +96,8 @@ Ids come from lookups, from the `other` of callbacks and from `ctx:raycast`.
 | `ctx:translate_of(id, v)` / `ctx:translate_of_xyz(id, x, y, z)` | move another object |
 | `ctx:set_rotation_euler_deg_of(id, v)` / `ctx:set_rotation_euler_deg_of_xyz(id, x, y, z)` | set the angles |
 | `ctx:set_scale_of(id, v)` / `ctx:set_scale_of_xyz(id, x, y, z)` | set the scale |
-| `ctx:despawn(id)` | remove an object (at the end of the pass) |
+| `ctx:despawn(id)` | remove an object and its children (at the end of the pass) |
+| `ctx:spawn_prefab(path, x, y, z[, yaw_deg])` | queue a prefab instance (`prefabs/...prefab.ron`, relative to `assets/`, no `..`); returns `false` when more than 16 were queued this frame or 256 spawned objects are alive. The game creates it after the pass and sends this object a `"spawned"` message whose value is the new root's id |
 | `ctx:destroy_self()` | remove itself |
 
 ## Messages and variables
@@ -118,6 +120,11 @@ Feature `physics`; for a Dynamic body only (otherwise the functions do nothing).
 | `ctx:apply_impulse(v)` | `ctx:apply_impulse_xyz(x, y, z)` | an instant impulse (Δv = impulse / mass) |
 | `ctx:set_velocity(v)` | `ctx:set_velocity_xyz(x, y, z)` | set the velocity |
 | `ctx:velocity()` | `ctx:velocity_xyz()` | the velocity or `nil` |
+| `ctx:motor_velocity()` | `ctx:motor_velocity_xyz()` | velocity of this object's Character Controller motor (the character moves by it), or `nil` |
+| `ctx:set_motor_velocity(v)` | `ctx:set_motor_velocity_xyz(x, y, z)` | set it; `false` without a Character Controller |
+| `ctx:grounded()` | | the character stands on the ground |
+| `ctx:gravity()` | | the world's gravity, m/s², positive |
+| `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | put a body (any kind, a character too) at a position now and stop it; `false` when there is no such object. For respawns: a plain `set_position` also works but keeps the velocity |
 | `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | a ray: `nil` or `{ entity, point, normal, distance }`; the fast path returns `entity, px, py, pz, nx, ny, nz, distance` |
 
 ## Input
@@ -127,6 +134,7 @@ Feature `input`. `action` is an action name from `InputMap` ([Input](../engine/i
 | Function | Result |
 |---|---|
 | `ctx:pressed(action)` | held |
+| `ctx:set_cursor_locked(locked)` | grab (or free) the mouse cursor, for mouse look |
 | `ctx:just_pressed(action)` | pressed this frame |
 | `ctx:just_released(action)` | released this frame |
 | `ctx:value(action)` | a number 0..1 (an axis) |

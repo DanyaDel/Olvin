@@ -25,6 +25,7 @@ mod message;
 mod params;
 mod registry;
 mod runtime;
+mod spawn;
 
 pub use behaviour::Behaviour;
 pub use ctx::{ScriptCtx, TimeInfo};
@@ -33,6 +34,10 @@ pub use olvin_scene::file::ScriptDesc;
 pub use params::{FromParams, ParamKind, ParamSpec, Params, format_vec3, parse_bool, parse_vec3};
 pub use registry::{ScriptRegistry, ScriptSchema};
 pub use runtime::{ScriptRuntime, ScriptState, ScriptsAttached, run_fixed_update, run_update};
+pub use spawn::{
+    MAX_SPAWNED_ALIVE, MAX_SPAWNS_PER_FRAME, ScriptSpawned, SpawnRequest, SpawnRequests,
+    check_prefab_path,
+};
 
 use std::collections::BTreeMap;
 
@@ -85,6 +90,7 @@ impl Plugin for ScriptPlugin {
             .init_resource::<ScriptRegistry>()
             .init_resource::<ScriptRuntime>()
             .init_resource::<ScriptVars>()
+            .init_resource::<SpawnRequests>()
             .add_event::<ScriptMessage>();
         if self.builtins {
             builtin::register_all(&mut app.resources.fetch_mut::<ScriptRegistry>());

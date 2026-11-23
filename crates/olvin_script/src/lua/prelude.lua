@@ -105,11 +105,12 @@ for _, n in ipairs({
 for _, n in ipairs({
     "set_position", "translate", "translate_local", "rotate_euler_deg",
     "set_rotation_euler_deg", "set_scale",
-    "apply_force", "apply_impulse", "set_velocity", "set_motor_velocity",
+    "apply_force", "apply_impulse", "set_velocity", "set_motor_velocity", "teleport",
 }) do setter(n) end
 
 for _, n in ipairs({
     "set_position_of", "translate_of", "set_rotation_euler_deg_of", "set_scale_of",
+    "teleport_of",
 }) do setter_of(n) end
 
 do

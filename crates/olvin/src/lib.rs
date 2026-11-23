@@ -93,6 +93,10 @@ impl Plugin for DefaultPlugins {
         app.add_plugin(olvin_script::ScriptPlugin {
             builtins: self.script.builtins,
         });
+        #[cfg(all(feature = "script", feature = "scene"))]
+        app.add_system(olvin_core::Stage::Update, |res| {
+            scene_file::run_prefab_spawns(res)
+        });
         #[cfg(feature = "audio")]
         app.add_plugin(self.audio.clone());
         // After input: the UI adds its actions to the map.
@@ -163,6 +167,10 @@ impl Plugin for HeadlessPlugins {
         #[cfg(feature = "script")]
         app.add_plugin(olvin_script::ScriptPlugin {
             builtins: self.script.builtins,
+        });
+        #[cfg(all(feature = "script", feature = "scene"))]
+        app.add_system(olvin_core::Stage::Update, |res| {
+            scene_file::run_prefab_spawns(res)
         });
         #[cfg(feature = "audio")]
         app.add_plugin(self.audio.clone());

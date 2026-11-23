@@ -84,6 +84,7 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:find_by_name(name)` | id первого объекта с таким именем или `nil` |
 | `ctx:find_by_tag(tag)` | id первого объекта с тегом или `nil` |
 | `ctx:find_all_by_tag(tag)` | массив id |
+| `ctx:find_child(name)` | id прямого потомка этого объекта с таким именем или `nil` |
 | `ctx:alive(id)` | `true`, если объект существует |
 | `ctx:name_of(id)` | имя или `nil` |
 | `ctx:has_tag(id, tag)` | `true`, если у объекта такой тег |
@@ -95,7 +96,8 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:translate_of(id, v)` / `ctx:translate_of_xyz(id, x, y, z)` | сдвинуть чужой объект |
 | `ctx:set_rotation_euler_deg_of(id, v)` / `ctx:set_rotation_euler_deg_of_xyz(id, x, y, z)` | задать углы |
 | `ctx:set_scale_of(id, v)` / `ctx:set_scale_of_xyz(id, x, y, z)` | задать масштаб |
-| `ctx:despawn(id)` | удалить объект (в конце прохода) |
+| `ctx:despawn(id)` | удалить объект с детьми (в конце прохода) |
+| `ctx:spawn_prefab(path, x, y, z[, yaw_deg])` | поставить в очередь экземпляр префаба (`prefabs/...prefab.ron`, путь от `assets/`, без `..`); `false`, если за кадр уже 16 запросов или живёт 256 созданных объектов. Игра создаёт его после прохода и шлёт этому объекту сообщение `"spawned"`, значение — id нового корня |
 | `ctx:destroy_self()` | удалить себя |
 
 ## Сообщения и переменные
@@ -118,6 +120,11 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:apply_impulse(v)` | `ctx:apply_impulse_xyz(x, y, z)` | мгновенный импульс (Δv = импульс / масса) |
 | `ctx:set_velocity(v)` | `ctx:set_velocity_xyz(x, y, z)` | задать скорость |
 | `ctx:velocity()` | `ctx:velocity_xyz()` | скорость или `nil` |
+| `ctx:motor_velocity()` | `ctx:motor_velocity_xyz()` | скорость мотора Character Controller этого объекта (персонаж движется по ней) или `nil` |
+| `ctx:set_motor_velocity(v)` | `ctx:set_motor_velocity_xyz(x, y, z)` | задать её; `false` без Character Controller |
+| `ctx:grounded()` | | персонаж стоит на земле |
+| `ctx:gravity()` | | гравитация мира, м/с², положительная |
+| `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | поставить тело (любого вида, в том числе персонажа) в точку сразу и остановить; `false`, если объекта нет. Для респауна: обычный `set_position` тоже работает, но сохраняет скорость |
 | `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | луч: `nil` или `{ entity, point, normal, distance }`; быстрый путь возвращает `entity, px, py, pz, nx, ny, nz, distance` |
 
 ## Ввод
@@ -127,6 +134,7 @@ Id получают из поиска, из `other` колбэков и из `ct
 | Функция | Результат |
 |---|---|
 | `ctx:pressed(action)` | зажато |
+| `ctx:set_cursor_locked(locked)` | захватить (или отпустить) курсор мыши для обзора |
 | `ctx:just_pressed(action)` | нажато в этом кадре |
 | `ctx:just_released(action)` | отпущено в этом кадре |
 | `ctx:value(action)` | число 0..1 (ось) |

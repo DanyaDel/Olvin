@@ -5,7 +5,7 @@ use egui::{RichText, Slider};
 
 use crate::EditorState;
 use crate::panels::inspector::{grid, row, section};
-use crate::panels::lighting::{environment_ui, presets};
+use crate::panels::lighting::{environment_ui, look_ui, presets};
 use crate::prefs::Preferences;
 use crate::theme::ThemeKind;
 
@@ -94,6 +94,7 @@ fn rendering(ui: &mut egui::Ui, state: &mut EditorState) {
     presets(ui, state);
     let assets = state.assets_dir();
     state.materials.refresh(assets.as_deref());
+    look_ui(ui, state);
     environment_ui(ui, &mut state.scene.environment, &state.materials.textures);
     ui.add_space(8.0);
     heading(

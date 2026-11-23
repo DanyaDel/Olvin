@@ -26,6 +26,8 @@ pub struct MaterialLibrary {
     pub materials: Vec<String>,
     pub textures: Vec<String>,
     pub shaders: Vec<String>,
+    /// `*.look.ron` picture looks.
+    pub looks: Vec<String>,
     loaded: HashMap<String, (MaterialDesc, Option<SystemTime>)>,
     /// Current content of every material saved by the editor this session.
     edits: MaterialEdits,
@@ -46,11 +48,14 @@ impl MaterialLibrary {
         self.materials.clear();
         self.textures.clear();
         self.shaders.clear();
+        self.looks.clear();
         if let Some(root) = self.root.clone() {
             walk(&root, &root, &mut |rel| {
                 let lower = rel.to_lowercase();
                 if lower.ends_with(".mat.ron") {
                     self.materials.push(rel);
+                } else if lower.ends_with(".look.ron") {
+                    self.looks.push(rel);
                 } else if lower.ends_with(".wgsl") {
                     self.shaders.push(rel);
                 } else if IMAGE_EXT.iter().any(|e| lower.ends_with(&format!(".{e}"))) {
@@ -58,7 +63,12 @@ impl MaterialLibrary {
                 }
             });
         }
-        for list in [&mut self.materials, &mut self.textures, &mut self.shaders] {
+        for list in [
+            &mut self.materials,
+            &mut self.textures,
+            &mut self.shaders,
+            &mut self.looks,
+        ] {
             list.sort();
         }
     }
@@ -293,6 +303,11 @@ pub fn material_ui(
         });
         row(ui, "Unlit", |ui| {
             ui.checkbox(&mut m.unlit, "");
+        });
+        row(ui, "Transparent", |ui| {
+            ui.checkbox(&mut m.alpha_blend, "").on_hover_text(
+                "Alpha blending: the colour's alpha is the opacity (sorted, casts no shadow)",
+            );
         });
         row(ui, "Shader", |ui| {
             asset_combo(ui, "mat-shader", &mut m.shader, shaders, 0.0);

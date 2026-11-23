@@ -3,8 +3,9 @@
 
 use egui::{DragValue, RichText};
 use olvin_scene::file::{
-    AoDesc, Environment, FogDesc, HeightFogDesc, LightKind, PostDesc, ShadowFilter, Sky,
+    AoDesc, BloomDesc, Environment, FogDesc, HeightFogDesc, LightKind, PostDesc, ShadowFilter, Sky,
 };
+use olvin_scene::look::LookDesc;
 
 use super::inspector::{drag, grid, row, section};
 use crate::{EditorState, Panel};
@@ -190,6 +191,24 @@ fn filter_label(f: ShadowFilter) -> &'static str {
 fn post_ui(ui: &mut egui::Ui, post: &mut PostDesc, textures: &[String]) {
     section(ui, "✨ Post-processing", None, |ui| {
         ui.checkbox(&mut post.fxaa, "FXAA anti-aliasing");
+        let mut bloom = post.bloom.is_some();
+        if ui
+            .checkbox(&mut bloom, "Bloom")
+            .on_hover_text("Glow around areas brighter than the threshold")
+            .changed()
+        {
+            post.bloom = bloom.then(BloomDesc::default);
+        }
+        if let Some(b) = &mut post.bloom {
+            grid(ui, "post-bloom", |ui| {
+                row(ui, "Threshold", |ui| {
+                    drag(ui, &mut b.threshold, 0.0..=8.0, 0.01, "")
+                });
+                row(ui, "Intensity", |ui| {
+                    drag(ui, &mut b.intensity, 0.0..=4.0, 0.01, "")
+                });
+            });
+        }
         let mut ao = post.ao.is_some();
         if ui
             .checkbox(&mut ao, "Ambient occlusion (GTAO)")
@@ -268,6 +287,166 @@ fn post_ui(ui: &mut egui::Ui, post: &mut PostDesc, textures: &[String]) {
         }
         ui.weak("LUT: a strip of N slices of N×N (e.g. 1024×32) in an image file, imported as plain data.");
     });
+}
+
+/// What the Look selector remembers between frames.
+#[derive(Clone, Default)]
+struct LookUi {
+    /// `builtin:<name>` or an asset path; empty = nothing picked yet.
+    picked: String,
+    /// The environment before / after the last Apply, for the compare toggle.
+    compare: Option<(Environment, Environment, bool)>,
+    /// Name being typed for "Save current as Look…" (`Some` = the row is open).
+    naming: Option<String>,
+}
+
+/// The looks the selector offers: the built-in ones, then the project's.
+fn look_choices(state: &EditorState) -> Vec<(String, String)> {
+    let mut all: Vec<(String, String)> = LookDesc::built_in()
+        .into_iter()
+        .map(|l| {
+            (
+                format!("builtin:{}", l.name),
+                format!("{} (built-in)", l.name),
+            )
+        })
+        .collect();
+    for path in &state.materials.looks {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let name = name.strip_suffix(".look.ron").unwrap_or(name);
+        all.push((path.clone(), format!("{name}  ({path})")));
+    }
+    all
+}
+
+fn load_look(state: &EditorState, key: &str) -> Result<LookDesc, String> {
+    if let Some(name) = key.strip_prefix("builtin:") {
+        return LookDesc::built_in()
+            .into_iter()
+            .find(|l| l.name == name)
+            .ok_or_else(|| format!("no built-in look {name}"));
+    }
+    let assets = state.assets_dir().ok_or("no project")?;
+    LookDesc::load(assets.join(key))
+}
+
+/// Settings → Rendering: pick a picture look (a named set of exposure,
+/// tonemapping, bloom, grading and fog settings) and apply it to the scene.
+/// Applying is an ordinary scene edit, so it is undoable.
+pub(crate) fn look_ui(ui: &mut egui::Ui, state: &mut EditorState) {
+    let id = ui.id().with("look-ui");
+    let mut ui_state: LookUi = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    let choices = look_choices(state);
+    section(ui, "🎞 Look", None, |ui| {
+        let shown = choices
+            .iter()
+            .find(|(k, _)| *k == ui_state.picked)
+            .map_or("(pick a look)", |(_, label)| label.as_str());
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("look-pick")
+                .width(240.0)
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for (key, label) in &choices {
+                        ui.selectable_value(&mut ui_state.picked, key.clone(), label);
+                    }
+                });
+            let can_apply = !ui_state.picked.is_empty();
+            if ui
+                .add_enabled(can_apply, egui::Button::new("Apply"))
+                .on_hover_text(
+                    "Sets exposure, tonemapping, bloom, grading and fog; lighting and sky stay",
+                )
+                .clicked()
+            {
+                match load_look(state, &ui_state.picked) {
+                    Ok(look) => {
+                        let before = state.scene.environment.clone();
+                        look.apply_to(&mut state.scene.environment);
+                        ui_state.compare = Some((before, state.scene.environment.clone(), true));
+                    }
+                    Err(e) => state.warn(format!("look: {e}")),
+                }
+            }
+            if ui
+                .button("Save current as Look…")
+                .on_hover_text("Writes the scene's current look to assets/looks/")
+                .clicked()
+            {
+                ui_state.naming.get_or_insert_with(|| "My Look".into());
+            }
+        });
+        let mut done = false;
+        if let Some(name) = &mut ui_state.naming {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
+                let ok = !name.trim().is_empty() && state.assets_dir().is_some();
+                if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
+                    let look = LookDesc::from_environment(name.trim(), &state.scene.environment);
+                    match save_look(state, &look) {
+                        Ok(rel) => {
+                            state.info(format!("saved look {rel}"));
+                            ui_state.picked = rel;
+                        }
+                        Err(e) => state.warn(format!("look: {e}")),
+                    }
+                    done = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    done = true;
+                }
+            });
+        }
+        if done {
+            ui_state.naming = None;
+        }
+        if let Some((before, after, showing_after)) = &mut ui_state.compare {
+            ui.horizontal(|ui| {
+                ui.label("Compare");
+                let mut now = *showing_after;
+                ui.selectable_value(&mut now, false, "Before");
+                ui.selectable_value(&mut now, true, "After");
+                if now != *showing_after {
+                    *showing_after = now;
+                    state.scene.environment = if now { after.clone() } else { before.clone() };
+                }
+            });
+        }
+        ui.weak(
+            "Picture filters only change the camera and post part of the environment. \
+             Bloom, grading, LUT, FXAA and AO show in the game window on Full-tier GPUs, \
+             not in the editor viewport.",
+        );
+    });
+    ui.data_mut(|d| d.insert_temp(id, ui_state));
+}
+
+/// Writes `look` as `assets/looks/<name>.look.ron` (a free name); returns the asset path.
+fn save_look(state: &mut EditorState, look: &LookDesc) -> Result<String, String> {
+    let assets = state.assets_dir().ok_or("no project")?;
+    let stem: String = look
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "look" } else { stem };
+    let mut rel = format!("looks/{stem}.look.ron");
+    let mut n = 2;
+    while assets.join(&rel).exists() {
+        rel = format!("looks/{stem}-{n}.look.ron");
+        n += 1;
+    }
+    look.save(assets.join(&rel))?;
+    state.materials.forget(&|_| false);
+    Ok(rel)
 }
 
 pub(crate) fn presets(ui: &mut egui::Ui, state: &mut EditorState) {

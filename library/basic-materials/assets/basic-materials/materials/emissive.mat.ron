@@ -1,0 +1,6 @@
+(
+    base_color: (0.02, 0.02, 0.02, 1.0),
+    metallic: 0.0,
+    roughness: 0.6,
+    emissive: (0.2, 2.2, 3.0),
+)

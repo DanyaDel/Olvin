@@ -5,6 +5,7 @@ mod game;
 pub(crate) mod hierarchy;
 pub(crate) mod inspector;
 pub(crate) mod lighting;
+pub(crate) mod particles;
 mod viewport;
 
 use egui_dock::{DockState, NodeIndex};

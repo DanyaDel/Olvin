@@ -1508,7 +1508,7 @@ fn profiler_panel_opens_and_shows_frame_time_counters_and_scopes() {
     // The editor's own frame scope shows up in the scope table.
     h.get_by_label("editor frame");
     // Pausing keeps the numbers on screen.
-    h.get_by_label_contains("Pause").click();
+    h.get_by_label("⏸ Pause").click();
     h.run_steps(3);
     h.get_by_label_contains("Resume");
 }
@@ -1611,4 +1611,101 @@ fn picking_a_look_changes_the_environment_and_undo_restores_it() {
     assert_eq!(state(&mut h).scene.environment.exposure, 0.4);
     undo(&mut h);
     assert_eq!(state(&mut h).scene.environment.exposure, before.exposure);
+
+fn particle_system_add_edit_undo_and_presets() {
+    use olvin_editor::olvin_scene::file::ParticleDesc;
+    let p = project("particles");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    assert!(state(&mut h).scene.get(3).unwrap().particles.is_none());
+
+    // Add Component > Particle System.
+    h.get_by_label("Add Component").click();
+    h.run_steps(3);
+    h.get_by_label("Particle System").click();
+    h.run_steps(5);
+    assert_eq!(
+        state(&mut h).scene.get(3).unwrap().particles,
+        Some(ParticleDesc::default())
+    );
+
+    // A parameter edit is a scene edit: it undoes.
+    h.get_by_label("+ Add burst").click();
+    h.run_steps(5);
+    assert_eq!(
+        state(&mut h)
+            .scene
+            .get(3)
+            .unwrap()
+            .particles
+            .as_ref()
+            .unwrap()
+            .bursts
+            .len(),
+        1
+    );
+    undo(&mut h);
+    assert!(
+        state(&mut h)
+            .scene
+            .get(3)
+            .unwrap()
+            .particles
+            .as_ref()
+            .unwrap()
+            .bursts
+            .is_empty()
+    );
+
+    // The preset menu replaces the look.
+    h.get_by_value("Apply…").click();
+    h.run_steps(3);
+    h.get_by_label("Fire").click();
+    h.run_steps(5);
+    let got = state(&mut h)
+        .scene
+        .get(3)
+        .unwrap()
+        .particles
+        .clone()
+        .unwrap();
+    assert_eq!(got, ParticleDesc::fire());
+    undo(&mut h);
+    assert_eq!(
+        state(&mut h).scene.get(3).unwrap().particles,
+        Some(ParticleDesc::default())
+    );
+}
+
+#[test]
+fn particle_preview_simulates_while_selected_and_obeys_the_buttons() {
+    use olvin_editor::olvin_scene::file::ParticleDesc;
+    let p = project("particles-preview");
+    let mut h = editor(&p);
+    state(&mut h).scene.get_mut(3).unwrap().particles = Some(ParticleDesc {
+        rate: 200.0,
+        lifetime: [5.0, 5.0],
+        ..Default::default()
+    });
+    state(&mut h).select(Some(3));
+    h.run_steps(30);
+    let n = state(&mut h).particle_preview_count(3).expect("previewed");
+    assert!(n > 10, "{n}");
+    // Pause freezes, Stop clears, Play resumes.
+    h.get_by_label("⏸ Pause").click();
+    h.run_steps(3);
+    let frozen = state(&mut h).particle_preview_count(3).unwrap();
+    h.run_steps(20);
+    assert_eq!(state(&mut h).particle_preview_count(3), Some(frozen));
+    h.get_by_label("⏹ Stop").click();
+    h.run_steps(3);
+    assert_eq!(state(&mut h).particle_preview_count(3), Some(0));
+    h.get_by_label("▶ Play").click();
+    h.run_steps(20);
+    assert!(state(&mut h).particle_preview_count(3).unwrap() > 0);
+    // Deselected: gone (no Simulate toggle).
+    state(&mut h).select(Some(1));
+    h.run_steps(3);
+    assert_eq!(state(&mut h).particle_preview_count(3), None);
 }

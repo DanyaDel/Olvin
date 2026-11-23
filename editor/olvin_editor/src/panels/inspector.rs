@@ -73,6 +73,7 @@ fn field_of(key: &str) -> Option<&'static str> {
         "rigidbody" => "rigidbody",
         "cc" => "character_controller",
         "audio" => "audio_source",
+        "particles" => "particles",
         "listener" => "audio_listener",
         "script" => "scripts",
         "material" => "material",
@@ -103,7 +104,7 @@ fn collider_is(e: &EntityDesc, f: fn(&ColliderShape) -> bool) -> bool {
     e.collider.as_ref().is_some_and(|c| f(&c.shape))
 }
 
-const BUILTINS: [Builtin; 13] = [
+const BUILTINS: [Builtin; 14] = [
     Builtin {
         category: "Rendering",
         name: "Model",
@@ -120,6 +121,12 @@ const BUILTINS: [Builtin; 13] = [
                 color: [0.8; 4],
             })
         },
+    },
+    Builtin {
+        category: "Rendering",
+        name: "Particle System",
+        has: |e| e.particles.is_some(),
+        add: |e| e.particles = Some(olvin_scene::file::ParticleDesc::default()),
     },
     Builtin {
         category: "Rendering",
@@ -223,6 +230,7 @@ impl Panel for Inspector {
         let mut prefab_actions = Vec::new();
         let mut log = None;
         let frame = state.anim_frame as f32;
+        let fx = &mut state.engine_scene.fx;
         let olvin_scene::file::SceneFile {
             entities,
             animation,
@@ -331,6 +339,17 @@ impl Panel for Inspector {
                         ui.weak("The game renders through the first camera");
                     });
                 }
+                if let Some(p) = &mut e.particles {
+                    section(
+                        ui,
+                        "✨ Particle System",
+                        Some((&mut remove, "particles")),
+                        |ui| {
+                            let preview = super::particles::Preview { fx, id };
+                            super::particles::particle_ui(ui, p, Some(preview));
+                        },
+                    );
+                }
                 if let Some(light) = &mut e.light {
                     section(ui, "☀ Light", Some((&mut remove, "light")), |ui| {
                         light_ui(ui, light)
@@ -416,6 +435,7 @@ impl Panel for Inspector {
                     Some("model") => e.model = None,
                     Some("camera") => e.camera = None,
                     Some("light") => e.light = None,
+                    Some("particles") => e.particles = None,
                     Some("collider") => e.collider = None,
                     Some("rigidbody") => e.rigidbody = None,
                     Some("cc") => e.character_controller = None,
@@ -744,6 +764,19 @@ impl Inspector {
                 };
                 if ui.add_enabled(!has, egui::Button::new(label)).clicked() {
                     (b.add)(e);
+                    added = true;
+                }
+            }
+        }
+        let presets: Vec<_> = olvin_scene::file::ParticleDesc::PRESETS
+            .iter()
+            .filter(|(n, _)| matches(n) || matches("particle"))
+            .collect();
+        if !presets.is_empty() && e.particles.is_none() {
+            ui.label(RichText::new("Particle presets").small().weak());
+            for (name, make) in presets {
+                if ui.button(format!("✨ {name}")).clicked() {
+                    e.particles = Some(make());
                     added = true;
                 }
             }

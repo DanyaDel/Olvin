@@ -10,8 +10,8 @@ use olvin::core::App;
 use olvin::ecs::{EcsPlugin, World};
 use olvin::physics::PhysicsPlugin;
 use olvin::render::{
-    Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, RenderCore, RenderSettings,
-    ViewData,
+    Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, ParticleRenderer, RenderCore,
+    RenderSettings, ViewData,
 };
 use olvin::render::{Materials, Shaders, Textures};
 use olvin::render_assets::{Registries, RenderAssets};
@@ -22,7 +22,7 @@ use olvin::transform::{GlobalTransform, TransformPlugin};
 use crate::render::{DEPTH_FORMAT, MSAA};
 
 /// Which world a view draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Source {
     /// The scene being edited.
     Edit,
@@ -36,6 +36,11 @@ pub struct EngineGpu {
     edit: GpuMeshes,
     play: GpuMeshes,
     views: HashMap<u64, ViewData>,
+    /// Particles of each view and source (GPU emitters simulate once per renderer).
+    particles: HashMap<(u64, Source), ParticleRenderer>,
+    device: eframe::wgpu::Device,
+    queue: eframe::wgpu::Queue,
+    format: eframe::wgpu::TextureFormat,
 }
 
 impl EngineGpu {
@@ -52,11 +57,16 @@ impl EngineGpu {
             edit: GpuMeshes::default(),
             play: GpuMeshes::default(),
             views: HashMap::new(),
+            particles: HashMap::new(),
+            device: state.device.clone(),
+            queue: state.queue.clone(),
+            format: state.target_format,
         }
     }
 
     pub fn reset_play(&mut self) {
         self.play = GpuMeshes::default();
+        self.particles.retain(|(_, s), _| *s != Source::Play);
     }
 
     /// Uploads new meshes and prepares view `id`; draw it later with [`Self::draw`].
@@ -70,6 +80,7 @@ impl EngineGpu {
         assets: Registries,
         view_proj: Mat4,
         settings: &RenderSettings,
+        particles: &World,
     ) -> olvin::render::RenderStats {
         let gpu = match source {
             Source::Edit => &mut self.edit,
@@ -82,7 +93,13 @@ impl EngineGpu {
             .views
             .entry(id)
             .or_insert_with(|| self.core.create_view());
-        self.core.prepare(view, gpu, world, view_proj, settings)
+        let stats = self.core.prepare(view, gpu, world, view_proj, settings);
+        let (device, queue, format) = (&self.device, &self.queue, self.format);
+        self.particles
+            .entry((id, source))
+            .or_insert_with(|| ParticleRenderer::new(device, queue, format, MSAA, DEPTH_FORMAT))
+            .prepare(device, queue, gpu, particles, view_proj);
+        stats
     }
 
     /// Shadow pass for view `id`; record it before the pass `draw` goes into.
@@ -108,6 +125,9 @@ impl EngineGpu {
         };
         if let Some(view) = self.views.get(&id) {
             self.core.draw(view, gpu, pass);
+        }
+        if let Some(particles) = self.particles.get(&(id, source)) {
+            particles.draw(pass);
         }
     }
 }
@@ -136,6 +156,8 @@ pub struct ScenePreview {
     pub materials: Materials,
     pub shaders: Shaders,
     pub assets: RenderAssets,
+    /// Particle systems running in the Scene view (own world, see `fx`).
+    pub fx: crate::fx::FxPreview,
     /// CSG of brushes with materials (the CSG element draws the rest itself):
     /// rebuilt when the brush inputs or their materials change.
     csg: (Vec<CsgKey>, Vec<CsgMesh>),
@@ -528,9 +550,16 @@ pub(crate) fn prepare_view(
             materials: &mut m,
             shaders: &mut s,
         };
-        let stats = res
-            .engine
-            .prepare(id, Source::Play, &world, &mut meshes, regs, vp, &settings);
+        let stats = res.engine.prepare(
+            id,
+            Source::Play,
+            &world,
+            &mut meshes,
+            regs,
+            vp,
+            &settings,
+            &world,
+        );
         state.render_stats.insert(id, stats);
         Some(Source::Play)
     } else {
@@ -559,6 +588,7 @@ pub(crate) fn prepare_view(
             regs,
             vp,
             &settings,
+            &p.fx.world,
         );
         state.render_stats.insert(id, stats);
         Some(Source::Edit)
@@ -677,6 +707,13 @@ impl PlaySession {
     pub fn tick(&mut self) {
         if !self.paused || std::mem::take(&mut self.step) {
             self.app.update();
+            // Particle systems of the scene (the editor's play app has no RenderPlugin).
+            let dt = self
+                .app
+                .resources
+                .get::<olvin::core::Time>()
+                .map_or(0.0, |t| t.delta());
+            olvin::render::update_emitters(&mut self.app.resources.fetch_mut::<World>(), dt);
         }
     }
 }

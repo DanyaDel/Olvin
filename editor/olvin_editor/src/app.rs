@@ -889,6 +889,11 @@ impl EditorApp {
         if let Some(play) = &mut self.state.play {
             play.tick();
             ctx.request_repaint();
+        } else if self
+            .state
+            .tick_particle_previews(ctx.input(|i| i.stable_dt))
+        {
+            ctx.request_repaint();
         }
         self.sync_theme(&ctx);
         self.tint(&ctx);

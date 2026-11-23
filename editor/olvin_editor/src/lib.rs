@@ -5,6 +5,7 @@
 mod app;
 pub mod engine;
 pub mod ext;
+mod fx;
 pub mod materials;
 pub mod panels;
 pub mod prefabs;
@@ -18,6 +19,7 @@ pub mod widgets;
 mod workspace;
 
 pub use app::{EditorApp, TopBarRects};
+pub use fx::{FxControl, FxPreview};
 pub use registry::{
     EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
 };

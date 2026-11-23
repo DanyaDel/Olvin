@@ -82,6 +82,14 @@ impl Net {
                 Msg::Spawn(m) => self.on_spawn(res, m),
                 Msg::Despawn { net_id } => self.on_despawn(&mut res.fetch_mut::<World>(), net_id),
                 Msg::Snapshot(m) => self.on_snapshot(&mut res.fetch_mut::<World>(), m),
+                Msg::User { id, payload } => self.stage_from_server(id, payload),
+                Msg::Rejected { id, reason } => {
+                    let name = self.message_name(id).unwrap_or("?").to_owned();
+                    self.events.push(crate::net::NetEvent::CommandRejected {
+                        name,
+                        reason: reason.chars().take(200).collect(),
+                    });
+                }
                 _ => {}
             }
         }

@@ -5,6 +5,7 @@ use olvin_core::Time;
 use crate::auth::{AllowAll, Authenticator};
 use crate::client::{ClientState, Phase};
 use crate::config::{NetConfig, NetMode};
+use crate::message::Messages;
 use crate::proto::Msg;
 use crate::registry::NetRegistry;
 use crate::replicate::{
@@ -41,6 +42,8 @@ pub enum NetEvent {
     Connected { id: ClientId },
     /// Client: the connection ended (kicked, timed out, server closed).
     Disconnected { reason: String },
+    /// Client: the server refused one of our commands.
+    CommandRejected { name: String, reason: String },
     /// Client: could not connect or the server refused us; the reason is
     /// written for the player.
     ConnectFailed { reason: String },
@@ -83,6 +86,7 @@ pub struct Net {
     pub(crate) repl: ReplState,
     pub(crate) relevancy: Option<RelevancyFn>,
     pub(crate) spawner: Option<PrefabSpawner>,
+    pub(crate) messages: Messages,
 }
 
 #[derive(Default)]
@@ -113,6 +117,7 @@ impl Net {
             repl: ReplState::default(),
             relevancy: None,
             spawner: None,
+            messages: Messages::default(),
         };
         // The owner of an entity travels like any component; it is always id 0.
         net.replicate_with_named::<Owner>("Owner", ReplicateOptions::default());
@@ -427,6 +432,7 @@ impl Net {
         self.registry.frozen = true;
         let _ = Replicated::default;
         let hash = self.registry.signature();
+        let mut inbox = Vec::new();
         if let Some(server) = self.server.as_mut() {
             let mut ctx = Ctx {
                 cfg: &self.cfg,
@@ -452,11 +458,19 @@ impl Net {
                         rs.reset_client(*id);
                     }
                 }
-                for (id, _, msg) in std::mem::take(&mut server.inbox) {
-                    if let Msg::Ack { seq, bits } = msg {
+                inbox = std::mem::take(&mut server.inbox);
+            }
+        }
+        for (id, _, msg) in inbox {
+            match msg {
+                Msg::Ack { seq, bits } => {
+                    if let Some(rs) = self.repl.server.as_mut() {
                         rs.on_ack(id, seq, bits);
                     }
                 }
+                Msg::User { id: mid, payload } => self.stage_from_client(id, mid, payload),
+                // Spawn, Snapshot and friends only ever travel server to client.
+                _ => self.violation(id, 5.0, "server-only message from a client"),
             }
         }
         if let Some(client) = self.client.as_mut() {

@@ -87,6 +87,16 @@ pub enum Msg {
         seq: u32,
         bits: u32,
     },
+    /// A game message: `id` is the registration index of its type.
+    User {
+        id: u16,
+        payload: Vec<u8>,
+    },
+    /// Server to client: the command of this type was refused.
+    Rejected {
+        id: u16,
+        reason: String,
+    },
 }
 
 /// How a client creates the copy of a replicated entity.

@@ -54,20 +54,34 @@ impl Plugin for NetPlugin {
         let auth = self.auth.borrow_mut().take();
         let net = Net::new(self.cfg.clone(), transports, auth);
         app.insert_resource(net).add_event::<NetEvent>();
+        app.add_event::<crate::message::NetCommandRejected>();
         // Receive before gameplay (PreUpdate), send after it (PostUpdate).
         app.add_system(Stage::PreUpdate, |res| {
             let now = clock(res);
+            let staged = {
+                let mut net = res.fetch_mut::<Net>();
+                net.update(now);
+                net.client_replicate(res);
+                net.stage_local();
+                let mut events = res.fetch_mut::<olvin_core::Events<NetEvent>>();
+                events.send_batch(net.events.drain(..));
+                std::mem::take(&mut net.messages.staged)
+            };
+            // Game code runs here with `Net` free, so a validator may use it.
+            crate::message::deliver_staged(res, staged);
             let mut net = res.fetch_mut::<Net>();
-            net.update(now);
-            net.client_replicate(res);
             let mut events = res.fetch_mut::<olvin_core::Events<NetEvent>>();
             events.send_batch(net.events.drain(..));
+            let mut rejected =
+                res.fetch_mut::<olvin_core::Events<crate::message::NetCommandRejected>>();
+            rejected.send_batch(net.messages.rejected.drain(..));
         });
         // After gameplay: step the server's fixed tick and replicate.
         app.add_system(Stage::PostUpdate, |res| {
             let dt = res.fetch::<olvin_core::Time>().unscaled_delta();
             let mut net = res.fetch_mut::<Net>();
             let mut world = res.fetch_mut::<olvin_ecs::World>();
+            net.flush_owner_sends(&world);
             net.server_ticks(&mut world, dt);
         });
     }

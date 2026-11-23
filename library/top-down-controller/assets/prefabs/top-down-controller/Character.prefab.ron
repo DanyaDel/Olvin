@@ -1,0 +1,18 @@
+// Top-down character: a Character Controller body, a capsule model that turns to
+// face where it walks, and a fixed camera above it (parented, so it follows).
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Character", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0, push_mass: 80.0)),
+            scripts: [(name: "top-down-controller/controller", params: {"speed": "5.0", "sprint_speed": "8.0", "acceleration": "20.0", "turn_smoothing": "18.0", "camera_yaw": "0.0", "snap_to_8": "false", "aim_with_look": "false", "jump_height": "0.0", "body": "Body"})]),
+        (id: 2, name: "Body", parent: Some(1), position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+        (id: 3, name: "Torso", parent: Some(2), position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.8, 0.9, 0.8),
+            mesh: Some((shape: Capsule, color: (0.8, 0.4, 0.25, 1.0)))),
+        (id: 4, name: "Nose", parent: Some(2), position: (0.0, 0.45, -0.4), rotation: (0.0, 0.0, 0.0), scale: (0.18, 0.18, 0.3),
+            mesh: Some((shape: Cube, color: (0.95, 0.85, 0.2, 1.0)))),
+        (id: 5, name: "Camera", parent: Some(1), position: (0.0, 11.0, 7.0), rotation: (-57.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            camera: Some((fov_deg: 50.0, near: 0.3, far: 200.0)),
+            audio_listener: true),
+    ],
+)

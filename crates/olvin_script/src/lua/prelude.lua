@@ -98,14 +98,14 @@ end
 
 for _, n in ipairs({
     "position", "world_position", "rotation_euler_deg", "scale",
-    "forward", "right", "up", "velocity",
+    "forward", "right", "up", "velocity", "motor_velocity",
     "position_of", "world_position_of", "rotation_euler_deg_of", "scale_of",
 }) do getter(n) end
 
 for _, n in ipairs({
     "set_position", "translate", "translate_local", "rotate_euler_deg",
     "set_rotation_euler_deg", "set_scale",
-    "apply_force", "apply_impulse", "set_velocity",
+    "apply_force", "apply_impulse", "set_velocity", "set_motor_velocity",
 }) do setter(n) end
 
 for _, n in ipairs({

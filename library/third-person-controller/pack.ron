@@ -1,0 +1,18 @@
+(
+  id: "third-person-controller",
+  name: "Third Person Controller",
+  version: "1.0.0",
+  category: Characters,
+  description: "A third-person character: camera-relative WASD, smooth turning, jump, optional sprint, and an orbit camera. The reusable camera_follow.lua works on any camera.",
+  tags: ["player", "third-person", "camera", "lua", "character"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "prefabs/third-person-controller/Character.prefab.ron",
+    "scripts/third-person-controller/controller.lua",
+    "scripts/third-person-controller/camera_follow.lua",
+    "scenes/third-person-controller/demo.scene.ron",
+  ],
+  notes: "Open scenes/third-person-controller/demo.scene.ron and press Play (WASD, mouse orbits the camera, Shift, Space). Drop prefabs/third-person-controller/Character.prefab.ron into your own scene to get the character with its camera. The camera is a child named Camera that orbits its parent; to use camera_follow.lua on a free camera instead, give it a script with target set to the name of the entity to follow. Replace the Torso and Nose meshes inside Body with your own model; the Body child is what turns. All parameters are in the Inspector.",
+)

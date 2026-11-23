@@ -32,6 +32,9 @@
 //! takes three numbers, and every vector getter has a `*_xyz` twin that
 //! returns three numbers without making a table: the fast path for hot code.
 //!
+//! Scripts in subfolders of the scripts directory are named by their path
+//! (`scripts/fps-controller/player.lua` → `fps-controller/player`).
+//!
 //! Hot reload: [`LuaScripts::poll`] re-reads changed files. The new callbacks
 //! replace the old ones in place, while every entity keeps its own `self`
 //! table, so state survives (`start` does not run again). A file that fails to
@@ -296,12 +299,21 @@ impl LuaScripts {
             .and_then(|s| s.to_str())
             .ok_or_else(|| format!("{}: no file name", path.display()))?
             .to_owned();
+        self.load_file_as(registry, path, &name)
+    }
+
+    fn load_file_as(
+        &mut self,
+        registry: &mut ScriptRegistry,
+        path: &Path,
+        name: &str,
+    ) -> Result<(), String> {
         let source = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let modified = fs::metadata(path).and_then(|m| m.modified()).ok();
         let chunk = path.display().to_string();
         self.install(
             registry,
-            &name,
+            name,
             Some(path.to_owned()),
             modified,
             &source,
@@ -309,14 +321,17 @@ impl LuaScripts {
         )
     }
 
-    /// Loads every `*.lua` in `dir` (not recursive) and watches the folder for
-    /// new files. Files that fail to load are logged and skipped.
+    /// Loads every `*.lua` in `dir` and its subfolders and watches the folder
+    /// for new files. A file in `dir` itself is named after the file
+    /// (`Spinner`), one in a subfolder by its path (`fps-controller/player`, as
+    /// library packs ship them). Files that fail to load are logged and skipped.
     pub fn load_dir(&mut self, registry: &mut ScriptRegistry, dir: &Path) {
         if !self.dirs.iter().any(|d| d == dir) {
             self.dirs.push(dir.to_owned());
         }
         for path in lua_files(dir) {
-            if let Err(e) = self.load_file(registry, &path) {
+            let name = script_name(dir, &path);
+            if let Err(e) = self.load_file_as(registry, &path, &name) {
                 log::error!("lua: {e}");
             }
         }
@@ -355,20 +370,29 @@ impl LuaScripts {
             .values()
             .filter_map(|e| e.path.clone())
             .collect();
-        let fresh: Vec<PathBuf> = self
-            .dirs
-            .iter()
-            .flat_map(|d| lua_files(d))
-            .filter(|p| !known.contains(p))
-            .collect();
+        let named = |entries: &BTreeMap<String, Entry>, path: &PathBuf| {
+            entries
+                .iter()
+                .find(|(_, e)| e.path.as_ref() == Some(path))
+                .map(|(name, _)| name.clone())
+        };
+        let mut jobs: Vec<(String, PathBuf)> = {
+            let entries = self.shared.entries.borrow();
+            changed
+                .into_iter()
+                .filter_map(|p| Some((named(&entries, &p)?, p)))
+                .collect()
+        };
+        for dir in &self.dirs {
+            for path in lua_files(dir) {
+                if !known.contains(&path) {
+                    jobs.push((script_name(dir, &path), path));
+                }
+            }
+        }
         let mut reloaded = Vec::new();
-        for path in changed.into_iter().chain(fresh) {
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            match self.load_file(registry, &path) {
+        for (name, path) in jobs {
+            match self.load_file_as(registry, &path, &name) {
                 Ok(()) => {
                     log::info!("lua: reloaded `{name}`");
                     reloaded.push(name);
@@ -457,16 +481,32 @@ impl LuaScripts {
     }
 }
 
+/// Every `*.lua` under `dir`, subfolders included, in a stable order.
 fn lua_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "lua"))
-        .collect();
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "lua") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
     files.sort();
     files
+}
+
+/// The name scenes use: the file stem for a file directly in `dir`, else the
+/// path under `dir` without `.lua`, with `/` (`fps-controller/player`).
+fn script_name(dir: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(dir).unwrap_or(path).with_extension("");
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `params = { { name = "speed", kind = "float", default = 1, doc = "…" }, … }`

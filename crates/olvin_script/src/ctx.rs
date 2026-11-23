@@ -151,6 +151,15 @@ impl<'a> ScriptCtx<'a> {
             .collect()
     }
 
+    /// A direct child of this entity with this name.
+    pub fn find_child(&self, name: &str) -> Option<Entity> {
+        self.world
+            .query::<(Entity, &olvin_transform::Parent, &Name)>()
+            .iter()
+            .find(|(_, p, n)| p.0 == self.entity && n.0 == name)
+            .map(|(e, _, _)| e)
+    }
+
     pub fn name(&self) -> String {
         self.name_of(self.entity)
     }

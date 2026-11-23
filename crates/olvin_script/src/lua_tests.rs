@@ -527,3 +527,128 @@ fn lua_plays_and_stops_sounds() {
     assert_eq!(x(&app, e), 1.0, "start's asserts held");
     assert_eq!(app.resources.fetch::<Audio>().active_count(), 2);
 }
+
+#[test]
+fn scripts_in_subfolders_are_named_by_their_path_and_reload() {
+    let dir = temp_dir("nested");
+    fs::create_dir_all(dir.join("pack/deep")).unwrap();
+    fs::write(
+        dir.join("Plain.lua"),
+        "return { update = function(self, ctx) ctx:translate(vec3(1,0,0)) end }",
+    )
+    .unwrap();
+    let nested = dir.join("pack/mover.lua");
+    fs::write(
+        &nested,
+        "return { update = function(self, ctx) ctx:translate(vec3(2,0,0)) end }",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("pack/deep/other.lua"),
+        "return { update = function(self, ctx) ctx:translate(vec3(4,0,0)) end }",
+    )
+    .unwrap();
+    let mut app = App::new();
+    app.add_plugin(LuaPlugin {
+        dir: dir.clone(),
+        hot_reload: false,
+        limits: LuaLimits::default(),
+    });
+    let names = app.resources.fetch::<LuaScripts>().names();
+    assert!(
+        ["Plain", "pack/mover", "pack/deep/other"]
+            .iter()
+            .all(|n| names.iter().any(|m| m == n)),
+        "{names:?}"
+    );
+    let (a, b, c) = (
+        spawn(&app, "Plain", &[]),
+        spawn(&app, "pack/mover", &[]),
+        spawn(&app, "pack/deep/other", &[]),
+    );
+    step(&app);
+    assert_eq!((x(&app, a), x(&app, b), x(&app, c)), (1.0, 2.0, 4.0));
+
+    // A changed nested file reloads under its path name; a new one is found.
+    fs::write(
+        &nested,
+        "return { update = function(self, ctx) ctx:translate(vec3(8,0,0)) end }",
+    )
+    .unwrap();
+    bump_mtime(&nested);
+    fs::write(
+        dir.join("pack/late.lua"),
+        "return { update = function(self, ctx) end }",
+    )
+    .unwrap();
+    let mut reloaded = {
+        let res = &app.resources;
+        let mut lua = res.fetch_mut::<LuaScripts>();
+        let mut registry = res.fetch_mut::<ScriptRegistry>();
+        lua.check_disk(&mut registry)
+    };
+    reloaded.sort();
+    assert_eq!(reloaded, ["pack/late", "pack/mover"]);
+    step(&app);
+    assert_eq!(x(&app, b), 2.0 + 8.0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(feature = "physics")]
+#[test]
+fn character_api_motor_grounded_gravity_and_children() {
+    let (mut app, _lua) = app_with(
+        "Driver",
+        r#"return {
+            start = function(self, ctx)
+                self.kid = ctx:find_child("Kid")
+                ctx:log("kid " .. tostring(self.kid))
+            end,
+            update = function(self, ctx)
+                local vx, vy, vz = ctx:motor_velocity_xyz()
+                ctx:set_motor_velocity_xyz(3, vy, 0)
+                -- Report what the API saw as the position of the child and the gravity.
+                local g = ctx:gravity()
+                local kx = ctx:position_of_xyz(self.kid)
+                ctx:set_position_xyz(kx, g, ctx:grounded() and 1 or 0)
+            end,
+        }"#,
+    );
+    app.add_plugin(olvin_physics::PhysicsPlugin::default());
+    let (hero, kid, stranger) = {
+        let mut world = app.resources.fetch_mut::<World>();
+        let hero = world.spawn((
+            Transform::IDENTITY,
+            Name("hero".into()),
+            olvin_physics::CharacterMotor::default(),
+            Scripts::new().with("Driver", []),
+        ));
+        let kid = world.spawn((
+            Transform::from_translation(Vec3::new(7.0, 0.0, 0.0)),
+            Name("Kid".into()),
+            olvin_transform::Parent(hero),
+        ));
+        // Same name, not a child of the hero: find_child must not return it.
+        let stranger = world.spawn((Transform::IDENTITY, Name("Kid".into())));
+        (hero, kid, stranger)
+    };
+    let _ = (kid, stranger);
+    app.startup();
+    step(&app);
+    // gravity() is the world's (9.81 down), the child was found (x = 7).
+    let t = *app
+        .resources
+        .fetch::<World>()
+        .get::<&Transform>(hero)
+        .unwrap();
+    assert_eq!(t.translation.x, 7.0, "find_child + position_of");
+    assert!(
+        (t.translation.y - 9.81).abs() < 0.01,
+        "gravity {}",
+        t.translation.y
+    );
+    // The motor velocity was set from Lua (read back through the component).
+    let world = app.resources.fetch::<World>();
+    let motor = world.get::<&olvin_physics::CharacterMotor>(hero).unwrap();
+    assert_eq!(motor.velocity.x, 3.0);
+}

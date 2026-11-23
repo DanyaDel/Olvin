@@ -1,0 +1,17 @@
+(
+  id: "top-down-controller",
+  name: "Top Down Controller",
+  version: "1.0.0",
+  category: Characters,
+  description: "A top-down or isometric mover: 8-direction WASD, the body turns to face where it walks, a camera above that follows. Right-stick aiming is optional.",
+  tags: ["player", "top-down", "isometric", "lua", "character"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "prefabs/top-down-controller/Character.prefab.ron",
+    "scripts/top-down-controller/controller.lua",
+    "scenes/top-down-controller/demo.scene.ron",
+  ],
+  notes: "Open scenes/top-down-controller/demo.scene.ron and press Play (WASD, Shift). Drop prefabs/top-down-controller/Character.prefab.ron into your own scene to get the character with its camera. For an isometric view rotate the Camera child around Y (for example 45 degrees, moving it onto the diagonal) and set camera_yaw to the same angle. jump_height above 0 enables jumping; aim_with_look turns the body with the right stick. Aiming at the mouse cursor is not part of this version. All parameters are in the Inspector.",
+)

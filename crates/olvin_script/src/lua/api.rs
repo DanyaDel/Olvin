@@ -262,6 +262,10 @@ impl UserData for CtxHandle {
             let name = name.to_str()?;
             h.slot.with(|c| c.find_by_name(&name).map(entity_id))
         });
+        m.add_method("find_child", |_, h, name: LuaString| {
+            let name = name.to_str()?;
+            h.slot.with(|c| c.find_child(&name).map(entity_id))
+        });
         m.add_method("find_by_tag", |_, h, tag: LuaString| {
             let tag = tag.to_str()?;
             h.slot.with(|c| c.find_by_tag(&tag).map(entity_id))
@@ -441,6 +445,27 @@ fn add_physics<M: UserDataMethods<CtxHandle>>(m: &mut M) {
     m.add_method("velocity_xyz", |_, h, ()| {
         h.slot.with(|c| opt3(c.velocity().map(v3)))
     });
+    // Character controller: its motor's velocity (the character moves by it),
+    // whether it stands on the ground, and the world's gravity (m/s², positive).
+    m.add_method("motor_velocity_xyz", |_, h, ()| {
+        h.slot.with(|c| opt3(c.motor().map(|m| v3(m.velocity))))
+    });
+    m.add_method("set_motor_velocity_xyz", |_, h, (x, y, z): V3| {
+        h.slot.with(|c| match c.motor() {
+            Some(mut m) => {
+                m.velocity = Vec3::new(x, y, z);
+                true
+            }
+            None => false,
+        })
+    });
+    m.add_method("grounded", |_, h, ()| {
+        h.slot.with(|c| c.motor().is_some_and(|m| m.grounded))
+    });
+    m.add_method("gravity", |_, h, ()| {
+        h.slot
+            .with(|c| c.physics().map_or(9.81, |p| -p.gravity().y))
+    });
     // nil, or entity, point xyz, normal xyz, distance.
     m.add_method(
         "raycast_xyz",
@@ -484,6 +509,14 @@ fn add_input<M: UserDataMethods<CtxHandle>>(m: &mut M) {
     m.add_method("value", |_, h, a: LuaString| {
         let a = a.to_str()?;
         h.slot.with(|c| c.input().value(&a))
+    });
+    // Grabs (or frees) the mouse cursor, for mouse look.
+    m.add_method("set_cursor_locked", |_, h, locked: bool| {
+        h.slot.with(|c| {
+            if let Some(input) = c.input_mut() {
+                input.lock_cursor(locked);
+            }
+        })
     });
     m.add_method("axis2d_xy", |_, h, a: LuaString| {
         let a = a.to_str()?;

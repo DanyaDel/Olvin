@@ -1,0 +1,17 @@
+(
+  id: "fps-controller",
+  name: "First Person Controller",
+  version: "1.0.0",
+  category: Characters,
+  description: "A first-person player: mouse look, WASD, sprint, jump, optional crouch and head bob, on a Character Controller. Comes with a small demo scene.",
+  tags: ["player", "fps", "first-person", "lua", "character"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "prefabs/fps-controller/Player.prefab.ron",
+    "scripts/fps-controller/player.lua",
+    "scenes/fps-controller/demo.scene.ron",
+  ],
+  notes: "Open scenes/fps-controller/demo.scene.ron and press Play (WASD, mouse, Shift, Space). To use it in your own scene, drop prefabs/fps-controller/Player.prefab.ron into it (or press Add to scene in the Library). Tune speed, jump_height, sensitivity, head_bob and the rest in the Inspector (Script > parameters). Crouch needs an action called Crouch in assets/input.ron (for example Key(ControlLeft)); it is optional. The script is player.lua in assets/scripts/fps-controller/, plain Lua: copy and change it.",
+)

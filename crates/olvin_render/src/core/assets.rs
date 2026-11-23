@@ -35,41 +35,63 @@ impl RenderCore {
         )
     }
 
-    /// Uploads meshes added to `meshes` since the last call.
+    /// Uploads meshes added to `meshes` since the last call, and poses the
+    /// skinned ones ([`Meshes::skin`]): on the GPU with a compute pass on the
+    /// Full tier, else on the CPU into the mesh slot (see [`Self::gpu_skinning`]).
     pub fn upload(&self, gpu: &mut GpuMeshes, meshes: &mut Meshes) {
-        use wgpu::util::DeviceExt;
-        for (handle, data) in meshes.pending.drain(..) {
-            let MeshData { vertices, indices } = &data;
-            // Nothing to draw (and wgpu cannot slice a zero-size buffer): an
-            // emptied mesh leaves its slot empty, which every pass skips.
-            if vertices.is_empty() || indices.is_empty() {
-                if let Some(slot) = gpu.meshes.get_mut(handle.0 as usize) {
-                    *slot = None;
-                }
-                continue;
+        let updates = std::mem::take(&mut meshes.skin_updates);
+        let on_gpu = self.gpu_skinning();
+        if !on_gpu {
+            for u in updates.iter() {
+                meshes.set(u.handle, u.source.skin(&u.matrices));
             }
-            let (center, radius) = data.bounding_sphere();
-            let mesh = GpuMesh {
-                vertices: self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mesh vertices"),
-                        contents: bytemuck::cast_slice::<Vertex, u8>(vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                indices: self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mesh indices"),
-                        contents: bytemuck::cast_slice::<u32, u8>(indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                index_count: indices.len() as u32,
-                center,
-                radius,
-            };
-            put(&mut gpu.meshes, handle.0, mesh);
         }
+        for (handle, data) in meshes.pending.drain(..) {
+            self.upload_mesh(gpu, handle, &data);
+        }
+        if on_gpu {
+            self.skin_on_gpu(gpu, updates);
+        }
+    }
+
+    pub(super) fn upload_mesh(
+        &self,
+        gpu: &mut GpuMeshes,
+        handle: crate::MeshHandle,
+        data: &MeshData,
+    ) {
+        use wgpu::util::DeviceExt;
+        gpu.skins.remove(&handle.0);
+        let MeshData { vertices, indices } = data;
+        // Nothing to draw (and wgpu cannot slice a zero-size buffer): an
+        // emptied mesh leaves its slot empty, which every pass skips.
+        if vertices.is_empty() || indices.is_empty() {
+            if let Some(slot) = gpu.meshes.get_mut(handle.0 as usize) {
+                *slot = None;
+            }
+            return;
+        }
+        let (center, radius) = data.bounding_sphere();
+        let mesh = GpuMesh {
+            vertices: self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh vertices"),
+                    contents: bytemuck::cast_slice::<Vertex, u8>(vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+            indices: self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh indices"),
+                    contents: bytemuck::cast_slice::<u32, u8>(indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+            index_count: indices.len() as u32,
+            center,
+            radius,
+        };
+        put(&mut gpu.meshes, handle.0, mesh);
     }
 
     /// Uploads what changed in the asset registries since the last call:
@@ -267,7 +289,7 @@ pub(super) fn material_bind_group(
     })
 }
 
-fn put<T>(slots: &mut Vec<Option<T>>, index: u32, value: T) {
+pub(super) fn put<T>(slots: &mut Vec<Option<T>>, index: u32, value: T) {
     let i = index as usize;
     if slots.len() <= i {
         slots.resize_with(i + 1, || None);

@@ -280,6 +280,8 @@ pub struct MeshHandle(pub(crate) u32);
 pub struct Meshes {
     next: u32,
     pub(crate) pending: Vec<(MeshHandle, MeshData)>,
+    /// Poses of skinned meshes waiting for the renderer (see [`Meshes::skin`]).
+    pub(crate) skin_updates: Vec<crate::skinning::SkinUpdate>,
 }
 
 impl Meshes {

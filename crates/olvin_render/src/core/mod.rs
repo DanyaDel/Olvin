@@ -13,6 +13,7 @@ mod frame;
 mod init;
 mod instancing;
 mod shadows;
+mod skin;
 #[cfg(test)]
 mod tests;
 
@@ -112,6 +113,8 @@ pub struct GpuMeshes {
     materials: Vec<Option<GpuMaterial>>,
     /// Indexed by `ShaderHandle`; the last pipeline that compiled.
     pipelines: Vec<Option<SurfacePipeline>>,
+    /// GPU-skinned meshes by mesh slot (Full tier, see `skin.rs`).
+    skins: std::collections::HashMap<u32, skin::GpuSkin>,
     generation: u64,
 }
 
@@ -232,6 +235,8 @@ pub struct RenderCore {
     /// Writes untonemapped linear light for a post-processing chain.
     hdr_output: bool,
     tier: RenderTier,
+    /// The skinning compute pipeline, built on first use.
+    skin_pipeline: std::sync::OnceLock<skin::SkinPipeline>,
     /// Whether the mesh shaders can read raw shadow depths (PCSS): native
     /// APIs only, decided when the shaders were compiled.
     pcss_shader: bool,

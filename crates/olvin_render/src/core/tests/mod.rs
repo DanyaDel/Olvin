@@ -8,6 +8,7 @@ mod library;
 mod lighting;
 mod materials;
 pub(super) mod post;
+mod skin;
 
 use super::*;
 use crate::{
@@ -24,9 +25,9 @@ fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+    // Like the window renderer: compute and storage buffers on native APIs.
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits:
-            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+        required_limits: crate::full_tier_limits(&adapter),
         ..Default::default()
     }))
     .ok()

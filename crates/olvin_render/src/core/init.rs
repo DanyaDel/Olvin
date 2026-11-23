@@ -124,6 +124,7 @@ impl RenderCore {
             encode_srgb: !color.is_srgb(),
             hdr_output: false,
             tier,
+            skin_pipeline: Default::default(),
             pcss_shader,
             time: None,
             start: Instant::now(),

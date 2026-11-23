@@ -9,6 +9,7 @@ mod plugin;
 pub mod profile;
 mod resources;
 mod schedule;
+pub mod secret;
 mod surface;
 mod time;
 

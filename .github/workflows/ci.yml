@@ -73,6 +73,9 @@ jobs:
             echo "проверка не увидела утечку в контрольном бинарнике"; exit 1
           fi
 
+      - name: литерал obf! не лежит в релизном бинарнике (E1)
+        run: cargo test -p olvin_core --test obf_binary --locked -- --ignored
+
       - name: смоук-тест окна (виртуальный дисплей)
         run: OLVIN_WINDOW_SMOKE=1 xvfb-run -a cargo test -p olvin_window --test window_smoke --locked
 

@@ -17,3 +17,6 @@ puffin = { version = "0.20", optional = true }
 puffin_http = { version = "0.17", optional = true }
 raw-window-handle.workspace = true
 log.workspace = true
+# E3: secrets are wiped on drop; E1: string literals scrambled in the binary.
+zeroize = "1"
+obfstr = "0.4"

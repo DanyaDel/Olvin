@@ -63,6 +63,16 @@ jobs:
       - name: тесты
         run: cargo test --workspace --locked --no-fail-fast
 
+      - name: бинарник без путей сборки и имени пользователя (B3, tools/check_binary_strings.py)
+        run: |
+          keep="$RUNNER_TEMP/keep-bin"
+          OLVIN_KEEP_TEST_BINARY="$keep" cargo test -p olvin_hub_cli --test build --locked release_hides
+          python3 tools/check_binary_strings.py "$keep/remapped-game" --auto --forbid "$(cat "$keep/forbidden.txt")"
+          # контроль: без ремапа та же проверка обязана найти утечку
+          if python3 tools/check_binary_strings.py "$keep/leaky-game" --forbid "$(cat "$keep/forbidden.txt")"; then
+            echo "проверка не увидела утечку в контрольном бинарнике"; exit 1
+          fi
+
       - name: смоук-тест окна (виртуальный дисплей)
         run: OLVIN_WINDOW_SMOKE=1 xvfb-run -a cargo test -p olvin_window --test window_smoke --locked
 

@@ -91,6 +91,9 @@ enum Cmd {
         /// Release: do not strip the executable
         #[arg(long)]
         no_strip: bool,
+        /// Release: keep real build paths (home, project) in the binary
+        #[arg(long)]
+        no_remap: bool,
     },
     /// Projects the hub knows about
     Projects,
@@ -287,6 +290,7 @@ fn run(cli: Cli) -> Result<()> {
             archive,
             keep_symbols,
             no_strip,
+            no_remap,
         } => {
             let project = open(project.as_deref())?;
             let archive = archive.as_deref().map(ArchiveFormat::parse).transpose()?;
@@ -302,7 +306,8 @@ fn run(cli: Cli) -> Result<()> {
                 target_dir: None,
                 keep_symbols,
                 no_strip,
-                })?;
+                no_remap,
+            })?;
             println!("game:    {}", report.binary.display());
             println!(
                 "folder:  {} ({} asset files)",

@@ -161,3 +161,103 @@ fn editor_remove_rejects_unknown_elements() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("no editor element `nope`"));
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// A game whose dependency lives outside the project, so rustc sees an
+/// absolute source path under the (fake) home folder, like an engine checkout
+/// or a registry crate would. `olvin::here()` prints where it thinks it is.
+fn leaky_game(dir: &Path) -> PathBuf {
+    let home = dir.join("home");
+    let stub = home.join("olvin-stub");
+    fs::create_dir_all(stub.join("src")).unwrap();
+    fs::write(
+        stub.join("Cargo.toml"),
+        "[package]\nname = \"olvin\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        stub.join("src/lib.rs"),
+        "pub fn here() -> &'static str { file!() }\n",
+    )
+    .unwrap();
+    let root = home.join("leaky");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"leaky\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nolvin = { path = \"../olvin-stub\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"{}\", olvin::here()); }\n",
+    )
+    .unwrap();
+    root
+}
+
+fn contains(path: &Path, needle: &str) -> bool {
+    let bytes = fs::read(path).unwrap();
+    bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+/// B3: a release build does not carry the home folder; `--no-remap` does (the
+/// control that proves the check can see a leak). The binary is also checked
+/// with `tools/check_binary_strings.py`; CI sets `OLVIN_KEEP_TEST_BINARY` to a
+/// folder to get the remapped binary and its forbidden strings for that script.
+#[test]
+fn release_hides_the_home_folder_unless_remapping_is_off() {
+    let dir = temp_dir("remap");
+    let game = leaky_game(&dir);
+    let game_arg = game.to_str().unwrap();
+    let home = dir.join("home");
+    let home_str = home.to_str().unwrap();
+
+    let remapped = dir.join("out-remapped");
+    let result = hub(
+        &dir,
+        &[
+            "build",
+            "--release",
+            "-p",
+            game_arg,
+            "-o",
+            remapped.to_str().unwrap(),
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    let bin = remapped.join("leaky");
+    assert!(
+        !contains(&bin, home_str),
+        "the home folder is in the binary"
+    );
+    let run = Command::new(&bin).output().unwrap();
+    let shown = String::from_utf8_lossy(&run.stdout).trim().to_owned();
+    assert_eq!(shown, "~/olvin-stub/src/lib.rs");
+
+    let leaky = dir.join("out-leaky");
+    let result = hub(
+        &dir,
+        &[
+            "build",
+            "--release",
+            "--no-remap",
+            "-p",
+            game_arg,
+            "-o",
+            leaky.to_str().unwrap(),
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert!(
+        contains(&leaky.join("leaky"), home_str),
+        "control: no remap leaks"
+    );
+
+    if let Some(keep) = std::env::var_os("OLVIN_KEEP_TEST_BINARY") {
+        let keep = PathBuf::from(keep);
+        fs::create_dir_all(&keep).unwrap();
+        fs::copy(&bin, keep.join("remapped-game")).unwrap();
+        fs::copy(leaky.join("leaky"), keep.join("leaky-game")).unwrap();
+        fs::write(keep.join("forbidden.txt"), format!("{home_str}\n")).unwrap();
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

@@ -58,6 +58,9 @@ pub struct BuildOptions {
     pub keep_symbols: bool,
     /// Release only: leave the executable as cargo links it (no `strip`).
     pub no_strip: bool,
+    /// Release only: keep real build paths in the binary (panic locations,
+    /// debug info). By default they are rewritten, see [`remap_rules`].
+    pub no_remap: bool,
 }
 
 #[derive(Debug)]
@@ -166,6 +169,15 @@ impl Project {
             for (key, value) in release_profile(options) {
                 cmd.env(key, value);
             }
+            if !options.no_remap {
+                let rules = remap_rules(
+                    self.root(),
+                    std::env::var_os("HOME").map(PathBuf::from),
+                    cargo_home(),
+                    rustc_sysroot(),
+                );
+                set_rustflags(&mut cmd, &remap_flags(&rules));
+            }
         }
         if let Some(dir) = &options.target_dir {
             cmd.arg("--target-dir").arg(dir);
@@ -193,6 +205,92 @@ impl Project {
             bail!("cargo build failed ({status})");
         }
         built.context("cargo built no executable: does the project have a binary target?")
+    }
+}
+
+/// Where cargo keeps the registry sources: `$CARGO_HOME`, else `~/.cargo`.
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))
+}
+
+/// The active toolchain's root (`rustc --print sysroot`); `None` if rustc does not answer.
+fn rustc_sysroot() -> Option<PathBuf> {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let output = Command::new(rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let path = text.trim();
+    (output.status.success() && !path.is_empty()).then(|| PathBuf::from(path))
+}
+
+/// Path prefixes to hide from a release binary, with what replaces them: the
+/// home folder (`~`), cargo's home (`/cargo`), the toolchain (`/rustc-sysroot`)
+/// and the project (`/project`). Where they are nested, the more specific one
+/// comes later: rustc applies the last rule that matches. A path that is only
+/// reachable through a symlink is listed in both spellings, and a root-like
+/// path (`/`) is never remapped, since it would match everything.
+fn remap_rules(
+    project: &Path,
+    home: Option<PathBuf>,
+    cargo_home: Option<PathBuf>,
+    sysroot: Option<PathBuf>,
+) -> Vec<(PathBuf, &'static str)> {
+    let wanted = [
+        (home, "~"),
+        (cargo_home, "/cargo"),
+        (sysroot, "/rustc-sysroot"),
+        (Some(project.to_path_buf()), "/project"),
+    ];
+    let mut rules: Vec<(PathBuf, &'static str)> = Vec::new();
+    for (path, to) in wanted {
+        let Some(path) = path else { continue };
+        let canonical = path.canonicalize().ok();
+        for from in std::iter::once(path).chain(canonical) {
+            let rooted = from.components().count() < 2;
+            if !rooted && !rules.iter().any(|(f, _)| *f == from) {
+                rules.push((from, to));
+            }
+        }
+    }
+    rules
+}
+
+/// `--remap-path-prefix` flags for the rules (paths that are not UTF-8 are skipped).
+fn remap_flags(rules: &[(PathBuf, &str)]) -> Vec<String> {
+    rules
+        .iter()
+        .filter_map(|(from, to)| Some(format!("--remap-path-prefix={}={to}", from.to_str()?)))
+        .collect()
+}
+
+/// Adds `flags` to the build's rustflags without losing the user's own. When
+/// `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set it would shadow every other
+/// source, so ours are appended to that value; otherwise they go in through
+/// `--config build.rustflags`, which cargo joins with the ones from
+/// `.cargo/config.toml`. (A `target.<triple>.rustflags` setting still takes
+/// precedence over both, which is why the CI check looks at the binary.)
+fn set_rustflags(cmd: &mut Command, flags: &[String]) {
+    let existing = std::env::var("CARGO_ENCODED_RUSTFLAGS")
+        .map(|v| v.split('\x1f').map(str::to_owned).collect::<Vec<_>>())
+        .or_else(|_| {
+            std::env::var("RUSTFLAGS")
+                .map(|v| v.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        });
+    match existing {
+        Ok(mut all) => {
+            all.extend(flags.iter().cloned());
+            cmd.env_remove("RUSTFLAGS")
+                .env("CARGO_ENCODED_RUSTFLAGS", all.join("\x1f"));
+        }
+        Err(_) => {
+            let array =
+                toml::Value::Array(flags.iter().cloned().map(toml::Value::String).collect());
+            cmd.arg("--config").arg(format!("build.rustflags={array}"));
+        }
     }
 }
 
@@ -751,9 +849,18 @@ mod tests {
         assert!(symbols.starts_with(dir.join("out/symbols")), "{symbols:?}");
         assert!(!symbols.starts_with(&out));
         let name = symbols.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(name.starts_with("tiny-") && name.ends_with(".debug"), "{name}");
-        assert!(contains(&symbols, "olvin_probe_fn"), "names are in the symbols");
-        assert!(!contains(&report.binary, "olvin_probe_fn"), "and not in the game");
+        assert!(
+            name.starts_with("tiny-") && name.ends_with(".debug"),
+            "{name}"
+        );
+        assert!(
+            contains(&symbols, "olvin_probe_fn"),
+            "names are in the symbols"
+        );
+        assert!(
+            !contains(&report.binary, "olvin_probe_fn"),
+            "and not in the game"
+        );
         assert!(
             fs::metadata(&symbols).unwrap().len() > fs::metadata(&report.binary).unwrap().len()
         );
@@ -762,7 +869,10 @@ mod tests {
         let gz = flate2::read::GzDecoder::new(File::open(report.archive.unwrap()).unwrap());
         for entry in tar::Archive::new(gz).entries().unwrap() {
             let path = entry.unwrap().path().unwrap().display().to_string();
-            assert!(!path.contains("symbols") && !path.ends_with(".debug"), "{path}");
+            assert!(
+                !path.contains("symbols") && !path.ends_with(".debug"),
+                "{path}"
+            );
         }
 
         // Contradicting or pointless flags are refused before cargo runs.
@@ -783,6 +893,29 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("contradict"), "{err}");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn remap_rules_put_specific_paths_last() {
+        let rules = remap_rules(
+            Path::new("/home/alice/dev/game"),
+            Some("/home/alice".into()),
+            Some("/home/alice/.cargo".into()),
+            Some("/home/alice/.rustup/toolchains/stable".into()),
+        );
+        let flags = remap_flags(&rules);
+        assert_eq!(
+            flags,
+            [
+                "--remap-path-prefix=/home/alice=~",
+                "--remap-path-prefix=/home/alice/.cargo=/cargo",
+                "--remap-path-prefix=/home/alice/.rustup/toolchains/stable=/rustc-sysroot",
+                "--remap-path-prefix=/home/alice/dev/game=/project",
+            ]
+        );
+        // `/` as a home (a container) must not rewrite every path.
+        let rules = remap_rules(Path::new("/srv/game"), Some("/".into()), None, None);
+        assert_eq!(rules, [(PathBuf::from("/srv/game"), "/project")]);
     }
 
     #[test]

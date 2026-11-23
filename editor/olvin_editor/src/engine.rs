@@ -136,13 +136,75 @@ impl EngineGpu {
 type CsgKey = (olvin::csg::BrushInput, Option<String>);
 /// A textured CSG mesh: (mesh, colour, material path).
 type CsgMesh = (MeshHandle, [f32; 4], Option<String>);
-/// A model's parts in its own space: mesh, placement, colour, material.
+/// A static model part in its own space: mesh, placement, colour, material.
 type ModelPart = (
     MeshHandle,
     Mat4,
     [f32; 4],
     Option<olvin::render::MaterialHandle>,
 );
+
+/// A model imported for the scene view: static parts shared by every
+/// instance, plus what skinned instances ([`Rig`]) are built from.
+struct CachedModel {
+    data: std::sync::Arc<olvin_assets::ModelData>,
+    materials: Vec<olvin::render::MaterialHandle>,
+    statics: Vec<ModelPart>,
+    /// Primitives with a skin (indices into `data.meshes`).
+    skinned: Vec<usize>,
+}
+
+/// Scene-view preview of a model's animation: where the editor plays a clip
+/// (or the scene's own setup) on the selected model. Lives in the editor
+/// state only: never saved, never an undo step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelPreview {
+    pub playing: bool,
+    /// Clip to play; `None` plays the object's own `ModelDesc::animation`.
+    pub clip: Option<String>,
+    pub speed: f32,
+    pub looping: bool,
+}
+
+impl Default for ModelPreview {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            clip: None,
+            speed: 1.0,
+            looping: true,
+        }
+    }
+}
+
+/// What a [`Rig`]'s animators were built for.
+#[derive(Clone, Debug, PartialEq)]
+enum RigSetup {
+    /// Rest pose, nothing plays.
+    Rest,
+    Playing {
+        animation: Option<olvin::scene::file::AnimationDesc>,
+        looping: bool,
+    },
+}
+
+struct RigPart {
+    mesh: MeshHandle,
+    skin: olvin::render::SkinnedMesh,
+    /// Index of the animator (skeleton) that poses it.
+    skeleton: usize,
+    color: [f32; 4],
+    material: Option<olvin::render::MaterialHandle>,
+}
+
+/// The skinned parts of one model object, with their animators; persists
+/// across frames (the preview world is rebuilt every frame, these are not).
+struct Rig {
+    path: String,
+    parts: Vec<RigPart>,
+    animators: Vec<olvin::anim::Animator>,
+    setup: RigSetup,
+}
 
 /// The edited scene as an engine world, rebuilt once per frame.
 #[derive(Default)]
@@ -161,17 +223,48 @@ pub struct ScenePreview {
     /// CSG of brushes with materials (the CSG element draws the rest itself):
     /// rebuilt when the brush inputs or their materials change.
     csg: (Vec<CsgKey>, Vec<CsgMesh>),
-    /// glTF models by path, imported once (`None`: failed), drawn in bind pose.
-    models: HashMap<String, Option<Vec<ModelPart>>>,
+    /// glTF models by path, imported once (`None`: failed).
+    models: HashMap<String, Option<std::sync::Arc<CachedModel>>>,
+    /// Skinned models by object id: bind pose until a preview plays.
+    rigs: HashMap<u64, Rig>,
+    /// When the animations were last advanced.
+    clock: Option<std::time::Instant>,
     frame: Option<u64>,
 }
 
 impl ScenePreview {
-    pub fn sync(&mut self, scene: &SceneFile, frame: u64, assets_dir: Option<std::path::PathBuf>) {
+    /// Rebuilds the world for `frame` (once per frame, however many views
+    /// ask) and advances the playing [`ModelPreview`]s by the time since the
+    /// last call.
+    pub fn sync(
+        &mut self,
+        scene: &SceneFile,
+        frame: u64,
+        assets_dir: Option<std::path::PathBuf>,
+        previews: &HashMap<u64, ModelPreview>,
+    ) {
+        let now = std::time::Instant::now();
+        let dt = self
+            .clock
+            .replace(now)
+            .map_or(0.0, |t| (now - t).as_secs_f32().min(0.1));
+        self.sync_dt(scene, frame, assets_dir, previews, dt);
+    }
+
+    /// [`Self::sync`] with an explicit animation time step.
+    pub fn sync_dt(
+        &mut self,
+        scene: &SceneFile,
+        frame: u64,
+        assets_dir: Option<std::path::PathBuf>,
+        previews: &HashMap<u64, ModelPreview>,
+        dt: f32,
+    ) {
         if self.frame == Some(frame) {
             return;
         }
         self.frame = Some(frame);
+        let mut seen = Vec::new();
         self.assets.set_root(assets_dir);
         self.world.clear();
         self.sync_csg(scene);
@@ -228,18 +321,9 @@ impl ScenePreview {
                     },
                 ));
             }
-            if let Some(model) = &e.model {
-                for (mesh, at, color, material) in self.model(&model.path).into_iter().flatten() {
-                    self.world.spawn((
-                        Transform::IDENTITY,
-                        GlobalTransform(*m * at),
-                        MeshRenderer {
-                            mesh,
-                            color: Color(color),
-                            material,
-                        },
-                    ));
-                }
+            if let Some(desc) = &e.model {
+                seen.push(e.id);
+                self.spawn_model(e.id, desc, *m, previews.get(&e.id), dt);
             }
             if let Some(camera) = &e.camera {
                 self.world.spawn((
@@ -256,6 +340,7 @@ impl ScenePreview {
                 ));
             }
         }
+        self.rigs.retain(|id, _| seen.contains(id));
     }
 }
 
@@ -271,12 +356,12 @@ impl ScenePreview {
         )
     }
 
-    /// A model's parts (imported on first use; static, skinned meshes in bind pose).
-    fn model(&mut self, rel: &str) -> Option<Vec<ModelPart>> {
-        if let Some(parts) = self.models.get(rel) {
-            return parts.clone();
+    /// A model (imported on first use; `None`: it failed).
+    fn model(&mut self, rel: &str) -> Option<std::sync::Arc<CachedModel>> {
+        if let Some(model) = self.models.get(rel) {
+            return model.clone();
         }
-        let parts = self
+        let cached = self
             .assets
             .root()
             .map(|r| r.to_path_buf())
@@ -303,24 +388,203 @@ impl ScenePreview {
                         )
                     })
                     .collect();
-                let parts = olvin::models::placements(&model)
-                    .into_iter()
-                    .map(|(i, at)| {
-                        let prim = &model.meshes[i];
-                        let material = prim.material.and_then(|m| materials.get(m).copied());
-                        let color = if material.is_some() {
-                            [1.0; 4]
-                        } else {
-                            [0.8; 4]
-                        };
-                        let mesh = self.meshes.add(olvin::models::primitive_mesh(prim));
-                        (mesh, at, color, material)
-                    })
-                    .collect();
-                Some(parts)
+                let mut statics = Vec::new();
+                let mut skinned = Vec::new();
+                for (i, at) in olvin::models::placements(&model) {
+                    let prim = &model.meshes[i];
+                    if prim.skin.is_some() && !prim.joints.is_empty() {
+                        skinned.push(i);
+                        continue;
+                    }
+                    let material = prim.material.and_then(|m| materials.get(m).copied());
+                    let color = if material.is_some() {
+                        [1.0; 4]
+                    } else {
+                        [0.8; 4]
+                    };
+                    let mesh = self.meshes.add(olvin::models::primitive_mesh(prim));
+                    statics.push((mesh, at, color, material));
+                }
+                Some(std::sync::Arc::new(CachedModel {
+                    data: std::sync::Arc::new(model),
+                    materials,
+                    statics,
+                    skinned,
+                }))
             });
-        self.models.insert(rel.to_owned(), parts.clone());
-        parts
+        self.models.insert(rel.to_owned(), cached.clone());
+        cached
+    }
+
+    /// Names of the clips of the model at `rel` (imports it on first use;
+    /// empty when it fails or has none).
+    pub fn model_clips(
+        &mut self,
+        assets_dir: Option<std::path::PathBuf>,
+        rel: &str,
+    ) -> Vec<String> {
+        self.assets.set_root(assets_dir);
+        self.model(rel)
+            .map(|m| m.data.clips.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Spawns a model object's parts into the preview world: static parts
+    /// at their nodes, skinned parts posed by the object's [`Rig`] (rest
+    /// pose, or the preview's animation advanced by `dt`).
+    fn spawn_model(
+        &mut self,
+        id: u64,
+        desc: &olvin::scene::file::ModelDesc,
+        m: Mat4,
+        preview: Option<&ModelPreview>,
+        dt: f32,
+    ) {
+        let Some(model) = self.model(&desc.path) else {
+            return;
+        };
+        for &(mesh, at, color, material) in &model.statics {
+            self.world.spawn((
+                Transform::IDENTITY,
+                GlobalTransform(m * at),
+                MeshRenderer {
+                    mesh,
+                    color: Color(color),
+                    material,
+                },
+            ));
+        }
+        if model.skinned.is_empty() {
+            return;
+        }
+        let mut rig = match self.rigs.remove(&id) {
+            Some(rig) if rig.path == desc.path => rig,
+            _ => self.build_rig(&desc.path, &model),
+        };
+        let setup = match preview {
+            Some(p) if p.playing => RigSetup::Playing {
+                animation: p
+                    .clip
+                    .clone()
+                    .map(olvin::scene::file::AnimationDesc::Clip)
+                    .or_else(|| desc.animation.clone()),
+                looping: p.looping,
+            },
+            _ => RigSetup::Rest,
+        };
+        if rig.setup != setup {
+            rig.animators = self.build_animators(&model, &setup);
+            rig.setup = setup;
+            rig.parts.iter_mut().for_each(|p| p.skin.invalidate());
+        }
+        if let (Some(p), RigSetup::Playing { .. }) = (preview, &rig.setup) {
+            for a in &mut rig.animators {
+                a.speed = p.speed;
+                a.update(dt);
+            }
+        }
+        for part in &mut rig.parts {
+            if let Some(a) = rig.animators.get(part.skeleton) {
+                part.skin
+                    .pose(&mut self.meshes, part.mesh, a.version, &a.matrices);
+            }
+            self.world.spawn((
+                Transform::IDENTITY,
+                GlobalTransform(m),
+                MeshRenderer {
+                    mesh: part.mesh,
+                    color: Color(part.color),
+                    material: part.material,
+                },
+            ));
+        }
+        self.rigs.insert(id, rig);
+    }
+
+    fn build_rig(&mut self, path: &str, model: &CachedModel) -> Rig {
+        let parts = model
+            .skinned
+            .iter()
+            .filter_map(|&i| {
+                let prim = &model.data.meshes[i];
+                let skin = olvin::render::SkinnedMesh::new(
+                    olvin::models::primitive_mesh(prim),
+                    prim.joints.clone(),
+                    prim.weights.clone(),
+                    olvin::ecs::Entity::DANGLING,
+                )
+                .ok()?;
+                let mesh = self.meshes.add(skin.bind_mesh());
+                let material = prim.material.and_then(|m| model.materials.get(m).copied());
+                let color = match (
+                    material,
+                    prim.material.and_then(|m| model.data.materials.get(m)),
+                ) {
+                    (None, Some(m)) => m.base_color,
+                    (None, None) => [0.8; 4],
+                    (Some(_), _) => [1.0; 4],
+                };
+                Some(RigPart {
+                    mesh,
+                    skin,
+                    skeleton: prim.skin.unwrap_or(0),
+                    color,
+                    material,
+                })
+            })
+            .collect();
+        Rig {
+            path: path.to_owned(),
+            parts,
+            animators: self.build_animators(model, &RigSetup::Rest),
+            setup: RigSetup::Rest,
+        }
+    }
+
+    /// One animator per skeleton of the model for `setup` (a broken one
+    /// stays in the rest pose, with a warning).
+    fn build_animators(&self, model: &CachedModel, setup: &RigSetup) -> Vec<olvin::anim::Animator> {
+        use olvin::scene::file::{AnimGraphDesc, AnimationDesc};
+        let data = &model.data;
+        let graph_file = match setup {
+            RigSetup::Playing {
+                animation: Some(AnimationDesc::Graph(path)),
+                ..
+            } => self
+                .assets
+                .root()
+                .ok_or_else(|| "no assets folder".to_owned())
+                .and_then(|root| AnimGraphDesc::load(root.join(path)))
+                .map_err(|e| log::warn!("{path}: {e}"))
+                .ok(),
+            _ => None,
+        };
+        (0..data.skeletons.len())
+            .filter_map(|skin| {
+                let rest = data.animator(skin)?;
+                let RigSetup::Playing { animation, looping } = setup else {
+                    return Some(rest);
+                };
+                let built = match animation {
+                    Some(AnimationDesc::Clip(name)) => data
+                        .clips
+                        .iter()
+                        .position(|c| &c.name == name)
+                        .map(|clip| {
+                            let mut graph = olvin::anim::AnimGraph::single(clip);
+                            graph.states[0].looping = *looping;
+                            rest.clone().with_graph(graph)
+                        })
+                        .ok_or_else(|| format!("no clip \"{name}\"")),
+                    Some(other) => data.animator_with(skin, Some(other), graph_file.as_ref()),
+                    None => Ok(rest.clone()),
+                };
+                Some(built.unwrap_or_else(|e| {
+                    log::warn!("{}: {e}; rest pose", data.name);
+                    rest
+                }))
+            })
+            .collect()
     }
 
     /// The renderer's sky for the scene's skybox (loads the panorama).
@@ -564,7 +828,9 @@ pub(crate) fn prepare_view(
         Some(Source::Play)
     } else {
         let assets_dir = state.assets_dir();
-        state.engine_scene.sync(&state.scene, frame, assets_dir);
+        state
+            .engine_scene
+            .sync(&state.scene, frame, assets_dir, &state.model_previews);
         let vp = view_proj(&state.engine_scene.world)?;
         let mut settings = match shading {
             Shading::Rendered => settings_for(&state.scene),
@@ -635,13 +901,14 @@ impl PlaySession {
             .insert_resource(Shaders::default())
             .insert_resource(RenderAssets::new(assets_dir.clone()))
             .insert_resource(settings_for(scene));
-        // Scene models with their animators (skinned meshes stay in bind
-        // pose: CPU skinning is part of RenderPlugin, which Play doesn't run).
+        // Scene models with their animators; `skin_meshes` queues the poses of
+        // skinned meshes for the renderer (GPU skinning on the Full tier).
         if let Some(dir) = &assets_dir {
             app.insert_resource(olvin_assets::AssetManager::new(dir.clone()));
         }
         app.add_plugin(olvin::anim::AnimPlugin)
-            .add_plugin(olvin::models::ModelPlugin);
+            .add_plugin(olvin::models::ModelPlugin)
+            .add_system(olvin::core::Stage::PostUpdate, olvin::render::skin_meshes);
         // Scripts (the built-in behaviours and Lua; Rust game code isn't linked into the
         // editor) and the project's input map, fed from the Game view.
         let lua_dir = assets_dir.as_ref().map(|d| d.join("scripts"));
@@ -828,10 +1095,209 @@ mod tests {
             ..Default::default()
         };
         let mut preview = ScenePreview::default();
-        preview.sync(&scene, 1, None);
+        preview.sync(&scene, 1, None, &HashMap::new());
         assert_eq!(preview.world.query::<&MeshRenderer>().iter().count(), 1);
         assert_eq!(preview.world.query::<&Camera>().iter().count(), 1);
-        preview.sync(&scene, 1, None);
+        preview.sync(&scene, 1, None, &HashMap::new());
         assert_eq!(preview.world.len(), 2, "same frame: not rebuilt twice");
+    }
+
+    /// A project's assets folder holding the vertical slice's robot (a skinned
+    /// glTF with the clips Idle and Wave).
+    fn robot_assets(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("olvin_editor_rig_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let src = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/vertical_slice/assets/models/robot.gltf"
+        );
+        std::fs::copy(src, dir.join("models/robot.gltf")).unwrap();
+        dir
+    }
+
+    fn robot_scene(animation: Option<olvin::scene::file::AnimationDesc>) -> SceneFile {
+        let mut robot = EntityDesc::new(5, "Robot");
+        robot.model = Some(olvin::scene::file::ModelDesc {
+            path: "models/robot.gltf".into(),
+            animation,
+        });
+        SceneFile {
+            entities: vec![robot],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn model_preview_poses_the_robot_and_stops_back_in_rest() {
+        let dir = robot_assets("preview");
+        let scene = robot_scene(None);
+        let mut preview = ScenePreview::default();
+        let mut previews = HashMap::new();
+        let mut frame = 0;
+        let mut step = |preview: &mut ScenePreview, previews: &HashMap<u64, ModelPreview>, dt| {
+            frame += 1;
+            preview.sync_dt(&scene, frame, Some(dir.clone()), previews, dt);
+        };
+
+        assert_eq!(
+            preview.model_clips(Some(dir.clone()), "models/robot.gltf"),
+            ["Idle", "Wave"]
+        );
+        // Not playing: the rest pose, posed once (two skinned primitives).
+        step(&mut preview, &previews, 0.1);
+        assert_eq!(preview.meshes.skin_updates_len(), 2);
+        let rest = preview.rigs[&5].animators[0].matrices.clone();
+        assert_eq!(preview.rigs[&5].animators[0].version, 0);
+        assert_eq!(preview.world.query::<&MeshRenderer>().iter().count(), 2);
+        preview.meshes.clear_skin_updates();
+        step(&mut preview, &previews, 0.1);
+        assert_eq!(
+            preview.meshes.skin_updates_len(),
+            0,
+            "unchanged: no re-pose"
+        );
+
+        // Playing Wave at double speed: time advances 2 x dt and the pose moves.
+        previews.insert(
+            5,
+            ModelPreview {
+                playing: true,
+                clip: Some("Wave".into()),
+                speed: 2.0,
+                looping: true,
+            },
+        );
+        step(&mut preview, &previews, 0.25);
+        let animator = &preview.rigs[&5].animators[0];
+        assert!((animator.layers[0].state.time - 0.5).abs() < 1e-4);
+        assert_ne!(animator.matrices, rest, "the pose moved");
+        assert_eq!(preview.meshes.skin_updates_len(), 2);
+        let first = animator.matrices.clone();
+        step(&mut preview, &previews, 0.25);
+        assert_ne!(
+            preview.rigs[&5].animators[0].matrices, first,
+            "keeps playing"
+        );
+
+        // A non-looping preview stops at the clip's end.
+        previews.get_mut(&5).unwrap().looping = false;
+        step(&mut preview, &previews, 0.0);
+        for _ in 0..3 {
+            step(&mut preview, &previews, 100.0);
+        }
+        let end = preview.rigs[&5].animators[0].matrices.clone();
+        step(&mut preview, &previews, 1.0);
+        assert_eq!(preview.rigs[&5].animators[0].matrices, end);
+
+        // Stop: back to the rest pose.
+        previews.get_mut(&5).unwrap().playing = false;
+        step(&mut preview, &previews, 0.1);
+        assert_eq!(preview.rigs[&5].animators[0].matrices, rest);
+        // The scene itself was never touched, and rigs go with their objects.
+        assert_eq!(scene, robot_scene(None));
+        preview.sync_dt(&SceneFile::default(), 99, Some(dir.clone()), &previews, 0.1);
+        assert!(preview.rigs.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preview_without_a_clip_runs_the_scenes_graph() {
+        use olvin::scene::file::{AnimGraphDesc, AnimStateDesc, AnimationDesc};
+        let dir = robot_assets("graph");
+        let graph = AnimGraphDesc {
+            states: vec![AnimStateDesc::clip("Wave", "Wave")],
+            ..Default::default()
+        };
+        std::fs::create_dir_all(dir.join("anim")).unwrap();
+        graph.save(dir.join("anim/robot.animgraph.ron")).unwrap();
+        for animation in [
+            AnimationDesc::Inline(graph.clone()),
+            AnimationDesc::Graph("anim/robot.animgraph.ron".into()),
+            AnimationDesc::Clip("Wave".into()),
+        ] {
+            let scene = robot_scene(Some(animation.clone()));
+            let mut preview = ScenePreview::default();
+            let previews = HashMap::from([(
+                5,
+                ModelPreview {
+                    playing: true,
+                    ..Default::default()
+                },
+            )]);
+            preview.sync_dt(&scene, 1, Some(dir.clone()), &previews, 0.0);
+            preview.sync_dt(&scene, 2, Some(dir.clone()), &previews, 0.3);
+            let a = &preview.rigs[&5].animators[0];
+            assert_eq!(a.layers.len(), 1, "{animation:?}");
+            assert!((a.layers[0].state.time - 0.3).abs() < 1e-4, "{animation:?}");
+            assert_ne!(
+                a.matrices,
+                a.skeleton.skin_matrices(&a.skeleton.rest_pose())
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Play mode runs the model's animation: clip, inline graph and graph file.
+    #[test]
+    fn play_mode_animates_skinned_models() {
+        use olvin::anim::Animator;
+        use olvin::scene::file::{AnimGraphDesc, AnimStateDesc, AnimationDesc};
+        let dir = robot_assets("play");
+        let graph = AnimGraphDesc {
+            states: vec![AnimStateDesc::clip("Wave", "Wave")],
+            ..Default::default()
+        };
+        std::fs::create_dir_all(dir.join("anim")).unwrap();
+        graph.save(dir.join("anim/robot.animgraph.ron")).unwrap();
+        for animation in [
+            AnimationDesc::Clip("Wave".into()),
+            AnimationDesc::Inline(graph.clone()),
+            AnimationDesc::Graph("anim/robot.animgraph.ron".into()),
+        ] {
+            let scene = robot_scene(Some(animation.clone()));
+            let mut play = PlaySession::start(&scene, 0, Some(dir.clone()));
+            play.app
+                .resources
+                .fetch_mut::<olvin::core::Time>()
+                .set_fixed_delta(Some(0.1));
+            for _ in 0..2000 {
+                if olvin::models::pending_count(&play.app.resources) == 0 {
+                    break;
+                }
+                play.tick();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let version = |play: &PlaySession| {
+                let world = play.app.resources.fetch::<World>();
+                let a = world.query::<&Animator>().iter().next().map(|a| {
+                    (
+                        a.version,
+                        a.layers.len(),
+                        a.layers[0].graph.states[0].name.clone(),
+                    )
+                });
+                a.expect("a skinned model has its animator")
+            };
+            let before = version(&play);
+            assert_eq!(before.1, 1, "{animation:?}");
+            // Poses were queued for the renderer by the skin system.
+            play.app
+                .resources
+                .fetch_mut::<Meshes>()
+                .clear_skin_updates();
+            for _ in 0..5 {
+                play.tick();
+            }
+            let after = version(&play);
+            assert!(after.0 > before.0, "{animation:?}: {before:?} -> {after:?}");
+            assert_eq!(
+                play.app.resources.fetch::<Meshes>().skin_updates_len(),
+                2,
+                "{animation:?}: both primitives were re-posed"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

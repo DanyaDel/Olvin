@@ -214,6 +214,7 @@ impl Viewport {
                     {
                         state.frame_selection = true;
                     }
+                    model_preview_button(ui, state);
                 });
             })
             .response
@@ -378,5 +379,42 @@ fn draw_icons(painter: &egui::Painter, camera: &ViewCamera, state: &EditorState)
                 Stroke::NONE,
             ));
         }
+    }
+}
+
+/// "▶ Preview" for the selected model with animation clips: plays the clip
+/// chosen in the inspector on it in this view (not saved, not an undo step).
+fn model_preview_button(ui: &mut egui::Ui, state: &mut EditorState) {
+    if state.is_playing() {
+        return;
+    }
+    let Some(id) = state.selection else {
+        return;
+    };
+    let Some(path) = state
+        .scene
+        .get(id)
+        .and_then(|e| e.model.as_ref())
+        .map(|m| m.path.clone())
+    else {
+        return;
+    };
+    let assets = state.assets_dir();
+    if state.engine_scene.model_clips(assets, &path).is_empty() {
+        return;
+    }
+    ui.separator();
+    let preview = state.model_previews.entry(id).or_default();
+    let label = if preview.playing {
+        "■ Stop"
+    } else {
+        "▶ Preview"
+    };
+    if ui
+        .selectable_label(preview.playing, label)
+        .on_hover_text("Play the model's animation here (clip and speed in the inspector)")
+        .clicked()
+    {
+        preview.playing = !preview.playing;
     }
 }

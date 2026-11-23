@@ -137,6 +137,9 @@ pub struct EditorState {
     pub multi: Vec<u64>,
     /// Local-pose overrides for previews (animation scrubbing). Never saved.
     pub preview: HashMap<u64, Transform>,
+    /// Model animation previews in the scene view (by object id). Never saved
+    /// and not an undo step.
+    pub model_previews: HashMap<u64, crate::engine::ModelPreview>,
     /// The animation's current frame (Blender's `frame_current`), shared by
     /// the timeline, the viewport's `I` key and the inspector's key colours.
     pub anim_frame: i32,
@@ -207,6 +210,7 @@ impl EditorState {
             selection: None,
             multi: Vec::new(),
             preview: HashMap::new(),
+            model_previews: HashMap::new(),
             anim_frame: 1,
             log: Vec::new(),
             scene_generation: 0,
@@ -373,6 +377,7 @@ impl EditorState {
         self.selection = None;
         self.multi.clear();
         self.preview.clear();
+        self.model_previews.clear();
         self.undo.clear();
         self.redo.clear();
         self.scene_generation += 1;

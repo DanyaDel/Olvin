@@ -1918,3 +1918,84 @@ fn library_filters_by_category_and_search() {
     assert!(h.query_by_label("First Person Controller").is_none());
     assert!(h.query_by_label("Third Person Controller").is_none());
 }
+
+/// `project` plus the vertical slice's skinned robot (clips Idle, Wave) as
+/// object 4 with a model.
+fn rig_project(name: &str) -> PathBuf {
+    let root = project(name);
+    fs::create_dir_all(root.join("assets/models")).unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../vertical_slice/assets/models/robot.gltf"),
+        root.join("assets/models/robot.gltf"),
+    )
+    .unwrap();
+    let path = root.join("assets/scenes/main.scene.ron");
+    let mut scene = SceneFile::load(&path).unwrap();
+    let mut robot = EntityDesc::new(4, "Robot");
+    robot.model = Some(olvin_editor::olvin_scene::file::ModelDesc::new(
+        "models/robot.gltf",
+    ));
+    scene.entities.push(robot);
+    scene.save(&path).unwrap();
+    root
+}
+
+#[test]
+fn model_inspector_picks_clips_and_previews_without_dirtying_the_scene() {
+    use olvin_editor::olvin_scene::file::AnimationDesc;
+    let p = rig_project("rigui");
+    let mut h = editor(&p);
+    state(&mut h).select(Some(4));
+    h.run_steps(5);
+    let saved = state(&mut h).scene.clone();
+
+    // Play / stop the preview: state only, no undo step, scene untouched.
+    h.get_by_label("▶ Play preview").click();
+    h.run_steps(3);
+    assert!(state(&mut h).model_previews[&4].playing);
+    assert!(!state(&mut h).can_undo() && !state(&mut h).is_dirty());
+    assert_eq!(state(&mut h).scene, saved);
+    h.get_by_label("■ Stop preview").click();
+    h.run_steps(3);
+    assert!(!state(&mut h).model_previews[&4].playing);
+    assert!(!state(&mut h).can_undo() && !state(&mut h).is_dirty());
+
+    // The preview's clip, speed and loop are not scene data either.
+    state(&mut h).model_previews.get_mut(&4).unwrap().clip = Some("Wave".into());
+    h.run_steps(3);
+    assert_eq!(state(&mut h).scene, saved);
+
+    // The Animation dropdown lists the model's clips and sets the default
+    // clip: a saved, undoable edit.
+    h.get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("None"))
+        .expect("the Animation dropdown")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Wave").click();
+    h.run_steps(5);
+    assert_eq!(
+        state(&mut h)
+            .scene
+            .get(4)
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .animation,
+        Some(AnimationDesc::Clip("Wave".into()))
+    );
+    assert!(state(&mut h).can_undo());
+    undo(&mut h);
+    assert_eq!(
+        state(&mut h)
+            .scene
+            .get(4)
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .animation,
+        None
+    );
+}

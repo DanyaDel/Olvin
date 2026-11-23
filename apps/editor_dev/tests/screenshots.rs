@@ -771,3 +771,56 @@ fn particles_ui() {
     }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }
+
+/// A skinned robot playing its Wave clip as a scene-view preview, Dark and
+/// Light (`$OLVIN_EDITOR_SKIN_SHOTS` is the output folder).
+#[test]
+#[ignore = "renders PNGs with wgpu; run with --ignored"]
+fn skin_ui() {
+    let Some(out) = std::env::var_os("OLVIN_EDITOR_SKIN_SHOTS").map(PathBuf::from) else {
+        return;
+    };
+    fs::create_dir_all(&out).unwrap();
+    let project =
+        std::env::temp_dir().join(format!("olvin-editor-skin-{}/yard", std::process::id()));
+    demo_project(&project);
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../vertical_slice/assets/models/robot.gltf"),
+        project.join("assets/models/robot.gltf"),
+    )
+    .unwrap();
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        shot_with(
+            &project,
+            &out.join(format!("{theme:?}-skin_preview.png").to_lowercase()),
+            theme,
+            None,
+            |h| {
+                let state = h.state_mut().state_mut();
+                let id = state.create(olvin_editor::NewEntity::Empty, None);
+                let robot = state.scene.get_mut(id).unwrap();
+                robot.name = "Robot".into();
+                robot.position = Vec3::new(0.0, 0.0, 3.0);
+                robot.model = Some(olvin_editor::olvin_scene::file::ModelDesc::new(
+                    "models/robot.gltf",
+                ));
+                state.select(Some(id));
+                state.model_previews.insert(
+                    id,
+                    olvin_editor::ModelPreview {
+                        playing: true,
+                        clip: Some("Wave".into()),
+                        speed: 1.0,
+                        looping: true,
+                    },
+                );
+                // The preview runs on wall-clock time.
+                for _ in 0..40 {
+                    h.run_steps(1);
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                }
+            },
+        );
+    }
+    let _ = fs::remove_dir_all(project.parent().unwrap());
+}

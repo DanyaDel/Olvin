@@ -297,30 +297,40 @@ impl Panel for Inspector {
                     log = material_section(ui, e, &mut state.materials);
                 }
                 if let Some(model) = &mut e.model {
+                    let clips = state.engine_scene.model_clips(assets.clone(), &model.path);
+                    let preview = state.model_previews.entry(id).or_default();
                     section(ui, "🧍 Model", Some((&mut remove, "model")), |ui| {
-                        use olvin_scene::file::AnimationDesc;
                         grid(ui, "model", |ui| {
                             row(ui, "Path", |ui| {
                                 ui.text_edit_singleline(&mut model.path);
                             });
-                            row(ui, "Animation", |ui| match &mut model.animation {
-                                None => {
-                                    if ui.button("Add clip").clicked() {
-                                        model.animation = Some(AnimationDesc::Clip(String::new()));
-                                    }
-                                }
-                                Some(AnimationDesc::Clip(name)) => {
-                                    ui.text_edit_singleline(name);
-                                }
-                                Some(AnimationDesc::Graph(path)) => {
-                                    ui.text_edit_singleline(path);
-                                }
-                                Some(AnimationDesc::Inline(g)) => {
-                                    ui.weak(format!("inline graph, {} states", g.states.len()));
-                                }
+                            row(ui, "Animation", |ui| {
+                                animation_combo(ui, &mut model.animation, &clips)
                             });
+                            if !clips.is_empty() || model.animation.is_some() {
+                                row(ui, "Preview", |ui| preview_clip_combo(ui, preview, &clips));
+                                row(ui, "Speed", |ui| {
+                                    drag(ui, &mut preview.speed, 0.0..=8.0, 0.02, "×")
+                                });
+                                row(ui, "Loop", |ui| {
+                                    ui.checkbox(&mut preview.looping, "");
+                                });
+                                row(ui, "", |ui| {
+                                    let label = if preview.playing {
+                                        "■ Stop preview"
+                                    } else {
+                                        "▶ Play preview"
+                                    };
+                                    if ui.button(label).clicked() {
+                                        preview.playing = !preview.playing;
+                                    }
+                                });
+                            }
                         });
-                        ui.weak("The scene view shows the bind pose");
+                        ui.weak(
+                            "The scene view shows the bind pose until a preview plays \
+                             (preview settings are not saved); Play runs the scene's animation",
+                        );
                     });
                 }
                 if let Some(cam) = &mut e.camera {
@@ -1127,6 +1137,79 @@ fn script_ui(ui: &mut egui::Ui, script: &mut ScriptDesc, index: usize) {
         }
         script.params.insert(format!("param{n}"), String::new());
     }
+}
+
+/// The Animation row of a Model: a clip dropdown (clips of the imported
+/// model), or the graph's path / a summary of an inline graph with a clear button.
+fn animation_combo(
+    ui: &mut egui::Ui,
+    animation: &mut Option<olvin_scene::file::AnimationDesc>,
+    clips: &[String],
+) {
+    use olvin_scene::file::AnimationDesc;
+    let mut clear = false;
+    match animation {
+        Some(AnimationDesc::Graph(path)) => {
+            ui.text_edit_singleline(path);
+            clear = ui.small_button("✖").on_hover_text("Clear").clicked();
+        }
+        Some(AnimationDesc::Inline(g)) => {
+            ui.weak(format!("inline graph, {} states", g.states.len()));
+            clear = ui.small_button("✖").on_hover_text("Clear").clicked();
+        }
+        _ if clips.is_empty() => match animation {
+            Some(AnimationDesc::Clip(name)) => {
+                ui.text_edit_singleline(name);
+            }
+            _ => {
+                if ui.button("Add clip").clicked() {
+                    *animation = Some(AnimationDesc::Clip(String::new()));
+                }
+            }
+        },
+        _ => {
+            let current = match animation {
+                Some(AnimationDesc::Clip(name)) if clips.contains(name) => name.clone(),
+                Some(AnimationDesc::Clip(name)) => format!("{name} (missing)"),
+                _ => "None".to_owned(),
+            };
+            egui::ComboBox::from_id_salt("model-clip")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(animation.is_none(), "None (rest pose)")
+                        .clicked()
+                    {
+                        *animation = None;
+                    }
+                    for name in clips {
+                        let on = matches!(animation, Some(AnimationDesc::Clip(c)) if c == name);
+                        if ui.selectable_label(on, name).clicked() {
+                            *animation = Some(AnimationDesc::Clip(name.clone()));
+                        }
+                    }
+                });
+        }
+    }
+    if clear {
+        *animation = None;
+    }
+}
+
+/// Which clip the scene view previews: the object's own setup, or any clip.
+fn preview_clip_combo(
+    ui: &mut egui::Ui,
+    preview: &mut crate::engine::ModelPreview,
+    clips: &[String],
+) {
+    egui::ComboBox::from_id_salt("model-preview-clip")
+        .selected_text(preview.clip.as_deref().unwrap_or("Scene setup"))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut preview.clip, None, "Scene setup");
+            for name in clips {
+                ui.selectable_value(&mut preview.clip, Some(name.clone()), name);
+            }
+        });
 }
 
 /// A component block; `remove` gets `Some(key)` when its ✖ is clicked.

@@ -3430,6 +3430,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "glam 0.34.3",
+ "log",
  "olvin",
  "olvin_assets",
  "olvin_scene",

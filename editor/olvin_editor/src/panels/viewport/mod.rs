@@ -225,6 +225,10 @@ impl Panel for Viewport {
             drop_asset(state, &asset.0, DropTarget::Viewport { pick, at: Some(at) });
         }
 
+        // A playing model preview animates every frame.
+        if state.model_previews.values().any(|p| p.playing) {
+            ui.ctx().request_repaint();
+        }
         // The engine draws meshes (the edited scene, or the game while playing).
         let frame_nr = ui.ctx().cumulative_frame_nr();
         let engine = crate::engine::prepare_view(state, self.id, frame_nr, self.shading, |_| {

@@ -1,0 +1,11 @@
+// Hazard zone (lava, acid): damages whatever stands in the trigger every `interval` seconds (hazard.lua). Resize the root's collider or the Surface for another shape.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "HazardZone", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (4.0, 1.5, 4.0)), center: (0.0, 0.75, 0.0), is_trigger: true, friction: 0.8, restitution: 0.0)),
+            scripts: [(name: "health-damage/hazard", params: {"amount": "10.0", "interval": "1.0", "filter": ""})]),
+        (id: 2, name: "Surface", parent: Some(1), position: (0.0, 0.05, 0.0), rotation: (0.0, 0.0, 0.0), scale: (4.0, 0.1, 4.0),
+            mesh: Some((shape: Cube, color: (0.9, 0.25, 0.05, 1.0)))),
+    ],
+)

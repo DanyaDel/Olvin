@@ -1,0 +1,14 @@
+// The fps-controller Player with health.lua added: set respawn_delay >= 0 to bring it back after death.
+// First-person player: a Character Controller body and a camera at eye height.
+// player.lua reads Move/Look/Jump/Sprint (and Crouch if the project has it).
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Player", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            character_controller: Some((height: 1.8, radius: 0.4, step_offset: 0.3, slope_limit_deg: 45.0, push_mass: 80.0)),
+            scripts: [(name: "fps-controller/player", params: {"speed": "4.0", "sprint_speed": "7.0", "crouch_speed": "2.0", "jump_height": "1.2", "sensitivity": "0.12", "max_pitch": "85.0", "acceleration": "12.0", "air_control": "0.35", "camera": "Camera", "lock_cursor": "true", "crouch_depth": "0.5", "head_bob": "0.0"}), (name: "health-damage/health", params: {"max_health": "100.0", "start_health": "0.0", "invulnerable_time": "0.5", "var": "health", "destroy_on_death": "false", "respawn_delay": "-1.0", "hurt_sound": "", "death_sound": ""})]),
+        (id: 2, name: "Camera", parent: Some(1), position: (0.0, 0.7, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            camera: Some((fov_deg: 75.0, near: 0.05, far: 200.0)),
+            audio_listener: true),
+    ],
+)

@@ -1,0 +1,11 @@
+// Coin: spins, bobs, adds `amount` to the variable `score` when the player touches it.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Coin", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Sphere(radius: 0.7), center: (0.0, 0.9, 0.0), is_trigger: true, friction: 0.5, restitution: 0.0)),
+            scripts: [(name: "pickups/pickup", params: {"kind": "coin", "amount": "1.0", "key_id": "gold", "var": "", "respawn": "0.0", "spin": "120.0", "bob": "0.12", "bob_speed": "2.5", "visual": "Visual", "player": "Player", "pickup_sound": ""})]),
+        (id: 2, name: "Visual", parent: Some(1), position: (0.0, 0.9, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.45, 0.45, 0.08),
+            mesh: Some((shape: Cube, color: (1.0, 0.78, 0.1, 1.0)))),
+    ],
+)

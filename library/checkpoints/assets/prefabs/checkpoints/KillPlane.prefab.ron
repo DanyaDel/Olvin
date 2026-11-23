@@ -1,0 +1,8 @@
+// Respawns the player when it falls below `y` (kill_plane.lua).
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "KillPlane", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            scripts: [(name: "checkpoints/kill_plane", params: {"y": "-20.0", "target": "Player", "damage": "0.0"})]),
+    ],
+)

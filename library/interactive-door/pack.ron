@@ -1,0 +1,19 @@
+(
+  id: "interactive-door",
+  name: "Interactive Doors",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A door prefab that slides or swings, opens by proximity, a key press or messages, and can be locked behind a key id. Includes a pressure plate / lever script.",
+  tags: ["door", "gameplay", "lua", "trigger", "prefab"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/interactive-door/Door.prefab.ron",
+    "prefabs/interactive-door/Switch.prefab.ron",
+    "scripts/interactive-door/door.lua",
+    "scripts/interactive-door/door_switch.lua",
+    "scenes/interactive-door/demo.scene.ron",
+  ],
+  notes: "Open scenes/interactive-door/demo.scene.ron and press Play. Drop prefabs/interactive-door/Door.prefab.ron into a wall gap (2 m wide, 3 m tall) and tune it in the Inspector: mode (slide or hinge), opens_by (proximity, key, message), locked and key_id (a key pickup sets the variable key_<id>), id (to address it with messages). Messages it understands: open, close, toggle, lock, unlock (send them to the door, or broadcast with the door's id as the value); it broadcasts door_opened, door_closed and door_locked. Sounds are optional: put a path in open_sound, close_sound or locked_sound.",
+)

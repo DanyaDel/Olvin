@@ -1,0 +1,22 @@
+// Demo: walk off the edge of the first slab into the pit. You come back at the last checkpoint (the flag is up). Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Slab A", position: (0.0, -0.5, 3.0), rotation: (0.0, 0.0, 0.0), scale: (16.0, 1.0, 14.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 11, name: "Slab B", position: (0.0, -0.5, -19.0), rotation: (0.0, 0.0, 0.0), scale: (16.0, 1.0, 10.0),
+            mesh: Some((shape: Cube, color: (0.38, 0.34, 0.34, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Checkpoint Start", position: (0.0, 0.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/checkpoints/Checkpoint.prefab.ron", overrides: {"": {"scripts": r#"[(name:"checkpoints/checkpoint",params:{"initial":"true","spawn_offset":"0.0,0.95,0.0","player":"Player","flag":"Flag","reach_sound":""})]"#}}))),
+        (id: 21, name: "Checkpoint Far", position: (0.0, 0.0, -18.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/checkpoints/Checkpoint.prefab.ron", overrides: {"": {"scripts": r#"[(name:"checkpoints/checkpoint",params:{"initial":"false","spawn_offset":"0.0,0.95,0.0","player":"Player","flag":"Flag","reach_sound":""})]"#}}))),
+        (id: 22, name: "KillPlane", position: (0.0, -10.0, -9.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/checkpoints/KillPlane.prefab.ron", overrides: {"": {"scripts": r#"[(name:"checkpoints/kill_plane",params:{"y":"-10.0","target":"Player","damage":"0.0"})]"#}}))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/fps-controller/Player.prefab.ron"))),
+    ],
+)

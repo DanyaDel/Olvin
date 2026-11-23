@@ -1,0 +1,15 @@
+// Health pack: sends "heal" to the player (health-damage pack: health.lua).
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "HealthPack", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Sphere(radius: 0.7), center: (0.0, 0.9, 0.0), is_trigger: true, friction: 0.5, restitution: 0.0)),
+            scripts: [(name: "pickups/pickup", params: {"kind": "health", "amount": "25.0", "key_id": "gold", "var": "", "respawn": "0.0", "spin": "120.0", "bob": "0.12", "bob_speed": "2.5", "visual": "Visual", "player": "Player", "pickup_sound": ""})]),
+        (id: 2, name: "Visual", parent: Some(1), position: (0.0, 0.9, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.5, 0.4, 0.5),
+            mesh: Some((shape: Cube, color: (0.9, 0.15, 0.15, 1.0)))),
+        (id: 3, name: "Cross", parent: Some(2), position: (0.0, 0.0, 0.26), rotation: (0.0, 0.0, 0.0), scale: (0.6, 0.2, 0.05),
+            mesh: Some((shape: Cube, color: (1.0, 1.0, 1.0, 1.0)))),
+        (id: 4, name: "Cross 2", parent: Some(2), position: (0.0, 0.0, 0.26), rotation: (0.0, 0.0, 0.0), scale: (0.2, 0.6, 0.05),
+            mesh: Some((shape: Cube, color: (1.0, 1.0, 1.0, 1.0)))),
+    ],
+)

@@ -1,0 +1,13 @@
+// Checkpoint: the player entering it makes it the respawn point (checkpoint.lua). Name every instance differently. Tick `initial` on the one at the start.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Checkpoint", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (3.0, 3.0, 3.0)), center: (0.0, 1.5, 0.0), is_trigger: true, friction: 0.8, restitution: 0.0)),
+            scripts: [(name: "checkpoints/checkpoint", params: {"initial": "false", "spawn_offset": "0.0,0.95,0.0", "player": "Player", "flag": "Flag", "reach_sound": ""})]),
+        (id: 2, name: "Pole", parent: Some(1), position: (0.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.1, 2.0, 0.1),
+            mesh: Some((shape: Cube, color: (0.8, 0.8, 0.8, 1.0)))),
+        (id: 3, name: "Flag", parent: Some(1), position: (0.35, 1.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.6, 0.4, 0.05),
+            mesh: Some((shape: Cube, color: (0.2, 0.8, 0.3, 1.0)))),
+    ],
+)

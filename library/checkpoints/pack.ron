@@ -1,0 +1,19 @@
+(
+  id: "checkpoints",
+  name: "Checkpoints",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A checkpoint prefab that remembers the last one reached, a respawn that teleports the player there through the character controller, and a kill plane that triggers it.",
+  tags: ["checkpoint", "respawn", "kill-plane", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/checkpoints/Checkpoint.prefab.ron",
+    "prefabs/checkpoints/KillPlane.prefab.ron",
+    "scripts/checkpoints/checkpoint.lua",
+    "scripts/checkpoints/kill_plane.lua",
+    "scenes/checkpoints/demo.scene.ron",
+  ],
+  notes: "Open scenes/checkpoints/demo.scene.ron and press Play, then walk off the edge. Place a Checkpoint.prefab.ron at the start with initial ticked, more along the level (every instance needs its own name), and a KillPlane below the level. The last checkpoint reached is in the variable checkpoint (name) and checkpoint_pos; the message respawn (value: the entity id, else the player is used) makes the active checkpoint teleport it there with ctx:teleport_of, which also stops a falling character. health.lua sends respawn after a death when respawn_delay >= 0. Kill plane damage > 0 sends damage instead of respawning directly.",
+)

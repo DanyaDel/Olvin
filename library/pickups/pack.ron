@@ -1,0 +1,19 @@
+(
+  id: "pickups",
+  name: "Pickups",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "Collectible prefabs: a coin, a health pack and a key. They spin and bob, are collected by the player, update the shared variables score and keys, broadcast picked_up and can respawn.",
+  tags: ["pickup", "coin", "key", "health", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/pickups/Coin.prefab.ron",
+    "prefabs/pickups/HealthPack.prefab.ron",
+    "prefabs/pickups/Key.prefab.ron",
+    "scripts/pickups/pickup.lua",
+    "scenes/pickups/demo.scene.ron",
+  ],
+  notes: "Open scenes/pickups/demo.scene.ron and press Play, then walk through the coins. Prefabs: Coin (adds amount to the variable score), HealthPack (sends heal to the player; needs health.lua from the health-damage pack) and Key (sets key_<key_id> and counts keys; doors in the interactive-door pack read it). Tune kind, amount, key_id, respawn (seconds, 0 = once), spin, bob in the Inspector. It broadcasts picked_up with the kind as the value. The collector is the entity named Player (param player) or tagged Player. For a sound put a path into pickup_sound.",
+)

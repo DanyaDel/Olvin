@@ -1,0 +1,10 @@
+// Floor plate that sends a message to doors when the player steps on it (door_switch.lua).
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Plate", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.2, 0.1, 1.2),
+            mesh: Some((shape: Cube, color: (0.8, 0.2, 0.2, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: true, friction: 0.8, restitution: 0.0)),
+            scripts: [(name: "interactive-door/door_switch", params: {"target": "", "message": "toggle", "exit_message": "", "mode": "plate", "action": "Interact", "once": "false", "player": "Player"})]),
+    ],
+)

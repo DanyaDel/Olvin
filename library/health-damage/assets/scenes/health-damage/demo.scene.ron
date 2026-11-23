@@ -1,0 +1,17 @@
+// Demo: step into the lava (10 damage per second) or onto the spikes (20 per touch). The variables health and health_max follow; at 0 the player dies (died message) and returns after 3 s. Press Play.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (30.0, 1.0, 30.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 20, name: "Lava", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/health-damage/HazardZone.prefab.ron"))),
+        (id: 21, name: "Spikes 1", position: (6.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/health-damage/SpikeTrap.prefab.ron"))),
+        (id: 100, name: "Player", position: (0.0, 1.0, 6.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/health-damage/PlayerHealth.prefab.ron", overrides: {"": {"scripts": r#"[(name:"fps-controller/player",params:{"speed":"4.0","sprint_speed":"7.0","crouch_speed":"2.0","jump_height":"1.2","sensitivity":"0.12","max_pitch":"85.0","acceleration":"12.0","air_control":"0.35","camera":"Camera","lock_cursor":"true","crouch_depth":"0.5","head_bob":"0.0"}),(name:"health-damage/health",params:{"max_health":"100.0","start_health":"0.0","invulnerable_time":"0.5","var":"health","destroy_on_death":"false","respawn_delay":"3.0","hurt_sound":"","death_sound":""})]"#}}))),
+    ],
+)

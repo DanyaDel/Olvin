@@ -1,0 +1,21 @@
+(
+  id: "health-damage",
+  name: "Health and Damage",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A health script (damage, heal, invulnerability, death, respawn) driven by messages, a hazard zone, a damage-on-touch prefab and a Player prefab with health.",
+  tags: ["health", "damage", "hazard", "gameplay", "lua"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: ["fps-controller"],
+  provides: [
+    "prefabs/health-damage/PlayerHealth.prefab.ron",
+    "prefabs/health-damage/HazardZone.prefab.ron",
+    "prefabs/health-damage/SpikeTrap.prefab.ron",
+    "scripts/health-damage/health.lua",
+    "scripts/health-damage/hazard.lua",
+    "scripts/health-damage/touch_damage.lua",
+    "scenes/health-damage/demo.scene.ron",
+  ],
+  notes: "Open scenes/health-damage/demo.scene.ron and press Play, then walk into the lava. Add health.lua to any entity (the player, an enemy). Damage it with ctx:send(\"damage\", amount, entity); heal with \"heal\". It broadcasts damaged, healed and died, mirrors the health into the variables health and health_max (param var) and can destroy_on_death or respawn after respawn_delay (it then broadcasts respawn, which the checkpoints pack answers). PlayerHealth.prefab.ron is the fps-controller Player with health.lua. To show a health bar, read the variable from Rust: res.fetch::<ScriptVars>().get(\"health\") and update an olvin_gui label with gui.ui.set_text(node, ...) in a system, like apps/vertical_slice/src/hud.rs does for its messages; Lua has no UI binding.",
+)

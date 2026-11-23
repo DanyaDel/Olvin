@@ -1,0 +1,13 @@
+// Key: sets the variable key_<key_id> (default key_gold) and adds 1 to `keys`. Doors with key_id gold open for it.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Key", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Sphere(radius: 0.7), center: (0.0, 0.9, 0.0), is_trigger: true, friction: 0.5, restitution: 0.0)),
+            scripts: [(name: "pickups/pickup", params: {"kind": "key", "amount": "1.0", "key_id": "gold", "var": "", "respawn": "0.0", "spin": "120.0", "bob": "0.12", "bob_speed": "2.5", "visual": "Visual", "player": "Player", "pickup_sound": ""})]),
+        (id: 2, name: "Visual", parent: Some(1), position: (0.0, 0.9, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.3, 0.12, 0.12),
+            mesh: Some((shape: Cube, color: (0.3, 0.6, 1.0, 1.0)))),
+        (id: 3, name: "Tooth", parent: Some(2), position: (0.1, -0.7, 0.0), rotation: (0.0, 0.0, 0.0), scale: (0.25, 0.9, 0.8),
+            mesh: Some((shape: Cube, color: (0.3, 0.6, 1.0, 1.0)))),
+    ],
+)

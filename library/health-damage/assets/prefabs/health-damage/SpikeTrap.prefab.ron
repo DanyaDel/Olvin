@@ -1,0 +1,11 @@
+// Damage on touch (touch_damage.lua): hurts whoever enters the trigger, again after `cooldown`.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "SpikeTrap", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (1.5, 1.0, 1.5)), center: (0.0, 0.5, 0.0), is_trigger: true, friction: 0.8, restitution: 0.0)),
+            scripts: [(name: "health-damage/touch_damage", params: {"amount": "20.0", "cooldown": "1.0", "filter": "", "destroy_on_hit": "false"})]),
+        (id: 2, name: "Spikes", parent: Some(1), position: (0.0, 0.25, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.4, 0.5, 1.4),
+            mesh: Some((shape: Cube, color: (0.7, 0.7, 0.75, 1.0)))),
+    ],
+)

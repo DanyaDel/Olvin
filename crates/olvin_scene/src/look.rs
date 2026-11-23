@@ -125,6 +125,7 @@ impl LookDesc {
     }
 
     pub fn to_ron(&self) -> String {
+        // invariant: plain data (numbers, strings, options) always serialises.
         ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::new().struct_names(false))
             .expect("a look serialises")
     }

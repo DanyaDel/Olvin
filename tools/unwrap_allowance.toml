@@ -11,6 +11,7 @@ olvin_hub = 2
 olvin_hub_gui = 1
 olvin_input = 1
 olvin_render = 4
+olvin_scene = 1
 olvin_script = 1
 olvin_text = 2
 olvin_window = 1

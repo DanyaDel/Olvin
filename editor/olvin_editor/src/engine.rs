@@ -642,11 +642,21 @@ impl PlaySession {
         }
         app.add_plugin(olvin::anim::AnimPlugin)
             .add_plugin(olvin::models::ModelPlugin);
-        // Scripts (the built-in behaviours; game code isn't linked into the
+        // Scripts (the built-in behaviours and Lua; Rust game code isn't linked into the
         // editor) and the project's input map, fed from the Game view.
+        let lua_dir = assets_dir.as_ref().map(|d| d.join("scripts"));
         let map = assets_dir.map(|d| olvin::input::InputMap::load_or_default(d.join("input.ron")));
         app.add_plugin(olvin::input::InputPlugin { map })
             .add_plugin(olvin::script::ScriptPlugin::default());
+        // The project's Lua behaviours (`assets/scripts/**/*.lua`, library packs
+        // keep theirs in subfolders). No hot reload: a session loads them once.
+        if let Some(dir) = lua_dir {
+            app.add_plugin(olvin::script::lua::LuaPlugin {
+                dir,
+                hot_reload: false,
+                limits: Default::default(),
+            });
+        }
         olvin::scene_file::spawn(&app.resources, scene);
         app.startup();
         Self {

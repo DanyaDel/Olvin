@@ -1,0 +1,12 @@
+[package]
+name = "olvin_editor_library"
+description = "Olvin editor plugin: Library panel (preset packs: characters, shaders, looks, prefabs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true
+olvin_library = { path = "../../crates/olvin_library" }
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -186,3 +186,12 @@ crate = "olvin_editor_uv"
 path = "editor/olvin_editor_uv"
 plugin = "olvin_editor_uv::UvPlugin"
 default = true
+
+[[editor_module]]
+id = "library"
+name = "Library"
+description = "Built-in preset library: ready characters (first person, third person, top down), shaders, looks and prefabs; import into the project, add to the scene"
+crate = "olvin_editor_library"
+path = "editor/olvin_editor_library"
+plugin = "olvin_editor_library::LibraryPlugin"
+default = true

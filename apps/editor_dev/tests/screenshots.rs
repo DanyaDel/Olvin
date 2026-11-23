@@ -50,6 +50,7 @@ pub fn plugins() -> Vec<Box<dyn EditorPlugin>> {
         Box::new(olvin_editor_modeling::ModelingPlugin),
         Box::new(olvin_editor_uv::UvPlugin),
         Box::new(olvin_editor_ide::IdePlugin),
+        Box::new(olvin_editor_library::LibraryPlugin),
     ]
 }
 

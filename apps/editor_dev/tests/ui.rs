@@ -23,6 +23,7 @@ fn plugins() -> Vec<Box<dyn EditorPlugin>> {
         Box::new(olvin_editor_modeling::ModelingPlugin),
         Box::new(olvin_editor_uv::UvPlugin),
         Box::new(olvin_editor_ide::IdePlugin),
+        Box::new(olvin_editor_library::LibraryPlugin),
     ]
 }
 
@@ -1710,4 +1711,210 @@ fn particle_preview_simulates_while_selected_and_obeys_the_buttons() {
     state(&mut h).select(Some(1));
     h.run_steps(3);
     assert_eq!(state(&mut h).particle_preview_count(3), None);
+}
+
+// --- Library ----------------------------------------------------------------
+
+/// Window > Add Panel > Library.
+fn open_library(h: &mut Ed) {
+    h.get_by_label("WINDOW").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Add Panel").click();
+    h.run_steps(3);
+    h.get_by_label("📦 Library").click();
+    h.run_steps(6);
+}
+
+/// Types into the Library's search field (the panel is small: one card at a time).
+fn library_search(h: &mut Ed, text: &str) {
+    fn field(h: &Ed) -> egui_kittest::Node<'_> {
+        h.get_all_by_role(egui::accesskit::Role::TextInput)
+            .find(|n| n.rect().width() > 400.0)
+            .expect("library search")
+    }
+    field(h).focus();
+    h.run_steps(2);
+    field(h).type_text(text);
+    h.run_steps(4);
+}
+
+/// Clicks the `n`th "Import"/"Re-import" button (cards are sorted by
+/// category and name: First Person, Third Person, Top Down).
+fn click_import(h: &mut Ed, n: usize) {
+    let mut buttons: Vec<_> = h
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .filter(|b| {
+            matches!(
+                b.accesskit_node().label().as_deref(),
+                Some("Import" | "Re-import")
+            )
+        })
+        .collect();
+    buttons.sort_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y));
+    buttons[n].click();
+    h.run_steps(4);
+}
+
+#[test]
+fn library_lists_packs_imports_and_marks_them_installed() {
+    let p = project("library-import");
+    let mut h = editor(&p);
+    open_library(&mut h);
+    assert!(h.query_by_label("First Person Controller").is_some());
+    assert!(h.query_by_label("Third Person Controller").is_some());
+    assert!(h.query_by_label("Top Down Controller").is_some());
+    assert!(h.query_by_label_contains("Installed").is_none());
+
+    library_search(&mut h, "first person");
+    click_import(&mut h, 0);
+    // The files and their GUIDs are in the project, the lock records the pack.
+    let assets = p.join("assets");
+    assert!(assets.join("scripts/fps-controller/player.lua").is_file());
+    assert!(
+        assets
+            .join("scripts/fps-controller/player.lua.meta")
+            .is_file()
+    );
+    assert!(
+        assets
+            .join("prefabs/fps-controller/Player.prefab.ron")
+            .is_file()
+    );
+    assert!(p.join("library.lock.ron").is_file());
+    // Badge, toast with the notes, console line, the Assets panel follows.
+    assert!(h.query_by_label_contains("✔ Installed").is_some());
+    assert!(
+        h.query_all_by_label_contains("Imported fps-controller 1.0.0")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains("press Play").next().is_some(),
+        "the pack's notes"
+    );
+    assert!(
+        state(&mut h)
+            .log
+            .iter()
+            .any(|l| l.text.contains("Library: Imported fps-controller"))
+    );
+    // Only the imported pack is marked.
+    assert_eq!(h.query_all_by_label_contains("✔ Installed").count(), 1);
+
+    // Importing again changes nothing and keeps the GUID.
+    let meta = fs::read_to_string(assets.join("scripts/fps-controller/player.lua.meta")).unwrap();
+    click_import(&mut h, 0);
+    assert_eq!(
+        fs::read_to_string(assets.join("scripts/fps-controller/player.lua.meta")).unwrap(),
+        meta
+    );
+}
+
+#[test]
+fn library_add_to_scene_instantiates_the_headline_prefab() {
+    let p = project("library-add");
+    let mut h = editor(&p);
+    open_library(&mut h);
+    // Not before the import.
+    let before = state(&mut h).scene.entities.len();
+    library_search(&mut h, "third person");
+    click_import(&mut h, 0);
+    let add = h
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .filter(|b| b.accesskit_node().label().as_deref() == Some("Add to scene"))
+        .filter(|b| !b.accesskit_node().is_disabled())
+        .collect::<Vec<_>>();
+    assert_eq!(add.len(), 1, "only the imported pack can be added");
+    add[0].click();
+    h.run_steps(4);
+    let s = state(&mut h);
+    assert!(s.scene.entities.len() > before, "the prefab was added");
+    let root = s
+        .scene
+        .entities
+        .iter()
+        .find(|e| {
+            e.prefab
+                .as_ref()
+                .is_some_and(|i| i.asset == "prefabs/third-person-controller/Character.prefab.ron")
+        })
+        .expect("an instance of the pack's prefab");
+    assert!(
+        root.position.y > 0.5,
+        "a character stands on the ground, not in it"
+    );
+    assert!(s.selection.is_some());
+}
+
+#[test]
+fn library_asks_before_overwriting_and_offers_keep_both() {
+    let p = project("library-conflict");
+    let mine = p.join("assets/scripts/top-down-controller/controller.lua");
+    fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    fs::write(&mine, "-- mine").unwrap();
+    let mut h = editor(&p);
+    open_library(&mut h);
+
+    library_search(&mut h, "top down");
+    // Cancel: nothing happens.
+    click_import(&mut h, 0);
+    assert!(h.query_by_label("Files already exist").is_some());
+    assert!(
+        h.query_by_label_contains("scripts/top-down-controller/controller.lua")
+            .is_some()
+    );
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Files already exist").is_none());
+    assert_eq!(fs::read_to_string(&mine).unwrap(), "-- mine");
+    assert!(!p.join("library.lock.ron").exists());
+
+    // Keep both: the pack's file gets a suffix, the user's stays.
+    click_import(&mut h, 0);
+    h.get_by_label("Keep both").click();
+    h.run_steps(4);
+    assert_eq!(fs::read_to_string(&mine).unwrap(), "-- mine");
+    assert!(
+        p.join("assets/scripts/top-down-controller/controller-2.lua")
+            .is_file()
+    );
+    assert!(
+        h.query_all_by_label_contains("Imported top-down-controller")
+            .next()
+            .is_some()
+    );
+
+    // Replace overwrites on the next import.
+    click_import(&mut h, 0);
+    h.get_by_label("Replace").click();
+    h.run_steps(4);
+    assert_ne!(fs::read_to_string(&mine).unwrap(), "-- mine");
+}
+
+#[test]
+fn library_filters_by_category_and_search() {
+    let p = project("library-filter");
+    let mut h = editor(&p);
+    open_library(&mut h);
+    assert!(h.query_by_label_contains("All ").is_some());
+    h.get_all_by_label_contains("Characters")
+        .next()
+        .unwrap()
+        .click();
+    h.run_steps(3);
+    assert!(h.query_by_label("First Person Controller").is_some());
+    // The search field: the wide text input of the panel.
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.rect().width() > 400.0)
+        .expect("library search")
+        .focus();
+    h.run_steps(2);
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.rect().width() > 400.0)
+        .unwrap()
+        .type_text("isometric");
+    h.run_steps(4);
+    assert!(h.query_by_label("Top Down Controller").is_some());
+    assert!(h.query_by_label("First Person Controller").is_none());
+    assert!(h.query_by_label("Third Person Controller").is_none());
 }

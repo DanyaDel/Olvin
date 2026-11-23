@@ -173,7 +173,7 @@ pub struct EditorState {
     /// Prefab assets of the project; the scene holds their instances expanded.
     pub prefabs: PrefabLibrary,
     /// The Assets panel shows this file next time (set by "Select Prefab Asset").
-    pub(crate) asset_focus: Option<PathBuf>,
+    pub asset_focus: Option<PathBuf>,
     /// Mesh Edit Mode selection (entity, selected vertices), published by the
     /// editing element for others (the UV editor's "only selected in 3D").
     pub mesh_selection: Option<(u64, Vec<u32>)>,

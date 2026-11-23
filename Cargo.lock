@@ -1169,6 +1169,7 @@ dependencies = [
  "olvin_editor_console",
  "olvin_editor_csg",
  "olvin_editor_ide",
+ "olvin_editor_library",
  "olvin_editor_modeling",
  "olvin_editor_profiler",
  "olvin_editor_uv",
@@ -3469,6 +3470,15 @@ dependencies = [
  "naga",
  "olvin_editor",
  "serde_json",
+]
+
+[[package]]
+name = "olvin_editor_library"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "olvin_editor",
+ "olvin_library",
 ]
 
 [[package]]

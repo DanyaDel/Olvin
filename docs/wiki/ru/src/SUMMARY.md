@@ -85,6 +85,7 @@
 # Разработка
 
 - [Руководство контрибьютора](dev/contributing.md)
+- [Бенчмарки](dev/benchmarks.md)
 - [Архитектура](dev/architecture.md)
 - [План (ROADMAP)](dev/roadmap.md)
 - [Языки документации](dev/language-policy.md)

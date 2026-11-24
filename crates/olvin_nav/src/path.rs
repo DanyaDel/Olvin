@@ -1,7 +1,8 @@
 //! Queries: nearest node, A*, line of sight.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use glam::Vec3;
 
@@ -20,6 +21,54 @@ const NEIGHBOURS: [(i32, i32); 8] = [
     (-1, 1),
     (-1, -1),
 ];
+
+/// Per-thread search state, reused between queries: a node is "seen" when its
+/// stamp is the current generation, so nothing is cleared between searches.
+#[derive(Default)]
+struct Scratch {
+    stamp: Vec<u32>,
+    g: Vec<f32>,
+    parent: Vec<u32>,
+    generation: u32,
+}
+
+thread_local! {
+    static SCRATCH: RefCell<Scratch> = RefCell::new(Scratch::default());
+}
+
+impl Scratch {
+    fn begin(&mut self, nodes: usize) {
+        if self.stamp.len() < nodes {
+            self.stamp.resize(nodes, 0);
+            self.g.resize(nodes, 0.0);
+            self.parent.resize(nodes, 0);
+        }
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.stamp.fill(0);
+            self.generation = 1;
+        }
+    }
+
+    fn seen(&self, node: u32) -> Option<f32> {
+        (self.stamp[node as usize] == self.generation).then(|| self.g[node as usize])
+    }
+
+    fn g(&self, node: u32) -> f32 {
+        self.g[node as usize]
+    }
+
+    fn parent(&self, node: u32) -> u32 {
+        self.parent[node as usize]
+    }
+
+    fn set(&mut self, node: u32, g: f32, parent: u32) {
+        let i = node as usize;
+        self.stamp[i] = self.generation;
+        self.g[i] = g;
+        self.parent[i] = parent;
+    }
+}
 
 struct Open {
     f: f32,
@@ -128,18 +177,22 @@ impl NavGrid {
     }
 
     fn astar(&self, start: u32, goal: u32) -> Option<Vec<u32>> {
+        SCRATCH.with(|cell| self.astar_with(start, goal, &mut cell.borrow_mut()))
+    }
+
+    fn astar_with(&self, start: u32, goal: u32, scratch: &mut Scratch) -> Option<Vec<u32>> {
+        scratch.begin(self.nodes.len());
         let goal_pos = self.pos(goal);
         let h = |n: u32| self.pos(n).distance(goal_pos);
-        let mut best: HashMap<u32, (f32, u32)> = HashMap::new(); // node -> (g, parent)
         let mut open = BinaryHeap::new();
-        best.insert(start, (0.0, start));
+        scratch.set(start, 0.0, start);
         open.push(Open {
             f: h(start),
             node: start,
         });
         let mut expanded = 0;
         while let Some(Open { node, f }) = open.pop() {
-            let g = best[&node].0;
+            let g = scratch.g(node);
             if f > g + h(node) + 1e-4 {
                 continue; // a stale entry: a cheaper way was found later
             }
@@ -147,7 +200,7 @@ impl NavGrid {
                 let mut path = vec![goal];
                 let mut at = goal;
                 while at != start {
-                    at = best[&at].1;
+                    at = scratch.parent(at);
                     path.push(at);
                 }
                 path.reverse();
@@ -159,8 +212,8 @@ impl NavGrid {
             }
             for (next, cost) in self.neighbours(node) {
                 let g2 = g + cost;
-                if best.get(&next).is_none_or(|&(old, _)| g2 < old) {
-                    best.insert(next, (g2, node));
+                if scratch.seen(next).is_none_or(|old| g2 < old) {
+                    scratch.set(next, g2, node);
                     open.push(Open {
                         f: g2 + h(next),
                         node: next,

@@ -681,6 +681,7 @@ fn layer_mask(mask: Option<i64>) -> u32 {
     mask.map_or(u32::MAX, |m| m as u32)
 }
 
+#[cfg(feature = "physics")]
 type HitValues = (
     Option<u64>,
     Option<f32>,

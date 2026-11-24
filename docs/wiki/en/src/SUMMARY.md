@@ -85,6 +85,7 @@
 # Development
 
 - [Contributing guide](dev/contributing.md)
+- [Benchmarks](dev/benchmarks.md)
 - [Architecture](dev/architecture.md)
 - [Roadmap](dev/roadmap.md)
 - [Documentation languages](dev/language-policy.md)

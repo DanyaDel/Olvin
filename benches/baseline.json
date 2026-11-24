@@ -1,0 +1,79 @@
+{
+  "arch": "x86_64",
+  "cases": [
+    {
+      "best_ms": 0.110814,
+      "median_ms": 0.114182,
+      "name": "ecs_iterate_100k",
+      "runs": 30
+    },
+    {
+      "best_ms": 2.546904,
+      "median_ms": 3.007731,
+      "name": "transform_propagation_20k",
+      "runs": 20
+    },
+    {
+      "best_ms": 24.417517,
+      "median_ms": 24.587791000000003,
+      "name": "physics_pile_500_60_steps",
+      "runs": 5
+    },
+    {
+      "best_ms": 2.089624,
+      "median_ms": 2.1435500000000003,
+      "name": "physics_raycast_10k",
+      "runs": 10
+    },
+    {
+      "best_ms": 19.35564,
+      "median_ms": 19.866934,
+      "name": "nav_bake_160k_cells",
+      "runs": 5
+    },
+    {
+      "best_ms": 676.375098,
+      "median_ms": 701.824416,
+      "name": "nav_find_path_12_maze",
+      "runs": 5
+    },
+    {
+      "best_ms": 22.760269,
+      "median_ms": 23.814536,
+      "name": "lod_simplify_100k_triangles",
+      "runs": 5
+    },
+    {
+      "best_ms": 82.543559,
+      "median_ms": 85.312203,
+      "name": "scene_parse_5000_objects",
+      "runs": 10
+    },
+    {
+      "best_ms": 1.191986,
+      "median_ms": 1.212751,
+      "name": "save_sign_check_1mb",
+      "runs": 15
+    },
+    {
+      "best_ms": 8.162778000000001,
+      "median_ms": 8.498837,
+      "name": "timers_advance_20k",
+      "runs": 10
+    },
+    {
+      "best_ms": 0.8546050000000001,
+      "median_ms": 0.904061,
+      "name": "lua_update_5000",
+      "runs": 30
+    },
+    {
+      "best_ms": 0.209132,
+      "median_ms": 0.214916,
+      "name": "render_prepare_5k_200_lights",
+      "runs": 30
+    }
+  ],
+  "os": "linux",
+  "version": 1
+}

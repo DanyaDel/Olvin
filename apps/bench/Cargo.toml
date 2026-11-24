@@ -1,0 +1,28 @@
+[package]
+name = "olvin_bench"
+description = "Olvin benchmark suite: the cost of the engine's hot paths on reference scenes, as JSON for CI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "olvin-bench"
+path = "src/main.rs"
+
+[dependencies]
+glam.workspace = true
+olvin_core.workspace = true
+olvin_ecs.workspace = true
+olvin_scene = { workspace = true, features = ["serde"] }
+olvin_transform.workspace = true
+olvin_physics.workspace = true
+olvin_nav = { workspace = true, features = ["engine"] }
+olvin_render.workspace = true
+olvin_script = { path = "../../crates/olvin_script", default-features = false, features = ["lua"] }
+olvin_game = { path = "../../crates/olvin_game" }
+wgpu.workspace = true
+pollster.workspace = true
+ron.workspace = true
+serde_json = "1"

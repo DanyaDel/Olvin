@@ -115,3 +115,33 @@ jobs:
         with:
           components: miri, rust-src
       - run: tools/miri.sh
+
+  # Бенчмарки: цена горячих путей на эталонных сценах (apps/bench). Раннеры GitHub
+  # сильно отличаются от машины, где снята база (benches/baseline.json), поэтому допуск
+  # большой: шаг ловит регрессии на порядок, а числа для тренда лежат в артефакте.
+  bench:
+    name: бенчмарки
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Системные зависимости (Mesa для рендер-кейса)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libudev-dev libasound2-dev libegl1 libegl-mesa0 libgl1-mesa-dri \
+            libgles2 mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p olvin_bench --locked
+      - name: прогон и сравнение с базой
+        run: |
+          target/release/olvin-bench --json bench-result.json \
+            --compare benches/baseline.json --tolerance 6 | tee bench.txt
+          { echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-result
+          path: bench-result.json

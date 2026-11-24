@@ -126,7 +126,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [ ] **Versioning and changelog**: semver, `CHANGELOG.md`, release tags. The version is 0.1.0 with no release history. (S) [P2]
 - [ ] **Publishing crates** on crates.io once the API is stable. (M) [P3]
 - [x] **Contributor guide**: how to run tests, how to add a new plugin, code style, how commits are organised. (S) [P2] — done: `CONTRIBUTING.md` and a wiki page.
-- [ ] **Benchmarks**: a separate set with the frame cost on reference scenes, results recorded in CI so regressions are visible. (M) [P2]
+- [x] **Benchmarks**: a separate set with the frame cost on reference scenes, results recorded in CI so regressions are visible. (M) [P2] — done: `apps/bench` (`olvin-bench`), 12 cases on reference scenes (ECS, transforms, physics, rays, nav, LOD, scene parsing, save signing, timers, Lua, the CPU side of a frame with 200 lights), `--json`, `--compare` with a tolerance, the baseline `benches/baseline.json`, a `bench` CI job with an artifact (a 6× tolerance, because machines differ; the job may fail without failing the build), a wiki page. Not done: the GPU time of a frame in the suite (it is a separate `perf` test for now).
 
 ---
 

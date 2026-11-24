@@ -3,7 +3,8 @@
 
 use egui::{DragValue, RichText};
 use olvin_scene::file::{
-    AoDesc, BloomDesc, Environment, FogDesc, HeightFogDesc, LightKind, PostDesc, ShadowFilter, Sky,
+    AoDesc, BloomDesc, Environment, FogDesc, HeightFogDesc, LightKind, PostDesc, RetroDesc,
+    ShadowFilter, Sky,
 };
 use olvin_scene::look::LookDesc;
 
@@ -118,6 +119,7 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
         }
     });
     post_ui(ui, &mut env.post, textures);
+    retro_ui(ui, &mut env.retro);
     section(ui, "◼ Shadows", None, |ui| {
         grid(ui, "shadows", |ui| {
             row(ui, "Distance", |ui| {
@@ -173,6 +175,98 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
             "Shorter distance = sharper shadows. Lights cast shadows with their own Cast \
              Shadows toggle; only the most important spot / point lights up to the limits \
              above get one (fewer on OpenGL).",
+        );
+    });
+}
+
+/// The retro (PS1) render style. Snapping, affine textures, colour depth and
+/// dither, vertex lighting and the draw distance live in the mesh shader and
+/// show in the editor viewport too; the low internal resolution is a
+/// game-window (Full tier) effect.
+fn retro_ui(ui: &mut egui::Ui, retro: &mut Option<RetroDesc>) {
+    section(ui, "🕹 Retro / PS1", None, |ui| {
+        ui.horizontal(|ui| {
+            let mut on = retro.is_some();
+            if ui
+                .checkbox(&mut on, "Enabled")
+                .on_hover_text("The PlayStation 1 look for every material that doesn't opt out")
+                .changed()
+            {
+                *retro = on.then(RetroDesc::ps1);
+            }
+            if ui.button("PS1 preset").clicked() {
+                *retro = Some(RetroDesc::ps1());
+            }
+            if ui.button("Off").clicked() {
+                *retro = None;
+            }
+        });
+        let Some(r) = retro else {
+            ui.weak("Vertex jitter, affine textures, 15-bit dithered colour, Gouraud lighting.");
+            return;
+        };
+        let int2 = |ui: &mut egui::Ui, v: &mut [u32; 2]| {
+            ui.add(DragValue::new(&mut v[0]).range(0..=4096).prefix("w "));
+            ui.add(DragValue::new(&mut v[1]).range(0..=4096).prefix("h "));
+        };
+        grid(ui, "retro", |ui| {
+            row(ui, "Snap resolution", |ui| int2(ui, &mut r.snap_resolution));
+            row(ui, "Snap grid", |ui| {
+                drag(ui, &mut r.snap_grid_m, 0.0..=4.0, 0.01, " m")
+            });
+            row(ui, "Affine strength", |ui| {
+                drag(ui, &mut r.affine_strength, 0.0..=1.0, 0.01, "")
+            });
+            row(ui, "Affine fade", |ui| {
+                drag(ui, &mut r.affine_fade_near, 0.0..=50.0, 0.1, " m")
+            });
+            row(ui, "Colour bits", |ui| {
+                ui.add(DragValue::new(&mut r.color_bits).range(0..=8))
+                    .on_hover_text(
+                        "Per channel: 5 = the PS1's 15-bit colour; 0 or 8 = full colour",
+                    );
+            });
+            row(ui, "Dither", |ui| {
+                drag(ui, &mut r.dither_strength, 0.0..=2.0, 0.01, "")
+            });
+            row(ui, "Vertex lighting", |ui| {
+                ui.checkbox(&mut r.vertex_lighting, "")
+                    .on_hover_text("Gouraud: light per vertex, diffuse only, no normal maps");
+            });
+            row(ui, "Sun shadows", |ui| {
+                ui.checkbox(&mut r.shadows, "")
+                    .on_hover_text("Shadow map lookups per pixel in vertex-lit mode");
+            });
+            row(ui, "Draw distance", |ui| {
+                drag(ui, &mut r.draw_distance, 0.0..=2000.0, 0.5, " m")
+            });
+            row(ui, "Dissolve", |ui| {
+                ui.checkbox(&mut r.dissolve, "")
+                    .on_hover_text("Dither the last tenth before the draw distance");
+            });
+            row(ui, "Cull small", |ui| {
+                drag(ui, &mut r.cull_small_px, 0.0..=20.0, 0.1, " px")
+            });
+            row(ui, "Force nearest", |ui| {
+                ui.checkbox(&mut r.force_nearest, "")
+                    .on_hover_text("Nearest filtering, no mipmaps for retro materials");
+            });
+            row(ui, "Internal res.", |ui| {
+                int2(ui, &mut r.internal_resolution)
+            });
+            row(ui, "Pixel scale", |ui| {
+                ui.add(DragValue::new(&mut r.pixel_scale).range(0..=32))
+                    .on_hover_text("Window divided by this instead of the internal resolution");
+            });
+            row(ui, "Letterbox", |ui| {
+                ui.checkbox(&mut r.letterbox, "")
+                    .on_hover_text("Keep the internal aspect with black bars");
+            });
+        });
+        ui.weak(
+            "Internal resolution and pixel scale show only in the game window on Full-tier \
+             GPUs (not the editor viewport, not OpenGL); everything else shows in both. \
+             The fog hides the draw distance: set it to the background colour.",
         );
     });
 }

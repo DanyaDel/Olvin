@@ -1618,6 +1618,37 @@ fn picking_a_look_changes_the_environment_and_undo_restores_it() {
 }
 
 #[test]
+fn the_ps1_preset_switches_the_retro_style_on_and_undo_restores_it() {
+    use olvin_editor::olvin_scene::file::RetroDesc;
+    use olvin_editor::settings::Page;
+    let p = project("retro");
+    let mut h = editor(&p);
+    assert_eq!(state(&mut h).scene.environment.retro, None);
+    state(&mut h).open_settings(Page::Rendering);
+    h.run_steps(10);
+    // Below the fold of the settings page: scroll to it first.
+    h.get_by_label("PS1 preset").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("PS1 preset").click();
+    h.run_steps(5);
+    assert_eq!(
+        state(&mut h).scene.environment.retro,
+        Some(RetroDesc::ps1())
+    );
+    undo(&mut h);
+    assert_eq!(
+        state(&mut h).scene.environment.retro,
+        None,
+        "undo restores it"
+    );
+    redo(&mut h);
+    h.run_steps(3);
+    h.get_by_label("Off").click();
+    h.run_steps(5);
+    assert_eq!(state(&mut h).scene.environment.retro, None);
+}
+
+#[test]
 fn particle_system_add_edit_undo_and_presets() {
     use olvin_editor::olvin_scene::file::ParticleDesc;
     let p = project("particles");

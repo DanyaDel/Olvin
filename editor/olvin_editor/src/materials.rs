@@ -301,6 +301,25 @@ pub fn material_ui(
             ui.checkbox(&mut m.point_filter, "")
                 .on_hover_text("Nearest filtering, no mipmaps");
         });
+        row(ui, "Retro", |ui| {
+            let mut state = m.retro;
+            egui::ComboBox::from_id_salt("mat-retro")
+                .selected_text(match state {
+                    None => "Follow scene",
+                    Some(true) => "On",
+                    Some(false) => "Off",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state, None, "Follow scene");
+                    ui.selectable_value(&mut state, Some(true), "On");
+                    ui.selectable_value(&mut state, Some(false), "Off");
+                })
+                .response
+                .on_hover_text(
+                    "PS1 style for this material: snapping, affine UVs, vertex lighting",
+                );
+            m.retro = state;
+        });
         row(ui, "Unlit", |ui| {
             ui.checkbox(&mut m.unlit, "");
         });

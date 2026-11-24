@@ -24,6 +24,8 @@ use olvin_scene::{SceneId, Transform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::save_sign::{SaveSigner, SaveStatus, strip_signature};
+
 /// The version of the save format this build writes.
 pub const SAVE_VERSION: u32 = 1;
 
@@ -147,6 +149,9 @@ pub enum SaveError {
     },
     /// Two live entities share one [`SaveId`].
     DuplicateId(u64),
+    /// The save's signature does not match its text (`SavePolicy::Enforce`
+    /// or `Strict`), or it has no signature (`Strict`).
+    Tampered(String),
 }
 
 impl fmt::Display for SaveError {
@@ -161,6 +166,10 @@ impl fmt::Display for SaveError {
             Self::NoSuchSlot(n) => write!(f, "no save slot {n:?}"),
             Self::Value { name, error } => write!(f, "`{name}`: {error}"),
             Self::DuplicateId(id) => write!(f, "two entities share SaveId({id})"),
+            Self::Tampered(slot) => write!(
+                f,
+                "save slot `{slot}` was edited (the signature does not match, or is missing)"
+            ),
         }
     }
 }
@@ -541,13 +550,25 @@ pub struct SlotInfo {
 #[derive(Clone, Debug)]
 pub struct SaveSlots {
     dir: PathBuf,
+    /// Signs what it writes and checks what it reads, when a key is set.
+    signer: Option<SaveSigner>,
 }
 
 const EXT: &str = ".save.ron";
 
 impl SaveSlots {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            signer: None,
+        }
+    }
+
+    /// Signs saves with `signer` and checks them on load (see [`SaveSigner`]:
+    /// a signal and a deterrent, not protection).
+    pub fn with_signing(mut self, signer: SaveSigner) -> Self {
+        self.signer = Some(signer);
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -574,7 +595,10 @@ impl SaveSlots {
     /// leaves the previous save intact.
     pub fn save(&self, slot: &str, data: &SaveData) -> Result<(), SaveError> {
         let path = self.path(slot)?;
-        let text = data.to_text()?;
+        let mut text = data.to_text()?;
+        if let Some(signed) = self.signer.as_ref().and_then(|s| s.sign(&text)) {
+            text = signed;
+        }
         std::fs::create_dir_all(&self.dir).map_err(|e| SaveError::Io(e.to_string()))?;
         let tmp = path.with_extension("ron.tmp");
         std::fs::write(&tmp, text).map_err(|e| SaveError::Io(format!("{}: {e}", tmp.display())))?;
@@ -582,6 +606,12 @@ impl SaveSlots {
     }
 
     pub fn load(&self, slot: &str) -> Result<SaveData, SaveError> {
+        self.load_checked(slot).map(|(data, _)| data)
+    }
+
+    /// Like [`SaveSlots::load`], and says how the save relates to its
+    /// signature, so a game can react to [`SaveStatus::Tampered`].
+    pub fn load_checked(&self, slot: &str) -> Result<(SaveData, SaveStatus), SaveError> {
         let path = self.path(slot)?;
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
@@ -590,7 +620,19 @@ impl SaveSlots {
             }
             Err(e) => return Err(SaveError::Io(format!("{}: {e}", path.display()))),
         };
-        SaveData::parse(&text)
+        let status = self
+            .signer
+            .as_ref()
+            .map_or(SaveStatus::Unchecked, |s| s.check(&text));
+        if let Some(signer) = &self.signer {
+            if !signer.allows(status) {
+                return Err(SaveError::Tampered(slot.to_string()));
+            }
+            if status == SaveStatus::Tampered {
+                log::warn!("save slot `{slot}`: the signature does not match, the file was edited");
+            }
+        }
+        Ok((SaveData::parse(strip_signature(&text))?, status))
     }
 
     pub fn delete(&self, slot: &str) -> Result<(), SaveError> {
@@ -645,6 +687,8 @@ pub struct BodyVelocity {
 /// Inserts [`SaveRegistry`] and [`SaveSlots`] for `dir`.
 pub struct SavePlugin {
     pub dir: PathBuf,
+    /// Sign and check saves ([`SavePlugin::signed`]).
+    pub signer: Option<SaveSigner>,
     /// Register engine state ([`SaveRegistry::register_engine`]). On in [`SavePlugin::new`].
     pub engine: bool,
 }
@@ -653,8 +697,15 @@ impl SavePlugin {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
+            signer: None,
             engine: true,
         }
+    }
+
+    /// Signs saves with `signer` and checks them on load.
+    pub fn signed(mut self, signer: SaveSigner) -> Self {
+        self.signer = Some(signer);
+        self
     }
 
     /// Only the types the game registers itself.
@@ -671,7 +722,11 @@ impl Plugin for SavePlugin {
         if self.engine {
             app.resources.fetch_mut::<SaveRegistry>().register_engine();
         }
-        app.insert_resource(SaveSlots::new(self.dir.clone()));
+        let mut slots = SaveSlots::new(self.dir.clone());
+        if let Some(signer) = &self.signer {
+            slots = slots.with_signing(signer.clone());
+        }
+        app.insert_resource(slots);
     }
 }
 
@@ -1153,6 +1208,80 @@ mod tests {
         assert!(
             world.get::<&CharacterMotor>(hero).unwrap().velocity.y > 1.0,
             "mid-jump"
+        );
+    }
+
+    fn signed_slots(dir: &std::path::Path, policy: crate::SavePolicy) -> SaveSlots {
+        let key = olvin_core::secret::SecretBytes::new(b"slot test key".to_vec());
+        SaveSlots::new(dir).with_signing(SaveSigner::new(key).with_policy(policy))
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("olvin-save-sign-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn sample() -> SaveData {
+        SaveData::parse(r#"(version: 1, meta: (title: "t", scene: "s", playtime_secs: 1.0, saved_at: 5), entities: [], resources: {})"#)
+            .expect("sample save parses")
+    }
+
+    #[test]
+    fn signed_saves_round_trip_and_edits_are_caught() {
+        let dir = scratch("edit");
+        let slots = signed_slots(&dir, crate::SavePolicy::Enforce);
+        slots.save("one", &sample()).unwrap();
+        let file = dir.join("one.save.ron");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("// olvin-save-hmac: "),
+            "signature line written"
+        );
+        assert_eq!(slots.load_checked("one").unwrap().1, SaveStatus::Valid);
+
+        // An edit with a text editor: the title changes, the signature stays.
+        std::fs::write(&file, text.replace("\"t\"", "\"cheat\"")).unwrap();
+        assert_eq!(
+            slots.load("one"),
+            Err(SaveError::Tampered("one".into())),
+            "Enforce refuses an edited save"
+        );
+        // Warn lets it through and says so.
+        let warn = signed_slots(&dir, crate::SavePolicy::Warn);
+        assert_eq!(warn.load_checked("one").unwrap().1, SaveStatus::Tampered);
+    }
+
+    #[test]
+    fn unsigned_saves_load_until_strict_and_stripping_the_line_does_not_bypass_strict() {
+        let dir = scratch("unsigned");
+        // A save from before signing was turned on.
+        SaveSlots::new(&dir).save("old", &sample()).unwrap();
+        let enforce = signed_slots(&dir, crate::SavePolicy::Enforce);
+        assert_eq!(enforce.load_checked("old").unwrap().1, SaveStatus::Unsigned);
+        let strict = signed_slots(&dir, crate::SavePolicy::Strict);
+        assert_eq!(strict.load("old"), Err(SaveError::Tampered("old".into())));
+
+        // A signed save with its signature line removed is just unsigned.
+        strict.save("new", &sample()).unwrap();
+        let file = dir.join("new.save.ron");
+        let text = std::fs::read_to_string(&file).unwrap();
+        let cut = text.rfind("\n// olvin-save-hmac").unwrap();
+        std::fs::write(&file, &text[..cut]).unwrap();
+        assert_eq!(strict.load("new"), Err(SaveError::Tampered("new".into())));
+    }
+
+    #[test]
+    fn without_a_key_nothing_changes() {
+        let dir = scratch("nokey");
+        let slots = SaveSlots::new(&dir);
+        slots.save("plain", &sample()).unwrap();
+        let text = std::fs::read_to_string(dir.join("plain.save.ron")).unwrap();
+        assert!(!text.contains("olvin-save-hmac"));
+        assert_eq!(
+            slots.load_checked("plain").unwrap().1,
+            SaveStatus::Unchecked
         );
     }
 }

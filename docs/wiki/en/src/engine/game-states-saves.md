@@ -28,6 +28,7 @@ A save is session state, not a scene. `SaveRegistry`: `register_component::<T>(n
 
 - `capture(res, meta) -> SaveData { version, meta, entities, resources }`, `restore(res, &data)`: entities with `SaveId` are updated or created, those absent from the save are deleted, registered components absent from the save are removed. Everything is parsed before the world is touched. References between entities are not remapped: store `SaveId`.
 - `SaveSlots`: `<dir>/<slot>.save.ron`, `save` (tmp + rename), `load`, `list` (newest first), `delete`, `exists`; a slot name cannot leave the directory.
+- Signed saves (`SavePlugin::signed(SaveSigner::new(key).with_policy(..))` or `SaveSlots::with_signing`): the last line of the file is `// olvin-save-hmac: <hex>` (HMAC-SHA256 of the text); saves without it still load. Policies: `Warn` (default, a log line), `Enforce` (refuses a mismatch), `Strict` (refuses a mismatch and an unsigned save; removing the line cannot bypass it). `load_checked` returns a `SaveStatus` (`Valid`, `Unsigned`, `Tampered`). **This is a signal and a deterrent, not protection:** the key is part of the game, so anyone who takes it out of the binary can sign their own edits; it does stop an edit in a text editor.
 - Versioning: `SAVE_VERSION` + `SAVE_MIGRATIONS`, a future version is an error.
 
 > **Status:** the state of Lua `self` tables is not saved (the hooks are wired only for Rust `Behaviour`); use `ScriptVars` and components.

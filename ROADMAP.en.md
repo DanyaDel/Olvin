@@ -176,7 +176,7 @@ Goal: cover the whole threat model, not one case at a time. Assets: money and ac
 
 ### Saves and player data
 
-- [ ] **HMAC-signed saves (S1)**: the key is built in, so this is deterrence. Gives a signal that a save was edited. (S) [P1]
+- [x] **HMAC-signed saves (S1)**: the key is built in, so this is deterrence. Gives a signal that a save was edited. (S) [P1] — done: `SaveSigner` and the `Warn`/`Enforce`/`Strict` policies, the signature as the last comment line of the same file (old saves load), `SaveSlots::with_signing`, `SavePlugin::signed`, `load_checked` returns a `SaveStatus`; the game has to embed its own key (not switched on in the slice yet). S2 (binding to an account) remains.
 - [ ] **Save binding (S2)**: to an account or machine, once there is online play. (M) [P2]
 - [ ] **Redacting paths and names in logs and crash files (S3)**: in `logging.rs` the backtrace and log may contain the path to the home folder. Reports are sent only with explicit consent. Gives protection of player data. (S) [P1]
 

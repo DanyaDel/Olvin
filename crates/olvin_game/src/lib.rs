@@ -5,6 +5,7 @@
 
 mod loader;
 mod save;
+mod save_sign;
 mod state;
 
 pub use loader::{LoadHandle, LoadStatus, SceneLoader, SceneLoaderPlugin};
@@ -14,4 +15,5 @@ pub use save::{
     SAVE_VERSION, SaveData, SaveError, SaveId, SaveMeta, SavePlugin, SaveRegistry, SaveSlots,
     SavedEntity, SlotInfo,
 };
+pub use save_sign::{SavePolicy, SaveSigner, SaveStatus};
 pub use state::{GameState, State, StateAppExt, StateChanged};

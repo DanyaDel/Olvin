@@ -20,5 +20,7 @@ olvin_physics = { workspace = true, optional = true }
 olvin_script = { path = "../olvin_script", optional = true, default-features = false }
 glam = { workspace = true, optional = true }
 serde.workspace = true
+hmac = "0.12"
+sha2 = "0.10"
 ron.workspace = true
 log.workspace = true

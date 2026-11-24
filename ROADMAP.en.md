@@ -158,7 +158,7 @@ Goal: cover the whole threat model, not one case at a time. Assets: money and ac
 - [ ] **String encryption (E1)**: sensitive literals (keys, addresses, check messages) are not plain text in `.rodata`. Gives deterrence. (S) [P1]
 - [ ] **Integrity check at startup (E2)**: hash comparison, and a signal when checks are patched. A patch is one jump, so this is only a signal. (S) [P2]
 - [ ] **Wiping keys from memory (E3)**: `zeroize` for keys and passwords, keep their lifetime short. Gives protection against a simple memory dump. (S) [P1]
-- [ ] **Audit of `unsafe` (E5)**: `olvin_script/src/lua/api.rs` (`with` and `lend`, two blocks with `transmute` and `NonNull`); Miri in CI, fuzzing of callback paths. Gives protection against undefined behaviour. (M) [P1]
+- [x] **Audit of `unsafe` (E5)**: `olvin_script/src/lua/api.rs` (`with` and `lend`, two blocks with `transmute` and `NonNull`); Miri in CI, fuzzing of callback paths. Gives protection against undefined behaviour. (M) [P1] — done: the `unsafe` moved to `olvin_script/src/lend.rs` without Lua (`Slot<T>` and a `Lent` guard tied to the borrow; a re-entrant `with` gets `Busy` instead of a second `&mut`; the pointer `transmute` is replaced by one erasure of a reference lifetime), `tools/miri.sh` and a `miri` CI job; Miri found real UB in the test `secret::wipe_overwrites_the_buffer_in_place` (a pointer taken before a `&mut`), the test is fixed. Without the guard Miri fails the re-entrancy test. Fuzzing of callbacks stays in L3/L4.
 - [ ] **Debugger detection (E4)**: deterrence, not protection. (S) [P3]
 
 ### Assets

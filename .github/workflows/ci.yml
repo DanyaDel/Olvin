@@ -101,3 +101,17 @@ jobs:
       # Лицензии, запрещённые крейты, источники (deny.toml) и RustSec (уязвимости падают, unmaintained только предупреждение).
       - run: cargo deny --locked check
       - run: cargo audit
+
+  # E5: the only `unsafe` of the scripting layer (the loan of `ScriptCtx` to Lua
+  # callbacks) and the secret wipe test run under Miri. Lua is C code, so Miri
+  # cannot run it; the loan is in `olvin_script/src/lend.rs` without Lua.
+  miri:
+    name: Miri (unsafe code)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - run: tools/miri.sh

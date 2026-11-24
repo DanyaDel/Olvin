@@ -3,15 +3,13 @@
 //! `ctx:translate(vec3(...))`, …) is built on top of them in Lua by
 //! `prelude.lua`, which is much cheaper than making tables from Rust.
 
-use std::cell::Cell;
-use std::ptr::NonNull;
-
 use glam::{EulerRot, Quat, Vec3};
 use mlua::{Function, Lua, LuaString, Table, UserData, UserDataMethods, Value};
 use olvin_core::{Events, Time};
 use olvin_ecs::Entity;
 use olvin_scene::{Tag, Transform};
 
+use crate::lend::{Lent, Slot};
 use crate::{ScriptCtx, ScriptMessage, ScriptValue, ScriptVars};
 
 /// Messages waiting in the queue beyond which `ctx:send` refuses.
@@ -36,43 +34,25 @@ const DEG: f32 = std::f32::consts::PI / 180.0;
 /// Where the current callback's `ScriptCtx` is lent to Lua. Null outside callbacks.
 #[derive(Default)]
 pub(crate) struct CtxSlot {
-    pub(crate) ptr: Cell<Option<NonNull<ScriptCtx<'static>>>>,
+    slot: Slot<ScriptCtx<'static>>,
 }
 
 impl CtxSlot {
     fn with<R>(&self, f: impl FnOnce(&mut ScriptCtx<'_>) -> R) -> mlua::Result<R> {
-        let Some(mut ptr) = self.ptr.get() else {
-            return Err(mlua::Error::runtime(
-                "ctx is only valid inside the callback it was passed to",
-            ));
-        };
-        // SAFETY: the pointer is set by `LuaBehaviour::call` from a live
-        // `&mut ScriptCtx` and cleared (by a guard) before that call returns.
-        // The callback does not touch the original reference meanwhile, and
-        // `f` finishes before Lua runs again, so the borrows never overlap.
-        Ok(f(unsafe { ptr.as_mut() }))
+        self.slot
+            .with(|ctx| f(ctx))
+            .map_err(|e| mlua::Error::runtime(e.to_string()))
     }
 
-    /// Lends `ctx` until the returned guard drops.
-    pub(crate) fn lend<'s>(&'s self, ctx: &mut ScriptCtx<'_>) -> Lent<'s> {
-        // SAFETY: only the lifetime is erased; `Lent` clears the pointer
-        // before `ctx` can be used again (see `with`).
-        let ptr = unsafe {
-            std::mem::transmute::<NonNull<ScriptCtx<'_>>, NonNull<ScriptCtx<'static>>>(
-                NonNull::from(ctx),
-            )
-        };
-        self.ptr.set(Some(ptr));
-        Lent(self)
-    }
-}
-
-/// Clears the lent context when the callback ends, even on unwind.
-pub(crate) struct Lent<'a>(&'a CtxSlot);
-
-impl Drop for Lent<'_> {
-    fn drop(&mut self) {
-        self.0.ptr.set(None);
+    /// Lends `ctx` until the returned guard drops. The guard keeps `ctx`
+    /// borrowed, so the callback cannot use it meanwhile.
+    pub(crate) fn lend<'s>(&'s self, ctx: &'s mut ScriptCtx<'_>) -> Lent<'s, ScriptCtx<'static>> {
+        // SAFETY: only the lifetime parameter of `ScriptCtx` is erased. The
+        // slot is private to this module and hands the value out only inside
+        // `with`, to closures that return plain data, and the guard (which
+        // still borrows `ctx` for `'s`) takes it back before `ctx` is usable.
+        let ctx: &'s mut ScriptCtx<'static> = unsafe { std::mem::transmute(ctx) };
+        self.slot.lend(ctx)
     }
 }
 

@@ -19,6 +19,7 @@
 mod behaviour;
 pub mod builtin;
 mod ctx;
+mod lend;
 #[cfg(feature = "lua")]
 pub mod lua;
 mod message;

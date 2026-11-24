@@ -191,12 +191,21 @@ mod tests {
     #[test]
     fn wipe_overwrites_the_buffer_in_place() {
         let mut bytes = SecretBytes::new(vec![0xAA; 32]);
-        let ptr = bytes.expose().as_ptr();
         bytes.wipe();
-        // SAFETY: `wipe` clears the vector but keeps its allocation (capacity 32),
-        // so the 32 bytes behind `ptr` are still owned by `bytes`.
-        let after = unsafe { std::slice::from_raw_parts(ptr, 32) };
-        assert!(after.iter().all(|b| *b == 0), "{after:?}");
+        assert!(bytes.is_empty());
+        // SAFETY: `wipe` clears the vector but keeps its allocation (capacity
+        // 32), and all 32 bytes were initialised before, so growing the length
+        // back shows what is left in the buffer. (Going through a pointer taken
+        // before `wipe` would be undefined behaviour: `wipe` borrows the vector
+        // mutably, which Miri rightly rejects.)
+        assert!(bytes.0.capacity() >= 32);
+        unsafe { bytes.0.set_len(32) };
+        assert!(
+            bytes.expose().iter().all(|b| *b == 0),
+            "{:?}",
+            bytes.expose()
+        );
+        bytes.0.clear();
     }
 
     #[test]

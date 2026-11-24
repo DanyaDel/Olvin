@@ -197,3 +197,158 @@ fn snapping_survives_geometry_behind_the_camera() {
         assert!(snap(x, SIZE - 3)[0] > 200);
     }
 }
+
+/// A big checkered floor seen at a grazing angle.
+fn floor_world(h: &mut Harness, retro: Option<bool>) -> World {
+    let mut pixels = Vec::new();
+    for i in 0..4u32 {
+        let on = (i % 2 + i / 2) % 2 == 0;
+        pixels.extend(if on { [255u8; 4] } else { [0, 0, 0, 255] });
+    }
+    let texture = h.textures.add(TextureData::rgba8(2, 2, pixels, true));
+    let material = h.materials.add(Material {
+        point_filter: true,
+        uv_scale: [8.0, 8.0],
+        ..unlit_material(Some(texture), retro)
+    });
+    let floor = h.meshes.add(MeshData::plane(60.0));
+    let mut world = World::new();
+    world.spawn((
+        Transform::from_xyz(0.0, -1.0, -30.0),
+        MeshRenderer::new(floor, Color::WHITE).with_material(material),
+    ));
+    world.spawn((Transform::IDENTITY, Camera::default()));
+    world
+}
+
+fn differing(a: &impl Fn(u32, u32) -> [u8; 3], b: &impl Fn(u32, u32) -> [u8; 3]) -> usize {
+    all_pixels(a)
+        .iter()
+        .zip(all_pixels(b))
+        .filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.abs_diff(*y) > 30))
+        .count()
+}
+
+#[test]
+fn affine_mapping_warps_textures_and_fades_near_the_camera() {
+    let Some(mut h) = Harness::new(false) else {
+        return;
+    };
+    let world = floor_world(&mut h, None);
+    let (_, plain) = h.render(
+        &world,
+        &with(RetroSettings {
+            enabled: false,
+            ..only()
+        }),
+    );
+    let affine = RetroSettings {
+        affine_strength: 1.0,
+        affine_fade_near: 0.0,
+        ..only()
+    };
+    let (_, warped) = h.render(&world, &with(affine));
+    save_shot("affine_off", SIZE, &plain);
+    save_shot("affine_on", SIZE, &warped);
+    let warp = differing(&plain, &warped);
+    assert!(
+        warp > 200,
+        "the affine floor differs from perspective: {warp} pixels"
+    );
+    // Strength 0 is perspective-correct again, bit for bit.
+    let (_, zero) = h.render(
+        &world,
+        &with(RetroSettings {
+            affine_strength: 0.0,
+            ..affine
+        }),
+    );
+    assert_eq!(all_pixels(&plain), all_pixels(&zero));
+    // A fade distance far beyond the scene brings the perspective back.
+    let (_, faded) = h.render(
+        &world,
+        &with(RetroSettings {
+            affine_fade_near: 5000.0,
+            ..affine
+        }),
+    );
+    let left = differing(&plain, &faded);
+    assert!(
+        left * 4 < warp,
+        "fade restores perspective: {left} vs {warp}"
+    );
+}
+
+#[test]
+fn colours_snap_to_the_5_bit_lattice_with_a_bayer_dither() {
+    let Some(mut h) = Harness::new(false) else {
+        return;
+    };
+    // A grey ramp texture along x on an unlit quad.
+    let pixels: Vec<u8> = (0..64u32)
+        .flat_map(|i| {
+            let v = (i * 4 + 2).min(255) as u8;
+            [v, v, v, 255]
+        })
+        .collect();
+    let ramp = h.textures.add(TextureData::rgba8(64, 1, pixels, false));
+    let material = h.materials.add(Material {
+        point_filter: true,
+        ..unlit_material(Some(ramp), None)
+    });
+    let plane = h.meshes.add(MeshData::plane(4.0));
+    let mut world = World::new();
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(plane, Color::WHITE).with_material(material),
+    ));
+    world.spawn(top_down_camera(3.47));
+    let dither = RetroSettings {
+        color_bits: 5,
+        dither_strength: 1.0,
+        ..only()
+    };
+    let lattice = |v: u8| {
+        let step = 255.0 / 31.0;
+        let k = (f32::from(v) / step).round();
+        (f32::from(v) - k * step).abs() <= 1.6
+    };
+    let (_, plain) = h.render(
+        &world,
+        &with(RetroSettings {
+            color_bits: 5,
+            dither_strength: 0.0,
+            ..dither
+        }),
+    );
+    let mut levels = std::collections::BTreeSet::new();
+    for y in 8..SIZE - 8 {
+        for x in 8..SIZE - 8 {
+            for c in plain(x, y) {
+                assert!(lattice(c), "plain quantisation at ({x},{y}): {c}");
+            }
+            levels.insert(plain(x, y)[0]);
+        }
+    }
+    assert!(
+        levels.len() <= 32 && levels.len() > 8,
+        "levels: {}",
+        levels.len()
+    );
+    let (_, dithered) = h.render(&world, &with(dither));
+    save_shot("dither_off", SIZE, &plain);
+    save_shot("dither_on", SIZE, &dithered);
+    for y in 8..SIZE - 8 {
+        for x in 8..SIZE - 8 {
+            for c in dithered(x, y) {
+                assert!(lattice(c), "dithered colours stay on the lattice: {c}");
+            }
+        }
+    }
+    // The dither pattern repeats every 4 pixels vertically on a flat ramp
+    // column and differs from plain rounding.
+    assert!(differing(&plain, &dithered) > 0 || all_pixels(&plain) != all_pixels(&dithered));
+    let rows: Vec<u8> = (8..12).map(|y| dithered(30, y)[0]).collect();
+    let rows2: Vec<u8> = (12..16).map(|y| dithered(30, y)[0]).collect();
+    assert_eq!(rows, rows2, "a 4x4 pattern");
+}

@@ -20,6 +20,7 @@ The visual style (colours, fonts, glass, motion, copy): [STYLE.en.md](STYLE.en.m
 ```
 Cargo.toml            workspace, shared dependency versions, profiles (deps always -O3)
 .github/workflows/ci.yml  CI: fmt --check, `tools/check_unwrap.py` (limits in `tools/unwrap_allowance.toml`), clippy -D warnings, test --workspace (rendering on llvmpipe GL), binary builds
+tools/quick_test.sh   quick check of changed crates and their dependents (fmt, check, clippy, test), output trimmed to results; `--direct` skips dependents, the argument is the diff ref (default HEAD)
 crates/
   olvin_core/         App, Plugin, Resources, Schedule/Stage, Time, ProjectPaths, SurfaceTarget
   olvin_ecs/          facade over hecs + EcsPlugin (World resource)

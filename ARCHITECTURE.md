@@ -20,6 +20,7 @@
 ```
 Cargo.toml            workspace, общие версии зависимостей, профили (deps всегда -O3)
 .github/workflows/ci.yml  CI: fmt --check, `tools/check_unwrap.py` (лимиты `tools/unwrap_allowance.toml`), clippy -D warnings, test --workspace (рендер на llvmpipe GL), сборка бинарников
+tools/quick_test.sh   быстрая проверка затронутых крейтов и их зависимых (fmt, check, clippy, test), вывод урезан до итогов; `--direct` — без зависимых, аргумент — ref для diff (по умолчанию HEAD)
 crates/
   olvin_core/         App, Plugin, Resources, Schedule/Stage, Time, ProjectPaths, SurfaceTarget
   olvin_ecs/          фасад над hecs + EcsPlugin (ресурс World)

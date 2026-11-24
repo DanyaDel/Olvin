@@ -42,4 +42,4 @@ What got easier, what got harder, which questions are still open.
 | [0001](0001-lua-scripting.en.md) | Scripting in Lua 5.4 (mlua) | Accepted, 2026-11-19 |
 | [0002](0002-build-security.en.md) | Build, supply-chain and binary hardening | Accepted, 2026-11-24 |
 | [0003](0003-retro-render-style.en.md) | Retro (PS1) render style in the main mesh shader | Accepted, 2026-11-24 |
-| [0003](0003-netcode.en.md) | Netcode: own protocol on QUIC, server authority, snapshot interpolation | Accepted, 2026-11-23 |
+| [0004](0004-netcode.en.md) | Netcode: own protocol on QUIC, server authority, snapshot interpolation | Accepted, 2026-11-23 |

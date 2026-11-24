@@ -1,6 +1,6 @@
 # Networking
 
-The netcode lives in the `olvin_net` crate (feature `net` of `olvin`, `net-quic` for real sockets). Decision and rationale: `docs/adr/0003-netcode.en.md` (ADR 0003). The goal is a netcode that is very flexible and still easy to write: it is built in layers, each usable alone, and the top layer is a few lines.
+The netcode lives in the `olvin_net` crate (feature `net` of `olvin`, `net-quic` for real sockets). Decision and rationale: `docs/adr/0004-netcode.en.md` (ADR 0004). The goal is a netcode that is very flexible and still easy to write: it is built in layers, each usable alone, and the top layer is a few lines.
 
 ## Quick start
 

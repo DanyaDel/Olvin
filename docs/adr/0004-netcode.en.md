@@ -1,6 +1,6 @@
-# 0003. Netcode: own protocol on QUIC, server authority, snapshot interpolation
+# 0004. Netcode: own protocol on QUIC, server authority, snapshot interpolation
 
-<p align="center"><a href="0003-netcode.md">Русский</a></p>
+<p align="center"><a href="0004-netcode.md">Русский</a></p>
 
 **Status:** Accepted — 2026-11-23 (crate `olvin_net`, branch `feat-net`). Implemented; see ARCHITECTURE.en.md, section olvin_net.
 

@@ -1,6 +1,6 @@
-# 0003. Сеть: свой протокол на QUIC, авторитет сервера, интерполяция снимков
+# 0004. Сеть: свой протокол на QUIC, авторитет сервера, интерполяция снимков
 
-<p align="center"><a href="0003-netcode.en.md">English</a></p>
+<p align="center"><a href="0004-netcode.en.md">English</a></p>
 
 **Статус:** Принято — 2026-11-23 (крейт `olvin_net`, ветка `feat-net`). Реализовано; см. ARCHITECTURE.md, раздел olvin_net.
 

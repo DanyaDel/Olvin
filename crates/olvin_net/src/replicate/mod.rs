@@ -10,7 +10,7 @@
 //!   jitter between snapshots are invisible.
 
 pub(crate) mod client;
-mod codec;
+pub(crate) mod codec;
 mod entry;
 pub(crate) mod server;
 
@@ -120,6 +120,8 @@ pub struct ReplicateOptions<T> {
     pub interp: Interp<T>,
     /// Your own byte format (default: `postcard` of the serde form).
     pub codec: Option<Codec<T>>,
+    /// Prediction: the encoded value is prefixed with the owner's last processed input.
+    pub(crate) ack_prefix: bool,
 }
 
 impl<T> Default for ReplicateOptions<T> {
@@ -129,6 +131,7 @@ impl<T> Default for ReplicateOptions<T> {
             quantize: None,
             interp: Interp::None,
             codec: None,
+            ack_prefix: false,
         }
     }
 }

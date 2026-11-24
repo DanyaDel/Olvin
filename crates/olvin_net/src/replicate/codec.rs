@@ -26,7 +26,7 @@ impl<T> Codec<T> {
     }
 }
 
-fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+pub(crate) fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
         v >>= 7;
@@ -34,7 +34,7 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     out.push(v as u8);
 }
 
-fn get_varint(input: &mut &[u8]) -> Result<u64, String> {
+pub(crate) fn get_varint(input: &mut &[u8]) -> Result<u64, String> {
     let mut v = 0u64;
     for shift in (0..70).step_by(7) {
         let (&b, rest) = input.split_first().ok_or("truncated")?;

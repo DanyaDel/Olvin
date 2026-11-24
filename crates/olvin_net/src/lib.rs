@@ -12,6 +12,8 @@
 //! Everything a peer sends is untrusted input: bounded, checked, never unwrapped.
 
 mod auth;
+#[cfg(feature = "physics")]
+pub mod character;
 mod client;
 mod config;
 pub mod crypto;
@@ -20,6 +22,7 @@ mod loopback;
 mod message;
 mod net;
 mod plugin;
+pub mod predict;
 pub mod proto;
 mod registry;
 pub mod replicate;
@@ -41,6 +44,7 @@ pub use message::{
 };
 pub use net::{ClientId, ClientInfo, Net, NetEvent, NetStatus};
 pub use plugin::NetPlugin;
+pub use predict::{InputAck, Predicted, Prediction, PredictionStats};
 pub use registry::NetRegistry;
 pub use replicate::client::PrefabSpawner;
 pub use replicate::server::RelevancyFn;
@@ -52,8 +56,12 @@ pub use room::{JoinTarget, RoomCode, RoomCodeError};
 pub use sim::NetConditions;
 pub use transport::{Channel, ConnId, Transport, TransportEvent};
 
+#[cfg(all(test, feature = "physics"))]
+mod character_tests;
 #[cfg(test)]
 mod message_tests;
+#[cfg(test)]
+mod predict_tests;
 #[cfg(test)]
 mod replicate_tests;
 #[cfg(test)]

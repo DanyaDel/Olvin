@@ -93,6 +93,23 @@ impl Net {
                 _ => {}
             }
         }
+        // Components the owner simulates itself must not be driven by old samples.
+        if !self.owner_local.is_empty() {
+            let world = res.fetch::<World>();
+            let mine: Vec<u64> = self
+                .repl
+                .client
+                .entities
+                .iter()
+                .filter(|(_, e)| world.contains(**e) && self.is_mine(&world, **e))
+                .map(|(id, _)| *id)
+                .collect();
+            for id in mine {
+                for &ci in &self.owner_local {
+                    self.registry.components[ci].forget(id);
+                }
+            }
+        }
         // Interpolate, then confirm what arrived.
         let render_time =
             self.now + self.repl.client.offset.unwrap_or(0.0) - self.cfg.interp_delay as f64;
@@ -288,6 +305,9 @@ impl Net {
         if ci >= ncomps || !world.contains(entity) {
             return;
         }
+        let mine = (self.predicted_comp == Some(ci) || self.owner_local.contains(&ci))
+            && entry.data.is_some()
+            && self.is_mine(world, entity);
         let last = self
             .repl
             .client
@@ -296,6 +316,14 @@ impl Net {
             .or_insert_with(|| vec![0; ncomps]);
         // Older or repeated: a late datagram must not undo newer state.
         if tick <= last[ci] {
+            return;
+        }
+        // The state of an entity we predict is for reconciliation, not for display.
+        if mine {
+            last[ci] = tick;
+            if let (Some(d), true) = (&entry.data, self.predicted_comp == Some(ci)) {
+                self.prediction_inbox.push((entity, d.clone(), tick));
+            }
             return;
         }
         let time = tick_time(tick, self.cfg.tick_rate);

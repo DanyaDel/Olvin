@@ -69,6 +69,7 @@ impl Plugin for NetPlugin {
             };
             // Game code runs here with `Net` free, so a validator may use it.
             crate::message::deliver_staged(res, staged);
+            crate::predict::reconcile(res);
             let mut net = res.fetch_mut::<Net>();
             let mut events = res.fetch_mut::<olvin_core::Events<NetEvent>>();
             events.send_batch(net.events.drain(..));
@@ -76,13 +77,15 @@ impl Plugin for NetPlugin {
                 res.fetch_mut::<olvin_core::Events<crate::message::NetCommandRejected>>();
             rejected.send_batch(net.messages.rejected.drain(..));
         });
-        // After gameplay: step the server's fixed tick and replicate.
+        // After gameplay: predict, then step the server's fixed ticks and replicate.
         app.add_system(Stage::PostUpdate, |res| {
             let dt = res.fetch::<olvin_core::Time>().unscaled_delta();
-            let mut net = res.fetch_mut::<Net>();
-            let mut world = res.fetch_mut::<olvin_ecs::World>();
-            net.flush_owner_sends(&world);
-            net.server_ticks(&mut world, dt);
+            let plan = {
+                let mut net = res.fetch_mut::<Net>();
+                net.flush_owner_sends(&res.fetch::<olvin_ecs::World>());
+                net.plan_ticks(dt)
+            };
+            crate::predict::run_ticks(res, plan);
         });
     }
 }

@@ -131,22 +131,6 @@ fn kind_of(world: &World, e: Entity, marker: &Replicated) -> SpawnKind {
 }
 
 impl Net {
-    /// Runs the server's fixed ticks that `dt` seconds of frame time are worth
-    /// (at most a few per frame, so a hitch does not snowball).
-    pub(crate) fn server_ticks(&mut self, world: &mut World, dt: f32) {
-        let step = 1.0 / self.cfg.tick_rate.max(1) as f32;
-        let Some(server) = self.server.as_mut() else {
-            return;
-        };
-        server.tick_accum = (server.tick_accum + dt.max(0.0)).min(step * 5.0);
-        while self.server.as_ref().is_some_and(|s| s.tick_accum >= step) {
-            if let Some(s) = self.server.as_mut() {
-                s.tick_accum -= step;
-            }
-            self.replicate_tick(world);
-        }
-    }
-
     /// One server tick of replication: find new and gone entities, refresh
     /// component states, and send each remote client its spawns, despawns and
     /// snapshot. Runs at `tick_rate` after gameplay.

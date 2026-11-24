@@ -15,6 +15,7 @@ pub(crate) trait ErasedComponent {
     fn name(&self) -> &str;
     fn mode(&self) -> ReplicateMode;
     fn interpolated(&self) -> bool;
+    fn type_id(&self) -> std::any::TypeId;
 
     /// Server: the entity's value, quantised and encoded; `None` if it has none.
     fn encode(&self, world: &World, entity: Entity) -> Option<Vec<u8>>;
@@ -62,6 +63,10 @@ where
         &self.name
     }
 
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<T>()
+    }
+
     fn mode(&self) -> ReplicateMode {
         self.opts.mode
     }
@@ -75,14 +80,18 @@ where
         if let Some(q) = self.opts.quantize {
             q(&mut value);
         }
-        match &self.opts.codec {
-            Some(codec) => {
-                let mut out = Vec::new();
-                (codec.encode)(&value, &mut out);
-                Some(out)
-            }
-            None => postcard::to_stdvec(&value).ok(),
+        let mut out = Vec::new();
+        if self.opts.ack_prefix {
+            let ack = world
+                .get::<&crate::predict::InputAck>(entity)
+                .map_or(0, |a| a.0);
+            super::codec::put_varint(&mut out, ack as u64);
         }
+        match &self.opts.codec {
+            Some(codec) => (codec.encode)(&value, &mut out),
+            None => out.extend(postcard::to_stdvec(&value).ok()?),
+        }
+        Some(out)
     }
 
     fn apply(
@@ -98,6 +107,10 @@ where
             let _ = world.remove_one::<T>(entity);
             return Ok(());
         };
+        let mut bytes = bytes;
+        if self.opts.ack_prefix {
+            super::codec::get_varint(&mut bytes)?;
+        }
         let value: T = match &self.opts.codec {
             Some(codec) => (codec.decode)(bytes)?,
             None => {

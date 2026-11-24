@@ -26,3 +26,4 @@ getrandom = "0.4"
 
 [dev-dependencies]
 ron.workspace = true
+olvin_net = { path = ".", features = ["physics"] }

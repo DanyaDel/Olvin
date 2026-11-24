@@ -452,6 +452,25 @@ impl Net {
         }
     }
 
+    /// Takes one token of the client's overall message budget; false (and a
+    /// small violation) when it is spent.
+    pub(crate) fn allow_message(&mut self, client: ClientId) -> bool {
+        if client == ClientId::HOST {
+            return true;
+        }
+        let now = self.now;
+        let rate = self.cfg.limits.max_messages_per_sec as f32;
+        let l = self.messages.limits.entry(client).or_default();
+        let ok = l
+            .total
+            .get_or_insert_with(|| Bucket::new(now, rate))
+            .take(now, rate);
+        if !ok {
+            self.violation(client, 0.5, "message rate limit");
+        }
+        ok
+    }
+
     /// Notes misbehaviour of a client; too much gets it kicked.
     pub(crate) fn violation(&mut self, client: ClientId, weight: f32, why: &str) {
         if client == ClientId::HOST {

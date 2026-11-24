@@ -87,6 +87,11 @@ pub struct Net {
     pub(crate) relevancy: Option<RelevancyFn>,
     pub(crate) spawner: Option<PrefabSpawner>,
     pub(crate) messages: Messages,
+    pub(crate) prediction: Option<std::rc::Rc<dyn crate::predict::PredictionDriver>>,
+    pub(crate) predicted_comp: Option<usize>,
+    pub(crate) prediction_inbox: Vec<(olvin_ecs::Entity, Vec<u8>, u32)>,
+    pub(crate) client_accum: f32,
+    pub(crate) owner_local: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -118,6 +123,11 @@ impl Net {
             relevancy: None,
             spawner: None,
             messages: Messages::default(),
+            prediction: None,
+            predicted_comp: None,
+            prediction_inbox: Vec::new(),
+            client_accum: 0.0,
+            owner_local: Vec::new(),
         };
         // The owner of an entity travels like any component; it is always id 0.
         net.replicate_with_named::<Owner>("Owner", ReplicateOptions::default());
@@ -461,6 +471,13 @@ impl Net {
                 inbox = std::mem::take(&mut server.inbox);
             }
         }
+        if let Some(d) = self.prediction.clone() {
+            for ev in &self.events {
+                if let NetEvent::ClientLeft { id, .. } = ev {
+                    d.forget_client(*id);
+                }
+            }
+        }
         for (id, _, msg) in inbox {
             match msg {
                 Msg::Ack { seq, bits } => {
@@ -469,6 +486,7 @@ impl Net {
                     }
                 }
                 Msg::User { id: mid, payload } => self.stage_from_client(id, mid, payload),
+                Msg::Input { first_seq, inputs } => self.on_input(id, first_seq, inputs),
                 // Spawn, Snapshot and friends only ever travel server to client.
                 _ => self.violation(id, 5.0, "server-only message from a client"),
             }

@@ -92,6 +92,11 @@ pub enum Msg {
         id: u16,
         payload: Vec<u8>,
     },
+    /// Client to server: the newest unacknowledged inputs of the predicted entity.
+    Input {
+        first_seq: u32,
+        inputs: Vec<Vec<u8>>,
+    },
     /// Server to client: the command of this type was refused.
     Rejected {
         id: u16,

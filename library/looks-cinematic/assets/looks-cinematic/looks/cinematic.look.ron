@@ -17,4 +17,5 @@
     lut_strength: 1.0,
     fog: None,
     height_fog: None,
+    retro: None,
 )

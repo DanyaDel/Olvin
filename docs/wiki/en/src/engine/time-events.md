@@ -37,6 +37,19 @@ let events = res.fetch::<Events<Hit>>();
 for hit in events.read(&mut cursor) { /* ... */ }
 ```
 
+## Timers
+
+`TimerPlugin` (added by `ScriptPlugin` on its own) gives the resource `Timers`: delays and repeats without counting frames.
+
+```rust
+let mut timers = app.resources.fetch_mut::<Timers>();
+let id = timers.after(2.0, "respawn");   // once, in 2 s of game time
+timers.every(0.5, "spawn_wave");         // every 0.5 s
+timers.cancel(id);                       // or cancel_tag("spawn_wave")
+```
+
+When one runs out, the event `TimerFired { id, tag }` is sent in `PreUpdate`; read it with an `EventCursor` like any event. Timers follow simulation time, so they stand still in a pause and obey `time_scale`; `after_unscaled` and `every_unscaled` ignore both (menus). A repeating timer keeps its rhythm without drift; after a very long frame it fires at most 8 times and drops the rest of the backlog. Scripts have the same in `ctx:after`, `ctx:every` and `ctx:cancel_timer` (see the [Lua reference](../reference/lua-api.md)): the object gets `on_message(name)`.
+
 ## Log
 
 `Logging::new("info,wgpu_core=warn").file("logs/game.log").init()`; the filter is overridden by `OLVIN_LOG` / `RUST_LOG`. A panic writes `logs/crash-<time>.txt` (message, location, thread, backtrace, the last 64 log lines).

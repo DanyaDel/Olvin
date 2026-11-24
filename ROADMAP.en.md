@@ -90,7 +90,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [ ] **Timeline and cutscenes** (sequencer): tracks for animation, sound, camera, events. (L) [P2]
 - [x] **Input**: rebinding keys at runtime, saving bindings, gamepad prompts, vibration. Action maps already exist. (S) [P1] — `rebind.rs` with autosave, `hints.rs`, `Haptics` via gilrs.
 - [ ] **Networking**: transport (UDP through `quinn` or `renet`), component replication, client-side prediction, interpolation. A separate `olvin_net` crate. (XL) [P3]
-- [ ] **Timer systems**: timer events, coroutines or async tasks for delays in behaviours. (S) [P2]
+- [x] **Timer systems**: timer events, coroutines or async tasks for delays in behaviours. (S) [P2] — `olvin_core::Timers` (`after`/`every`, scaled and `_unscaled`, `cancel`, the `TimerFired` event), in Lua `ctx:after`/`every`/`cancel_timer` with `on_message`, limits of 32 per object and 4096 in all; a "Timers" section in the wiki. Coroutines (`wait`) for scripts are left out: timers cover delays without them.
 
 ---
 

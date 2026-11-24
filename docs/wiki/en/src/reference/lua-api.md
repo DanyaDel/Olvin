@@ -106,6 +106,9 @@ Ids come from lookups, from the `other` of callbacks and from `ctx:raycast`.
 | Function | What |
 |---|---|
 | `ctx:send(name, value[, target])` | send a message: `value` is a number, string, bool, vector or `nil`; without `target` it is a broadcast: every object with a script gets `on_message` and the game reads `Events<ScriptMessage>`; with `target` it is addressed to one object; `from` is the sender's id |
+| `ctx:after(seconds, name)` | in `seconds` of game time (it stops in a pause) this object gets `on_message(self, ctx, name, nil, from)` with `from` = itself. Returns `false` when the object already has 32 timers (4096 in all) |
+| `ctx:every(seconds, name)` | the same, repeating every `seconds` |
+| `ctx:cancel_timer(name)` | stop this object's timers called `name`; returns how many. Timers of a destroyed object are dropped |
 | `ctx:var(name)` | a shared variable (`ScriptVars`) or `nil` |
 | `ctx:set_var(name, value)` | write a shared variable (`nil` deletes) |
 

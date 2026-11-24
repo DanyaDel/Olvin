@@ -37,6 +37,19 @@ let events = res.fetch::<Events<Hit>>();
 for hit in events.read(&mut cursor) { /* ... */ }
 ```
 
+## Таймеры
+
+`TimerPlugin` (его сам добавляет `ScriptPlugin`) даёт ресурс `Timers`: задержки и повторы без ручного счёта кадров.
+
+```rust
+let mut timers = app.resources.fetch_mut::<Timers>();
+let id = timers.after(2.0, "respawn");   // один раз через 2 с игрового времени
+timers.every(0.5, "spawn_wave");         // каждые 0,5 с
+timers.cancel(id);                       // или cancel_tag("spawn_wave")
+```
+
+Когда таймер истёк, в `PreUpdate` отправляется событие `TimerFired { id, tag }`; читать его можно через `EventCursor`, как любое событие. Таймеры идут по игровому времени: в паузе стоят и подчиняются `time_scale`; `after_unscaled` и `every_unscaled` не зависят ни от того, ни от другого (меню). Повторяющийся таймер не накапливает дрейф; после очень долгого кадра он срабатывает не больше 8 раз, остальной хвост отбрасывается. В скриптах то же самое: `ctx:after`, `ctx:every`, `ctx:cancel_timer` (см. [справочник Lua](../reference/lua-api.md)): объект получает `on_message(name)`.
+
 ## Лог
 
 `Logging::new("info,wgpu_core=warn").file("logs/game.log").init()`; фильтр переопределяется `OLVIN_LOG` / `RUST_LOG`. Паника пишет `logs/crash-<время>.txt` (сообщение, место, поток, backtrace, 64 последние строки лога).

@@ -93,6 +93,23 @@ pub(crate) fn vec3_of(t: &Table) -> mlua::Result<Vec3> {
     Ok(Vec3::new(axis("x", 1)?, axis("y", 2)?, axis("z", 3)?))
 }
 
+/// `ctx:after` / `ctx:every`: false when the object or the game has too many timers.
+fn start_timer(h: &CtxHandle, seconds: f32, name: &LuaString, repeat: bool) -> mlua::Result<bool> {
+    let name = checked_str(name, "a timer name")?;
+    if !seconds.is_finite() {
+        return Err(mlua::Error::runtime(
+            "a timer needs a finite number of seconds",
+        ));
+    }
+    h.slot.with(|c| {
+        if repeat {
+            c.every(seconds, &name)
+        } else {
+            c.after(seconds, &name)
+        }
+    })
+}
+
 fn checked_str(s: &LuaString, what: &str) -> mlua::Result<String> {
     let s = s.to_str()?;
     if s.len() > MAX_STRING {
@@ -421,6 +438,17 @@ impl UserData for CtxHandle {
                 })?
             },
         );
+        // Timers: the object gets `on_message(name)` when one runs out.
+        m.add_method("after", |_, h, (seconds, name): (f32, LuaString)| {
+            start_timer(h, seconds, &name, false)
+        });
+        m.add_method("every", |_, h, (seconds, name): (f32, LuaString)| {
+            start_timer(h, seconds, &name, true)
+        });
+        m.add_method("cancel_timer", |_, h, name: LuaString| {
+            let name = checked_str(&name, "a timer name")?;
+            h.slot.with(|c| c.cancel_timer(&name))
+        });
         m.add_method("var", |lua, h, name: LuaString| {
             let name = name.to_str()?;
             let value = h.slot.with(|c| {

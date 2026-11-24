@@ -204,6 +204,23 @@ impl<'a> ScriptCtx<'a> {
         true
     }
 
+    /// Calls `on_message(name)` on this object after `seconds` of game time
+    /// (it stops while the game is paused). False when the object already has
+    /// [`MAX_TIMERS_PER_OBJECT`](crate::MAX_TIMERS_PER_OBJECT) timers.
+    pub fn after(&self, seconds: f32, name: &str) -> bool {
+        crate::timer::start(self.res, self.entity, seconds, name, false)
+    }
+
+    /// Like [`ScriptCtx::after`], again and again every `seconds`.
+    pub fn every(&self, seconds: f32, name: &str) -> bool {
+        crate::timer::start(self.res, self.entity, seconds, name, true)
+    }
+
+    /// Stops this object's timers called `name`; returns how many.
+    pub fn cancel_timer(&self, name: &str) -> usize {
+        crate::timer::cancel(self.res, self.entity, name)
+    }
+
     /// The shared [`ScriptVars`], if the plugin added them.
     pub fn vars(&self) -> Option<Ref<'_, ScriptVars>> {
         self.res.get::<ScriptVars>()

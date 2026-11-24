@@ -751,3 +751,77 @@ fn spawn_prefab_refuses_paths_outside_assets() {
         assert!(app.resources.fetch::<SpawnRequests>().is_empty(), "{path}");
     }
 }
+
+#[test]
+fn timers_call_on_message_and_can_be_cancelled() {
+    let (app, _lua) = app_with(
+        "Clock",
+        r#"
+        return {
+            start = function(self, ctx)
+                self.beats, self.pings = 0, 0
+                assert(ctx:after(1.0, "ping"))
+                assert(ctx:every(0.5, "beat"))
+            end,
+            on_message = function(self, ctx, name, value, from)
+                assert(from == ctx:entity(), "a timer message comes from the object itself")
+                if name == "beat" then self.beats = self.beats + 1 end
+                if name == "ping" then
+                    self.pings = self.pings + 1
+                    assert(ctx:cancel_timer("beat") == 1)
+                end
+                ctx:translate(vec3(name == "beat" and 10 or 1, 0, 0))
+            end,
+        }
+        "#,
+    );
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(0.5));
+    let mut app = app;
+    let e = spawn(&app, "Clock", &[]);
+    for _ in 0..8 {
+        app.update();
+    }
+    // Frames 2 and 3 each had a beat; ping (1.0 s) ran out in frame 3 and
+    // stopped the beat afterwards: 2 beats and 1 ping.
+    assert_eq!(x(&app, e), 21.0);
+    assert!(app.resources.fetch::<olvin_core::Timers>().is_empty());
+}
+
+#[test]
+fn timers_of_a_destroyed_object_are_dropped_and_the_count_is_limited() {
+    let (app, _lua) = app_with(
+        "Many",
+        r#"
+        return {
+            start = function(self, ctx)
+                local ok = 0
+                for i = 1, 40 do
+                    if ctx:every(1.0, "t" .. i) then ok = ok + 1 end
+                end
+                ctx:set_position(vec3(ok, 0, 0))
+            end,
+        }
+        "#,
+    );
+    let mut app = app;
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(0.5));
+    let e = spawn(&app, "Many", &[]);
+    app.update();
+    assert_eq!(x(&app, e), MAX_TIMERS_PER_OBJECT as f32);
+    assert_eq!(
+        app.resources.fetch::<olvin_core::Timers>().len(),
+        MAX_TIMERS_PER_OBJECT
+    );
+    app.resources.fetch_mut::<World>().despawn(e).unwrap();
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(
+        app.resources.fetch::<olvin_core::Timers>().is_empty(),
+        "timers of a dead object are cancelled when they run out"
+    );
+}

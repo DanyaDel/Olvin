@@ -14,6 +14,7 @@ mod schedule;
 pub mod secret;
 mod surface;
 mod time;
+mod timers;
 
 pub use app::{App, AppExit};
 pub use events::{EventCursor, Events};
@@ -24,3 +25,4 @@ pub use resources::Resources;
 pub use schedule::{Schedule, Stage, System};
 pub use surface::{SurfaceTarget, WindowHandleSource};
 pub use time::Time;
+pub use timers::{TimerFired, TimerId, TimerPlugin, Timers};

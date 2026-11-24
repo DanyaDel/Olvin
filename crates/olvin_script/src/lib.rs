@@ -26,6 +26,7 @@ mod params;
 mod registry;
 mod runtime;
 mod spawn;
+mod timer;
 
 pub use behaviour::Behaviour;
 pub use ctx::{ScriptCtx, TimeInfo};
@@ -38,6 +39,7 @@ pub use spawn::{
     MAX_SPAWNED_ALIVE, MAX_SPAWNS_PER_FRAME, ScriptSpawned, SpawnRequest, SpawnRequests,
     check_prefab_path,
 };
+pub use timer::{MAX_SCRIPT_TIMERS, MAX_TIMERS_PER_OBJECT};
 
 use std::collections::BTreeMap;
 
@@ -92,6 +94,13 @@ impl Plugin for ScriptPlugin {
             .init_resource::<ScriptVars>()
             .init_resource::<SpawnRequests>()
             .add_event::<ScriptMessage>();
+        if !app.has_plugin::<olvin_core::TimerPlugin>() {
+            app.add_plugin(olvin_core::TimerPlugin);
+        }
+        // After `TimerPlugin`'s own system, so a timer that ran out this frame
+        // reaches `on_message` in this frame's update pass.
+        let mut timers = olvin_core::EventCursor::default();
+        app.add_system(Stage::PreUpdate, move |res| timer::bridge(res, &mut timers));
         if self.builtins {
             builtin::register_all(&mut app.resources.fetch_mut::<ScriptRegistry>());
         }

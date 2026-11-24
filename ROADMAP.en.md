@@ -113,7 +113,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [~] **Material editor**: the `*.mat.ron` contracts exist (M1), a visual editor with a preview is needed. (M) [P2] — partial: in-inspector material editor with presets; no preview.
 - [x] **Profiler and statistics panel** (see phase 1). (S) [P2] — the Profiler panel: frame graph, draw calls, instances, culled, triangles, a systems table (`olvin_editor_profiler`).
 - [x] **Animation editor**: connect Animator to the runtime after phase 2. (L) [P2] — a Blender-like animator: F-curves with Auto Clamped Bezier (Blender's maths ported), Timeline, Dope Sheet, Graph Editor, I/Alt+I and key colours in the inspector; scene format v3 (`SceneFile::animation`), played in games and Play by `olvin_anim::ActionPlayer`. Missing: auto-keying, markers, Normalize, animating anything but Transform; rotation order is YXZ, not XYZ.
-- [~] **Search in the scene and assets**, filters in the console. (S) [P2] — partial: filters in the assets panel and the console; no hierarchy search.
+- [x] **Search in the scene and assets**, filters in the console. (S) [P2] — a search box in the hierarchy (by name, case-insensitive), filters in the assets panel and the console.
 - [ ] **Multi-scene**: open several scenes at once and switch between them. (M) [P3]
 - [~] **Configurable hotkeys** (currently hard-coded). (S) [P3] — done for the editor and scene-view commands (17 of them: save, undo, the tools, frame and so on): a Keymap page in Settings, key capture, clash display, reset, stored in `preferences.ron`. The keys of Edit Mode, the UV editor and the timeline stay fixed.
 

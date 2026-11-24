@@ -131,15 +131,69 @@ impl Net {
         };
         // The owner of an entity travels like any component; it is always id 0.
         net.replicate_with_named::<Owner>("Owner", ReplicateOptions::default());
+        let mut transports = transports;
+        if transports.is_empty() {
+            match net.default_transports() {
+                Ok(t) => transports = t,
+                Err(why) => net.failed = Some(why),
+            }
+        }
         let transports = net.apply_simulation(transports);
         if net.cfg.is_server_mode() {
             net.start_server(transports, auth);
         } else if let Some(t) = transports.into_iter().next() {
             net.client = Some(ClientState::new(t, 0.0, None));
-        } else {
+        } else if net.failed.is_none() {
             net.failed = Some(net.no_transport_message());
         }
         net
+    }
+
+    /// The sockets for the configured mode when none were given: QUIC with the
+    /// `quic` feature, nothing for offline.
+    #[allow(unused_variables)]
+    fn default_transports(&self) -> Result<Vec<Box<dyn Transport>>, String> {
+        match &self.cfg.mode {
+            NetMode::Offline
+            | NetMode::Host { listen: None }
+            | NetMode::Dedicated { listen: None }
+            | NetMode::Client { target: None } => Ok(Vec::new()),
+            #[cfg(feature = "quic")]
+            NetMode::Host { listen: Some(addr) } | NetMode::Dedicated { listen: Some(addr) } => {
+                let addr: std::net::SocketAddr = addr
+                    .parse()
+                    .map_err(|e| format!("`{addr}` is not an address like 0.0.0.0:7777: {e}"))?;
+                let identity = crate::quic::QuicIdentity::generate()?;
+                let server = crate::quic::QuicServer::listen(addr, &identity)?;
+                Ok(vec![Box::new(server)])
+            }
+            #[cfg(feature = "quic")]
+            NetMode::Client {
+                target: Some(target),
+            } => Ok(vec![Box::new(crate::quic::QuicClient::connect(
+                target,
+                self.cfg.allow_unpinned,
+            )?)]),
+            #[cfg(not(feature = "quic"))]
+            _ => Err(self.no_transport_message()),
+        }
+    }
+
+    /// Server: the room code players join with. `public_ip` is the address they
+    /// reach this machine at (LAN or public); `None` uses the listening address.
+    /// Needs the `quic` transport made from the config (`NetConfig::host`).
+    pub fn room_code(&self, public_ip: Option<std::net::IpAddr>) -> Option<crate::RoomCode> {
+        let (listen, fingerprint) = self
+            .server
+            .as_ref()?
+            .transports
+            .iter()
+            .find_map(|t| t.room_info())?;
+        let ip = public_ip.unwrap_or_else(|| listen.ip());
+        Some(crate::RoomCode::new(
+            std::net::SocketAddr::new(ip, listen.port()),
+            &fingerprint,
+        ))
     }
 
     fn apply_simulation(&self, transports: Vec<Box<dyn Transport>>) -> Vec<Box<dyn Transport>> {

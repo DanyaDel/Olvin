@@ -10,6 +10,8 @@ repository.workspace = true
 default = []
 # CharacterMotor prediction on top of olvin_physics::move_character.
 physics = ["dep:olvin_physics"]
+# QUIC transport (quinn + rustls TLS 1.3): `QuicServer`, `QuicClient`, the default sockets of Host, Dedicated and Client.
+quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "dep:tokio"]
 
 [dependencies]
 olvin_core.workspace = true
@@ -23,6 +25,10 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 sha2 = "0.11"
 hmac = "0.13"
 getrandom = "0.4"
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"], optional = true }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "macros", "sync", "time"], optional = true }
 
 [dev-dependencies]
 ron.workspace = true

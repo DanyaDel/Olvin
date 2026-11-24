@@ -1,0 +1,13 @@
+[package]
+name = "netdemo"
+description = "Olvin netcode demo: a small arena, one server and any number of clients (headless, over QUIC)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+olvin = { path = "../../crates/olvin", default-features = false, features = ["scene", "script", "lua", "net-quic"] }
+serde.workspace = true
+log.workspace = true

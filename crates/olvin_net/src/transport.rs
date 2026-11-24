@@ -59,6 +59,11 @@ pub trait Transport: 'static {
         None
     }
 
+    /// A listening transport that clients can pin: its address and the SHA-256 of its certificate.
+    fn room_info(&self) -> Option<(std::net::SocketAddr, [u8; 32])> {
+        None
+    }
+
     /// Short name for logs.
     fn name(&self) -> &'static str;
 }
@@ -81,6 +86,9 @@ impl Transport for Box<dyn Transport> {
     }
     fn session_secret(&self, conn: ConnId) -> Option<Vec<u8>> {
         (**self).session_secret(conn)
+    }
+    fn room_info(&self) -> Option<(std::net::SocketAddr, [u8; 32])> {
+        (**self).room_info()
     }
     fn name(&self) -> &'static str {
         (**self).name()

@@ -420,6 +420,10 @@ impl<T: Transport> Transport for Conditioned<T> {
         self.inner.session_secret(conn)
     }
 
+    fn room_info(&self) -> Option<(std::net::SocketAddr, [u8; 32])> {
+        self.inner.room_info()
+    }
+
     fn name(&self) -> &'static str {
         self.inner.name()
     }

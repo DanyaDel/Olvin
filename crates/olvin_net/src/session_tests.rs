@@ -458,6 +458,7 @@ fn offline_is_a_server_with_a_local_player() {
     }));
 }
 
+#[cfg(not(feature = "quic"))]
 #[test]
 fn missing_socket_transport_fails_with_advice() {
     let mut app = olvin_core::App::new();

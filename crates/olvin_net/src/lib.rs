@@ -25,6 +25,8 @@ mod net;
 mod plugin;
 pub mod predict;
 pub mod proto;
+#[cfg(feature = "quic")]
+pub mod quic;
 mod registry;
 pub mod replicate;
 mod room;
@@ -64,6 +66,8 @@ mod character_tests;
 mod message_tests;
 #[cfg(test)]
 mod predict_tests;
+#[cfg(all(test, feature = "quic"))]
+mod quic_tests;
 #[cfg(test)]
 mod replicate_tests;
 #[cfg(test)]

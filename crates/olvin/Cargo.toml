@@ -35,8 +35,9 @@ gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 # Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
 integrity = ["olvin_core/integrity"]
 # Netcode (`olvin::net`): transports, sessions, replication, messages, prediction.
-
-net = ["dep:olvin_net"]
+net = ["dep:olvin_net", "olvin_script?/net"]
+# QUIC sockets for `net` (TLS 1.3, pinned certificates): hosting, joining by room code.
+net-quic = ["net", "olvin_net/quic"]
 
 # Profiler scopes (puffin) over systems, render passes, physics and scripts; set OLVIN_PROFILE=1
 # or call `olvin::core::profile::set_enabled`. Off: the scopes compile to nothing.

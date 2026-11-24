@@ -22,7 +22,7 @@ use std::time::Instant;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use olvin_ecs::World;
-use olvin_scene::{Camera, Transform};
+use olvin_scene::{ActiveCamera, Camera, Transform};
 use olvin_transform::GlobalTransform;
 
 use crate::light::{MAX_CASCADES, MAX_LIGHTS, MAX_LOCAL_TILES, PackedLight};
@@ -268,14 +268,25 @@ pub struct RenderCore {
     start: Instant,
 }
 
-/// View-projection of the first camera in the world.
+/// View-projection of the camera that is drawn: the one marked
+/// [`ActiveCamera`], else the first in the world.
 pub fn camera_view_proj(world: &World, aspect: f32) -> Option<Mat4> {
-    world
-        .query::<(Option<&GlobalTransform>, &Transform, &Camera)>()
-        .iter()
-        .next()
-        .map(|(g, t, c)| {
-            let pose = g.map_or(*t, GlobalTransform::to_transform);
-            c.projection(aspect) * Camera::view(&pose)
-        })
+    let mut query = world.query::<(
+        Option<&GlobalTransform>,
+        &Transform,
+        &Camera,
+        Option<&ActiveCamera>,
+    )>();
+    let mut first = None;
+    for (g, t, c, active) in query.iter() {
+        if active.is_some() {
+            first = Some((g, t, c));
+            break;
+        }
+        first.get_or_insert((g, t, c));
+    }
+    first.map(|(g, t, c)| {
+        let pose = g.map_or(*t, GlobalTransform::to_transform);
+        c.projection(aspect) * Camera::view(&pose)
+    })
 }

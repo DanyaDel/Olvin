@@ -1,0 +1,22 @@
+[package]
+name = "olvin_cutscene"
+description = "Olvin cutscenes: tracks that move objects, switch cameras, play sounds and message scripts on a timeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# `Sound` cues through olvin_audio's `Audio` resource.
+audio = ["dep:olvin_audio"]
+
+[dependencies]
+glam.workspace = true
+olvin_core.workspace = true
+olvin_ecs.workspace = true
+olvin_scene = { workspace = true, features = ["serde"] }
+olvin_script = { path = "../olvin_script", default-features = false }
+olvin_audio = { path = "../olvin_audio", optional = true }
+serde.workspace = true
+ron.workspace = true
+log.workspace = true

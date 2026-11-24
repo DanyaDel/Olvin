@@ -3694,6 +3694,7 @@ dependencies = [
  "olvin_audio",
  "olvin_core",
  "olvin_csg",
+ "olvin_cutscene",
  "olvin_ecs",
  "olvin_game",
  "olvin_gui",
@@ -3773,6 +3774,21 @@ name = "olvin_csg"
 version = "0.1.0"
 dependencies = [
  "glam 0.34.3",
+ "serde",
+]
+
+[[package]]
+name = "olvin_cutscene"
+version = "0.1.0"
+dependencies = [
+ "glam 0.34.3",
+ "log",
+ "olvin_audio",
+ "olvin_core",
+ "olvin_ecs",
+ "olvin_scene",
+ "olvin_script",
+ "ron",
  "serde",
 ]
 

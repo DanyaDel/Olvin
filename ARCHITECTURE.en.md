@@ -40,6 +40,7 @@ crates/
   olvin/              facade: re-exports, DefaultPlugins, prelude, features window/render/scene/physics/script/lua/input/audio/game/gui
   olvin_locale/       localisation (feature `locale`): `Locale` string tables per language (`assets/locales/*.ron`), fallback language, `{name}` placeholders, plural forms by language rules, `LocalePlugin`
   olvin_nav/          navigation (feature `nav`): `NavGrid::bake` from triangles (floor layers, slope, steps, head room, distance from walls), `find_path` (A*, 8 neighbours, line-of-sight smoothing), `add_blocker`; with feature `engine` `NavPlugin`, `Navigation`, `NavAgent`, triangles from static colliders
+  olvin_cutscene/     cutscenes (feature `cutscene`): `Cutscene` from `*.cutscene.ron` (Transform tracks by `Name`, Camera/Message/Sound cues), `Cutscenes` (play/skip/stop/pause), `CutscenePlugin`; scripts drive it with the messages `cutscene:play/skip/stop`; `ActiveCamera` (in `olvin_scene`) picks the drawn camera
   olvin_trust/        list of trusted projects (hub and editor): `TrustStore`, the question text (T1)
   olvin_ui/           shared UI kit of the editor and the hub (egui): 4 themes from STYLE.md, fonts, logo drawn in code, animations
   olvin_text/         text without a GPU: font (ab_glyph), glyph atlas, line layout, built-in Inter (Latin + Cyrillic)

@@ -25,7 +25,7 @@ lua = ["script", "olvin_script/lua"]
 # Action maps over keyboard, mouse and gamepads (gilrs).
 input = ["dep:olvin_input", "olvin_script?/input"]
 # Sound on kira: AudioSource / AudioListener, one-shots, streamed music.
-audio = ["dep:olvin_audio", "olvin_script?/audio"]
+audio = ["dep:olvin_audio", "olvin_script?/audio", "olvin_cutscene?/audio"]
 # Game states, background scene loading, save slots.
 game = ["dep:olvin_game"]
 # In-game UI (`olvin::gui`): buttons, labels, layout, gamepad focus; with `render`
@@ -37,6 +37,9 @@ locale = ["dep:olvin_locale"]
 
 # Navigation (`olvin::nav`): bake walkable ground from colliders, A* paths, `NavAgent`.
 nav = ["dep:olvin_nav", "olvin_nav/engine", "olvin_script?/nav"]
+
+# Cutscenes (`olvin::cutscene`): a timeline of object moves, camera cuts, sounds and script messages.
+cutscene = ["dep:olvin_cutscene", "script"]
 
 # Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
 integrity = ["olvin_core/integrity"]
@@ -54,6 +57,7 @@ profile-http = ["olvin_core/profile-http"]
 [dependencies]
 olvin_locale = { workspace = true, optional = true }
 olvin_nav = { workspace = true, optional = true }
+olvin_cutscene = { workspace = true, optional = true }
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true

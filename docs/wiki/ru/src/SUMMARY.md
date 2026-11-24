@@ -58,6 +58,7 @@
 - [Время и события](engine/time-events.md)
 - [Локализация](engine/localization.md)
 - [Навигация](engine/navigation.md)
+- [Катсцены](engine/cutscenes.md)
 - [Сеть](engine/networking.md)
 - [Профилировщик](engine/profiler.md)
 

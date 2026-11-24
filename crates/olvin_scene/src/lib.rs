@@ -119,6 +119,11 @@ impl Transform {
     }
 }
 
+/// Marks the camera that is drawn when there are several (cutscenes put it
+/// on the camera of the shot). Without one, the first camera is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActiveCamera;
+
 /// Perspective camera; the view comes from the entity's [`Transform`].
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {

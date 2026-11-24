@@ -14,6 +14,8 @@ pub use olvin_assets as assets;
 #[cfg(feature = "audio")]
 pub use olvin_audio as audio;
 pub use olvin_core as core;
+#[cfg(feature = "cutscene")]
+pub use olvin_cutscene as cutscene;
 pub use olvin_ecs as ecs;
 #[cfg(feature = "game")]
 pub use olvin_game as game;

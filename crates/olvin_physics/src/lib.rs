@@ -21,11 +21,13 @@ mod bodies;
 mod character;
 mod events;
 mod forces;
+mod joints;
 mod query;
 mod sync;
 
 pub use character::{CharacterMotor, CharacterMove, ControllerHit, move_character};
 pub use events::{CollisionEvent, CollisionEvents};
+pub use joints::JointLink;
 pub use query::{CastShape, Hit, QueryOptions};
 
 use bodies::*;
@@ -69,6 +71,8 @@ pub struct Physics {
     accumulator: f32,
     /// Bodies with a force pending, cleared after the step.
     forced: Vec<rp::RigidBodyHandle>,
+    /// A fixed body at the world's origin that joints to "the world" hold on to.
+    world_anchor: Option<rp::RigidBodyHandle>,
     /// Controller hits since the last step, moved into `Events<ControllerHit>`.
     pub(crate) hits: Vec<ControllerHit>,
     collector: rp::ChannelEventCollector,
@@ -90,12 +94,22 @@ impl Physics {
             world,
             accumulator: 0.0,
             forced: Vec::new(),
+            world_anchor: None,
             hits: Vec::new(),
             collector: rp::ChannelEventCollector::new(cs, fs, ts),
             collisions,
             _forces,
             _tears,
         }
+    }
+
+    /// The body that joints to the world are attached to (made on first use).
+    pub(crate) fn world_anchor(&mut self) -> rp::RigidBodyHandle {
+        *self.world_anchor.get_or_insert_with(|| {
+            self.world
+                .bodies
+                .insert(rp::RigidBodyBuilder::fixed().build())
+        })
     }
 
     pub fn gravity(&self) -> Vec3 {

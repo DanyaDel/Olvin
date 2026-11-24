@@ -2108,3 +2108,23 @@ fn collider_layer_mask_menu_edits_the_scene() {
     assert_eq!(c.mask, 0, "None cleared every layer");
     assert_eq!(c.layer, 0);
 }
+
+#[test]
+fn joint_section_shows_the_kind_fields_and_connects_to_the_world() {
+    use olvin_editor::olvin_scene::file::{JointDesc, JointKind};
+    let p = project("joint-section");
+    let mut h = editor(&p);
+    {
+        let s = state(&mut h);
+        s.scene.get_mut(3).unwrap().joint = Some(JointDesc::new(JointKind::Hinge {
+            axis: Vec3::Y,
+            limits: None,
+        }));
+        s.select(Some(3));
+    }
+    h.run_steps(5);
+    // The hinge's own fields and the connection list.
+    h.get_by_label("Angle Limits");
+    h.get_by_label("Connected To");
+    h.get_by_label("Axis");
+}

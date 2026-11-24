@@ -23,7 +23,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -31,7 +31,9 @@ pub const FORMAT_VERSION: u32 = 6;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
+pub const MIGRATIONS: &[Migration] = &[
+    v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7,
+];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
@@ -88,6 +90,11 @@ fn v4_to_v5(_: &mut SceneFile) {}
 /// colliders get layer 0 and collide with everything, as before; the bump
 /// makes version-5 builds refuse new files instead of ignoring the layers.
 fn v5_to_v6(_: &mut SceneFile) {}
+
+/// Version 7 adds `EntityDesc::joint` (physics joints). Older files have
+/// none, so the data stays as it is; the bump makes version-6 builds refuse
+/// new files instead of dropping the joints.
+fn v6_to_v7(_: &mut SceneFile) {}
 
 /// The timeline clip of format versions 1 and 2.
 #[derive(Deserialize)]
@@ -487,6 +494,9 @@ pub struct EntityDesc {
     pub collider: Option<ColliderDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rigidbody: Option<RigidbodyDesc>,
+    /// Physics joint to another object or to the world (format version 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint: Option<JointDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_controller: Option<CharacterControllerDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -680,6 +690,66 @@ impl Default for RigidbodyDesc {
     }
 }
 
+/// What a [`JointDesc`] allows its two bodies to do.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum JointKind {
+    /// No relative movement: the bodies stay as they were placed.
+    Fixed,
+    /// A door hinge: rotation about `axis` (in this object's local space) only.
+    Hinge {
+        axis: Vec3,
+        /// Allowed angle range in degrees, relative to the placement.
+        #[serde(default)]
+        limits: Option<[f32; 2]>,
+    },
+    /// A ball and socket: free rotation about the anchor.
+    Ball,
+    /// A piston or drawer: movement along `axis` (this object's local space) only.
+    Slider {
+        axis: Vec3,
+        /// Allowed range in metres, relative to the placement.
+        #[serde(default)]
+        limits: Option<[f32; 2]>,
+    },
+    /// A spring between the anchors that pulls them to `rest_length` metres apart.
+    Spring {
+        rest_length: f32,
+        stiffness: f32,
+        damping: f32,
+    },
+}
+
+/// Joins this object's body to another object's, or to the world.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JointDesc {
+    pub kind: JointKind,
+    /// The id of the other object, or `None` for the world (the joint is then
+    /// fixed in place where the anchor is now).
+    #[serde(default)]
+    pub connected: Option<u64>,
+    /// Joint point in this object's local space (scale applied).
+    #[serde(default)]
+    pub anchor: Vec3,
+    /// The same point in the other object's local space; ignored for the world.
+    #[serde(default)]
+    pub connected_anchor: Vec3,
+    /// Whether the two bodies still collide with each other.
+    #[serde(default)]
+    pub collide_connected: bool,
+}
+
+impl JointDesc {
+    pub fn new(kind: JointKind) -> Self {
+        Self {
+            kind,
+            connected: None,
+            anchor: Vec3::ZERO,
+            connected_anchor: Vec3::ZERO,
+            collide_connected: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CharacterControllerDesc {
     pub height: f32,
@@ -832,6 +902,7 @@ impl EntityDesc {
             light: None,
             collider: None,
             rigidbody: None,
+            joint: None,
             character_controller: None,
             audio_source: None,
             audio_listener: false,
@@ -1470,6 +1541,7 @@ mod tests {
     const V4: &str = include_str!("../tests/fixtures/v4.scene.ron");
     const V5: &str = include_str!("../tests/fixtures/v5.scene.ron");
     const V6: &str = include_str!("../tests/fixtures/v6.scene.ron");
+    const V7: &str = include_str!("../tests/fixtures/v7.scene.ron");
     const CRATE_PREFAB: &str = include_str!("../tests/fixtures/crate.prefab.ron");
 
     #[test]
@@ -1494,6 +1566,38 @@ mod tests {
         let mut wild = ColliderDesc::new(ColliderShape::Sphere { radius: 1.0 });
         wild.layer = 200;
         assert_eq!(wild.layer_bit(), 1 << 31);
+    }
+
+    #[test]
+    fn joints_load_with_defaults_and_round_trip() {
+        let scene = SceneFile::parse(V7).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let door = scene.get(2).unwrap().joint.as_ref().unwrap();
+        assert_eq!(door.connected, Some(1));
+        assert_eq!(door.anchor, Vec3::new(-1.0, 0.0, 0.0));
+        assert_eq!(door.connected_anchor, Vec3::ZERO, "left out: the default");
+        assert!(!door.collide_connected);
+        assert_eq!(
+            door.kind,
+            JointKind::Hinge {
+                axis: Vec3::Y,
+                limits: Some([-90.0, 90.0])
+            }
+        );
+        let lamp = scene.get(3).unwrap().joint.as_ref().unwrap();
+        assert_eq!(lamp.connected, None, "to the world");
+        assert!(matches!(lamp.kind, JointKind::Spring { rest_length, .. } if rest_length == 1.5));
+        assert!(scene.get(1).unwrap().joint.is_none());
+        let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+        // Older files load without joints.
+        assert!(
+            SceneFile::parse(V6)
+                .unwrap()
+                .entities
+                .iter()
+                .all(|e| e.joint.is_none())
+        );
     }
 
     #[test]

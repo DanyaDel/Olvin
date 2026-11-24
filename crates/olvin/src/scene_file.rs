@@ -358,6 +358,9 @@ fn spawn_entities(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
         if let Some(c) = &e.rigidbody {
             b.add(c.clone());
         }
+        if let Some(c) = &e.joint {
+            b.add(c.clone());
+        }
         if let Some(c) = &e.particles {
             b.add(crate::particles::emitter_in(res, c));
         }
@@ -1103,6 +1106,39 @@ mod tests {
                 .contains("environment")
         );
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_joint_becomes_a_component_that_finds_its_partner_by_scene_id() {
+        use olvin_scene::file::{JointDesc, JointKind};
+        let mut res = Resources::default();
+        res.insert(World::new());
+        res.insert(Meshes::default());
+        res.insert(RenderSettings::default());
+        let mut post = EntityDesc::new(10, "Post");
+        post.collider = Some(ColliderDesc::for_shape(Shape::Cube));
+        let mut door = EntityDesc::new(11, "Door");
+        door.collider = Some(ColliderDesc::for_shape(Shape::Cube));
+        door.rigidbody = Some(RigidbodyDesc::default());
+        let mut joint = JointDesc::new(JointKind::Ball);
+        joint.connected = Some(10);
+        door.joint = Some(joint);
+        let scene = SceneFile {
+            entities: vec![post, door],
+            ..Default::default()
+        };
+        let ids = spawn_ids(&res, &scene);
+        let world = res.fetch::<World>();
+        let j = world.get::<&JointDesc>(ids[&11]).unwrap();
+        assert_eq!(j.connected, Some(10));
+        // The partner is found by the SceneId the post was spawned with.
+        let partner = world
+            .query::<(Entity, &SceneId)>()
+            .iter()
+            .find(|(_, s)| s.0 == 10)
+            .map(|(e, _)| e);
+        assert_eq!(partner, Some(ids[&10]));
+        assert!(world.get::<&JointDesc>(ids[&10]).is_err());
     }
 
     #[test]

@@ -3,7 +3,8 @@ use glam::Vec3;
 use olvin_scene::action::{Action, KeyState, Prop};
 use olvin_scene::file::{
     AudioSourceDesc, BodyKind, CameraDesc, CharacterControllerDesc, ColliderDesc, ColliderShape,
-    EntityDesc, LightDesc, LightKind, MeshDesc, RigidbodyDesc, ScriptDesc, Shape,
+    EntityDesc, JointDesc, JointKind, LightDesc, LightKind, MeshDesc, RigidbodyDesc, ScriptDesc,
+    Shape,
 };
 
 use crate::ext::ComponentEditor;
@@ -71,6 +72,7 @@ fn field_of(key: &str) -> Option<&'static str> {
         "light" => "light",
         "collider" => "collider",
         "rigidbody" => "rigidbody",
+        "joint" => "joint",
         "cc" => "character_controller",
         "audio" => "audio_source",
         "particles" => "particles",
@@ -104,7 +106,7 @@ fn collider_is(e: &EntityDesc, f: fn(&ColliderShape) -> bool) -> bool {
     e.collider.as_ref().is_some_and(|c| f(&c.shape))
 }
 
-const BUILTINS: [Builtin; 14] = [
+const BUILTINS: [Builtin; 19] = [
     Builtin {
         category: "Rendering",
         name: "Model",
@@ -177,6 +179,52 @@ const BUILTINS: [Builtin; 14] = [
     },
     Builtin {
         category: "Physics",
+        name: "Fixed Joint",
+        has: |e| matches!(&e.joint, Some(j) if j.kind == JointKind::Fixed),
+        add: |e| e.joint = Some(JointDesc::new(JointKind::Fixed)),
+    },
+    Builtin {
+        category: "Physics",
+        name: "Hinge Joint",
+        has: |e| matches!(&e.joint, Some(j) if matches!(j.kind, JointKind::Hinge { .. })),
+        add: |e| {
+            e.joint = Some(JointDesc::new(JointKind::Hinge {
+                axis: Vec3::Y,
+                limits: None,
+            }))
+        },
+    },
+    Builtin {
+        category: "Physics",
+        name: "Ball Joint",
+        has: |e| matches!(&e.joint, Some(j) if j.kind == JointKind::Ball),
+        add: |e| e.joint = Some(JointDesc::new(JointKind::Ball)),
+    },
+    Builtin {
+        category: "Physics",
+        name: "Slider Joint",
+        has: |e| matches!(&e.joint, Some(j) if matches!(j.kind, JointKind::Slider { .. })),
+        add: |e| {
+            e.joint = Some(JointDesc::new(JointKind::Slider {
+                axis: Vec3::X,
+                limits: None,
+            }))
+        },
+    },
+    Builtin {
+        category: "Physics",
+        name: "Spring Joint",
+        has: |e| matches!(&e.joint, Some(j) if matches!(j.kind, JointKind::Spring { .. })),
+        add: |e| {
+            e.joint = Some(JointDesc::new(JointKind::Spring {
+                rest_length: 1.0,
+                stiffness: 50.0,
+                damping: 5.0,
+            }))
+        },
+    },
+    Builtin {
+        category: "Physics",
         name: "Character Controller",
         has: |e| e.character_controller.is_some(),
         add: |e| e.character_controller = Some(CharacterControllerDesc::default()),
@@ -236,6 +284,21 @@ impl Panel for Inspector {
             .and_then(|e| e.model.as_ref())
             .map(|m| m.path.clone())
             .map(|path| state.engine_scene.model_clips(assets.clone(), &path))
+            .unwrap_or_default();
+        // The other objects a joint may connect to (named in the Connected list).
+        let joint_targets: Vec<(u64, String)> = state
+            .scene
+            .get(id)
+            .filter(|e| e.joint.is_some())
+            .map(|_| {
+                state
+                    .scene
+                    .entities
+                    .iter()
+                    .filter(|o| o.id != id)
+                    .map(|o| (o.id, o.name.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         let fx = &mut state.engine_scene.fx;
         let olvin_scene::file::SceneFile {
@@ -387,6 +450,18 @@ impl Panel for Inspector {
                         rigidbody_ui(ui, rb)
                     });
                 }
+                if let Some(j) = &mut e.joint {
+                    let title = match j.kind {
+                        JointKind::Fixed => "🔗 Fixed Joint",
+                        JointKind::Hinge { .. } => "🔗 Hinge Joint",
+                        JointKind::Ball => "🔗 Ball Joint",
+                        JointKind::Slider { .. } => "🔗 Slider Joint",
+                        JointKind::Spring { .. } => "🔗 Spring Joint",
+                    };
+                    section(ui, title, Some((&mut remove, "joint")), |ui| {
+                        joint_ui(ui, j, &joint_targets)
+                    });
+                }
                 if let Some(cc) = &mut e.character_controller {
                     section(
                         ui,
@@ -454,6 +529,7 @@ impl Panel for Inspector {
                     Some("particles") => e.particles = None,
                     Some("collider") => e.collider = None,
                     Some("rigidbody") => e.rigidbody = None,
+                    Some("joint") => e.joint = None,
                     Some("cc") => e.character_controller = None,
                     Some("audio") => e.audio_source = None,
                     Some("listener") => e.audio_listener = false,
@@ -1062,6 +1138,85 @@ fn collider_ui(ui: &mut egui::Ui, c: &mut ColliderDesc) {
         row(ui, "Bounciness", |ui| {
             drag(ui, &mut c.restitution, 0.0..=1.0, 0.01, "")
         });
+    });
+}
+
+fn joint_ui(ui: &mut egui::Ui, j: &mut JointDesc, targets: &[(u64, String)]) {
+    grid(ui, "joint", |ui| {
+        row(ui, "Connected To", |ui| {
+            let current = match j.connected {
+                None => "World".to_string(),
+                Some(id) => targets
+                    .iter()
+                    .find(|(t, _)| *t == id)
+                    .map_or_else(|| format!("missing #{id}"), |(_, n)| n.clone()),
+            };
+            egui::ComboBox::from_id_salt("joint connected")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut j.connected, None, "World");
+                    for (id, name) in targets {
+                        ui.selectable_value(&mut j.connected, Some(*id), name);
+                    }
+                });
+        });
+        row(ui, "Anchor", |ui| vec3(ui, &mut j.anchor, 0.02, ""));
+        if j.connected.is_some() {
+            row(ui, "Connected Anchor", |ui| {
+                vec3(ui, &mut j.connected_anchor, 0.02, "")
+            });
+        }
+        row(ui, "Collide Connected", |ui| {
+            ui.checkbox(&mut j.collide_connected, "");
+        });
+        match &mut j.kind {
+            JointKind::Fixed | JointKind::Ball => {}
+            JointKind::Hinge { axis, limits } => {
+                row(ui, "Axis", |ui| vec3(ui, axis, 0.02, ""));
+                limits_ui(ui, limits, "Angle Limits", "°", 1.0, -360.0..=360.0);
+            }
+            JointKind::Slider { axis, limits } => {
+                row(ui, "Axis", |ui| vec3(ui, axis, 0.02, ""));
+                limits_ui(ui, limits, "Limits", " m", 0.02, -1000.0..=1000.0);
+            }
+            JointKind::Spring {
+                rest_length,
+                stiffness,
+                damping,
+            } => {
+                row(ui, "Rest Length", |ui| {
+                    drag(ui, rest_length, 0.0..=1000.0, 0.02, " m")
+                });
+                row(ui, "Stiffness", |ui| {
+                    drag(ui, stiffness, 0.0..=1.0e6, 1.0, "")
+                });
+                row(ui, "Damping", |ui| drag(ui, damping, 0.0..=1.0e5, 0.1, ""));
+            }
+        }
+    });
+}
+
+/// An optional [min, max] range: a checkbox and the two ends.
+fn limits_ui(
+    ui: &mut egui::Ui,
+    limits: &mut Option<[f32; 2]>,
+    label: &str,
+    suffix: &str,
+    speed: f64,
+    range: std::ops::RangeInclusive<f32>,
+) {
+    row(ui, label, |ui| {
+        let mut on = limits.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            *limits = on.then_some([0.0, 1.0]);
+        }
+        if let Some([lo, hi]) = limits {
+            drag(ui, lo, range.clone(), speed, suffix);
+            drag(ui, hi, range, speed, suffix);
+            if *hi < *lo {
+                *hi = *lo;
+            }
+        }
     });
 }
 

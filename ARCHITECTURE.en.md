@@ -230,6 +230,8 @@ Modules: `lib.rs` has `Physics`, `Body`, `FixedSystems`, `PhysicsPlugin`; `sync.
 
 Collision layers: `ColliderDesc::layer/mask` (scene format v6) become Rapier `InteractionGroups` (a pair collides when each one's mask has the other's layer); queries (`QueryOptions { mask, exclude, hit_triggers }`, `raycast_with`, `shapecast` with `CastShape`, `overlap`) pick layers by the collider's layer.
 
+Joints: `JointDesc` (scene format v7: Fixed, Hinge, Ball, Slider, Spring; the partner by `SceneId` or the world) → `joints.rs` makes a Rapier impulse joint when both bodies exist, with frames set from the present pose (nothing jumps) and a `JointLink` marker; removing the `JointDesc` removes the joint, limits are in the object's own turn.
+
 `PhysicsPlugin { gravity }` and the resource `Physics { world: rapier PhysicsWorld }`. Every frame (PreUpdate): entities with a `ColliderDesc` or `RigidbodyDesc` but no `Body` marker get bodies (Dynamic, Kinematic, or Fixed if there is no Rigidbody). The object's scale is baked into the collider shape, since Rapier has no scale. `Mesh` uses `MeshGeometry`. Kinematic bodies follow `Transform`, then fixed steps of 1/60 (at most 5 per frame), then dynamic bodies write their pose back. Rapier 0.36 computes in glam 0.33, converting through arrays. Tests: a box lands on the ground, a ball lands on a mesh floor, a ball passes through a trigger.
 - Edge input: a zero scale no longer writes a NaN rotation (`split` falls back to identity); a mesh collider with indices past its vertices is skipped with a warning (parry would panic); NaN/negative `dt` is ignored.
 

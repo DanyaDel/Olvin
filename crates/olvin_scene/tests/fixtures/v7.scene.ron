@@ -1,0 +1,15 @@
+// Scene of version 7: v6 plus physics joints (`joint`). Every field after `kind`
+// has a default, so a file lists only what differs.
+(
+    version: 7,
+    entities: [
+        (id: 1, name: "Frame", position: (0.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (0.2, 2.0, 0.2)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 2, name: "Door", position: (1.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (2.0, 2.0, 0.1)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0)),
+            rigidbody: Some((kind: Dynamic, mass: 5.0, drag: 0.0, angular_drag: 0.05, gravity_scale: 1.0, freeze_rotation: (false, false, false), ccd: false)),
+            joint: Some((kind: Hinge(axis: (0.0, 1.0, 0.0), limits: Some((-90.0, 90.0))), connected: Some(1), anchor: (-1.0, 0.0, 0.0)))),
+        (id: 3, name: "Lamp", position: (0.0, 4.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            joint: Some((kind: Spring(rest_length: 1.5, stiffness: 80.0, damping: 4.0)))),
+    ],
+)

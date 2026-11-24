@@ -28,6 +28,8 @@ pub fn step(res: &Resources, dt: f32) {
         // `detect_collisions` would do it now, but it consumes the bodies'
         // change flags and the next step then ignores them.)
         create_bodies(&mut world, &mut physics);
+        crate::joints::remove_joints(&mut world, &mut physics);
+        crate::joints::create_joints(&mut world, &mut physics);
         physics.consume(dt)
     };
     for _ in 0..steps {
@@ -39,6 +41,7 @@ pub fn step(res: &Resources, dt: f32) {
         let mut physics = res.fetch_mut::<Physics>();
         let mut world = res.fetch_mut::<World>();
         create_bodies(&mut world, &mut physics);
+        crate::joints::create_joints(&mut world, &mut physics);
         sync_moved(&world, &mut physics);
         push_kinematic(&world, &mut physics);
         character::move_characters(&mut world, &mut physics, FIXED_DT);

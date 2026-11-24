@@ -1,7 +1,10 @@
 use glam::{Quat, Vec3};
 use olvin_core::{Events, Resources};
 use olvin_ecs::{Entity, World};
-use olvin_scene::file::{CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc};
+use olvin_scene::SceneId;
+use olvin_scene::file::{
+    CharacterControllerDesc, ColliderDesc, ColliderShape, JointDesc, JointKind, RigidbodyDesc,
+};
 use olvin_scene::{MeshGeometry, Transform};
 
 use super::*;
@@ -809,4 +812,252 @@ fn shapecasts_sweep_boxes_and_capsules_and_overlap_finds_neighbours() {
             )
             .is_empty()
     );
+}
+
+fn quat_of(res: &Resources, e: Entity) -> Quat {
+    res.fetch::<World>().get::<&Transform>(e).unwrap().rotation
+}
+
+fn pos_of(res: &Resources, e: Entity) -> Vec3 {
+    res.fetch::<World>()
+        .get::<&Transform>(e)
+        .unwrap()
+        .translation
+}
+
+fn steps(res: &Resources, count: u32) {
+    for _ in 0..count {
+        step(res, FIXED_DT);
+    }
+}
+
+fn body(shape: ColliderShape) -> (ColliderDesc, RigidbodyDesc) {
+    (ColliderDesc::new(shape), RigidbodyDesc::default())
+}
+
+#[test]
+fn a_hinge_to_the_world_swings_about_its_axis_within_its_limits() {
+    let res = res_with(Physics::new(Vec3::ZERO));
+    let door = {
+        let mut world = res.fetch_mut::<World>();
+        let (c, r) = body(ColliderShape::Box {
+            size: Vec3::new(2.0, 0.2, 0.2),
+        });
+        let mut joint = JointDesc::new(JointKind::Hinge {
+            axis: Vec3::Y,
+            limits: Some([-45.0, 45.0]),
+        });
+        joint.anchor = Vec3::new(-1.0, 0.0, 0.0);
+        world.spawn((Transform::from_xyz(1.0, 0.0, 0.0), c, r, joint))
+    };
+    steps(&res, 2);
+    // A hard shove sideways at the far end.
+    for _ in 0..60 {
+        res.fetch_mut::<Physics>().apply_impulse(
+            &res.fetch::<World>(),
+            door,
+            Vec3::new(0.0, 0.0, 0.5),
+        );
+        step(&res, FIXED_DT);
+    }
+    let p = pos_of(&res, door);
+    // The hinge pin stays at the origin: the door's far end is 1 m (door half)
+    // from it along the door, and the near end is where it was.
+    let near_end = p + quat_of(&res, door) * Vec3::new(-1.0, 0.0, 0.0);
+    assert!(near_end.length() < 0.05, "pin moved to {near_end}");
+    // Swung, but stopped at the limit (45 degrees, a little overshoot).
+    let angle = quat_of(&res, door)
+        .to_euler(glam::EulerRot::YXZ)
+        .0
+        .to_degrees()
+        .abs();
+    assert!((30.0..50.0).contains(&angle), "angle {angle}");
+    // It stayed flat: only Y rotation.
+    assert!(p.y.abs() < 0.05, "{p}");
+}
+
+#[test]
+fn a_fixed_joint_to_the_world_holds_a_body_against_gravity() {
+    let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+    let (held, free) = {
+        let mut world = res.fetch_mut::<World>();
+        let (c, r) = body(ColliderShape::Sphere { radius: 0.5 });
+        let held = world.spawn((
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            c.clone(),
+            r.clone(),
+            JointDesc::new(JointKind::Fixed),
+        ));
+        let free = world.spawn((Transform::from_xyz(5.0, 5.0, 0.0), c, r));
+        (held, free)
+    };
+    steps(&res, 120);
+    assert!(
+        (pos_of(&res, held).y - 5.0).abs() < 0.05,
+        "held at {}",
+        pos_of(&res, held)
+    );
+    assert!(pos_of(&res, free).y < 0.0, "the free one fell");
+}
+
+#[test]
+fn a_slider_moves_along_its_axis_only_and_stops_at_its_range() {
+    let res = res_with(Physics::new(Vec3::ZERO));
+    let drawer = {
+        let mut world = res.fetch_mut::<World>();
+        let (c, r) = body(ColliderShape::Box { size: Vec3::ONE });
+        world.spawn((
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            c,
+            r,
+            JointDesc::new(JointKind::Slider {
+                axis: Vec3::X,
+                limits: Some([0.0, 2.0]),
+            }),
+        ))
+    };
+    steps(&res, 2);
+    for _ in 0..90 {
+        res.fetch_mut::<Physics>().apply_impulse(
+            &res.fetch::<World>(),
+            drawer,
+            Vec3::new(2.0, 1.0, 1.0),
+        );
+        step(&res, FIXED_DT);
+    }
+    let p = pos_of(&res, drawer);
+    assert!(p.x > 1.5 && p.x < 2.2, "x {}", p.x);
+    assert!(
+        (p.y - 1.0).abs() < 0.05 && p.z.abs() < 0.05,
+        "left the rail: {p}"
+    );
+}
+
+#[test]
+fn a_spring_pulls_the_bodies_towards_its_rest_length() {
+    let res = res_with(Physics::new(Vec3::ZERO));
+    let (anchor, bob) = {
+        let mut world = res.fetch_mut::<World>();
+        let anchor = world.spawn((
+            Transform::IDENTITY,
+            ColliderDesc::new(ColliderShape::Sphere { radius: 0.25 }),
+            SceneId(7),
+        ));
+        let (c, r) = body(ColliderShape::Sphere { radius: 0.25 });
+        let mut joint = JointDesc::new(JointKind::Spring {
+            rest_length: 1.0,
+            stiffness: 400.0,
+            damping: 20.0,
+        });
+        joint.connected = Some(7);
+        let bob = world.spawn((Transform::from_xyz(4.0, 0.0, 0.0), c, r, joint));
+        (anchor, bob)
+    };
+    let _ = anchor;
+    steps(&res, 240);
+    let d = pos_of(&res, bob).length();
+    assert!(d < 2.0, "pulled in to about the rest length, at {d}");
+}
+
+#[test]
+fn a_ball_joint_to_another_object_keeps_the_pendulum_at_its_length() {
+    let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+    let bob = {
+        let mut world = res.fetch_mut::<World>();
+        world.spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            ColliderDesc::new(ColliderShape::Sphere { radius: 0.2 }),
+            SceneId(1),
+        ));
+        let (c, r) = body(ColliderShape::Sphere { radius: 0.2 });
+        let mut joint = JointDesc::new(JointKind::Ball);
+        joint.connected = Some(1);
+        // The pivot is 3 m to the left of the bob, at the other object's centre.
+        joint.anchor = Vec3::new(-3.0, 0.0, 0.0);
+        joint.connected_anchor = Vec3::ZERO;
+        // Hangs 3 m to the side of the pivot.
+        world.spawn((Transform::from_xyz(3.0, 10.0, 0.0), c, r, joint))
+    };
+    let (mut lowest, mut worst) = (10.0f32, 0.0f32);
+    for _ in 0..120 {
+        step(&res, FIXED_DT);
+        let p = pos_of(&res, bob);
+        lowest = lowest.min(p.y);
+        worst = worst.max(((p - Vec3::new(0.0, 10.0, 0.0)).length() - 3.0).abs());
+    }
+    assert!(lowest < 10.0 - 2.5, "swung down to {lowest}");
+    assert!(worst < 0.1, "the rod stretched by {worst} m");
+}
+
+#[test]
+fn removing_the_joint_desc_frees_the_body_and_a_missing_target_is_harmless() {
+    let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+    let (held, orphan) = {
+        let mut world = res.fetch_mut::<World>();
+        let (c, r) = body(ColliderShape::Sphere { radius: 0.5 });
+        let held = world.spawn((
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            c.clone(),
+            r.clone(),
+            JointDesc::new(JointKind::Fixed),
+        ));
+        let mut lost = JointDesc::new(JointKind::Fixed);
+        lost.connected = Some(999);
+        let orphan = world.spawn((Transform::from_xyz(9.0, 5.0, 0.0), c, r, lost));
+        (held, orphan)
+    };
+    steps(&res, 60);
+    assert!((pos_of(&res, held).y - 5.0).abs() < 0.05);
+    assert!(
+        pos_of(&res, orphan).y < 5.0,
+        "a joint to nothing joins nothing"
+    );
+    res.fetch_mut::<World>()
+        .remove_one::<JointDesc>(held)
+        .unwrap();
+    steps(&res, 60);
+    assert!(
+        pos_of(&res, held).y < 4.0,
+        "free after the desc was removed"
+    );
+}
+
+#[test]
+fn hinge_limits_are_in_this_objects_own_turn_not_mirrored() {
+    // A door that may only open one way: 0..90 degrees about +Y.
+    let turn = |impulse_z: f32| {
+        let res = res_with(Physics::new(Vec3::ZERO));
+        let door = {
+            let mut world = res.fetch_mut::<World>();
+            let (c, r) = body(ColliderShape::Box {
+                size: Vec3::new(2.0, 0.2, 0.2),
+            });
+            let mut joint = JointDesc::new(JointKind::Hinge {
+                axis: Vec3::Y,
+                limits: Some([0.0, 90.0]),
+            });
+            joint.anchor = Vec3::new(-1.0, 0.0, 0.0);
+            world.spawn((Transform::from_xyz(1.0, 0.0, 0.0), c, r, joint))
+        };
+        steps(&res, 2);
+        for _ in 0..90 {
+            res.fetch_mut::<Physics>().apply_impulse(
+                &res.fetch::<World>(),
+                door,
+                Vec3::new(0.0, 0.0, impulse_z),
+            );
+            step(&res, FIXED_DT);
+        }
+        quat_of(&res, door)
+            .to_euler(glam::EulerRot::YXZ)
+            .0
+            .to_degrees()
+    };
+    // +Z at the far end of a door along +X turns it by -Y (right-handed): the
+    // allowed range here is 0..90 about +Y, so pushing the other way turns it
+    // by +Y, up to 90, and pushing this way stays shut.
+    let shut = turn(0.5);
+    let open = turn(-0.5);
+    assert!(shut.abs() < 3.0, "pushed into its stop: {shut}");
+    assert!((60.0..95.0).contains(&open), "opened to {open}");
 }

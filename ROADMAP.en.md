@@ -46,7 +46,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [ ] **Parallel scheduler** (item 4 of the old plan, rayon) for systems with no resource overlap. Do it once real systems exist and profiling shows the bottleneck. (M)
 - [x] **Profiler**: integration with tracy or puffin, a frame panel in the editor (system times, draw calls, triangles). (M) — puffin behind the `profile` feature (scopes on systems, stages, render, physics, scripts), `OLVIN_PROFILE_HTTP` for `puffin_viewer`; the panel is in the editor (see below).
 - [x] **Saving and loading the game** (a layer separate from scenes): component serialisation through a type registry, save slots. (M) — `olvin_game::save`: `SaveRegistry`, `SaveSlots`. Since 2026-11-21 engine state registers itself (`register_engine`: `Transform`, velocities, the controller, `Behaviour::save_state`), keyed by `SceneId` by default; Lua state is not saved.
-- [ ] **Localisation**: string tables with keys and a fallback language. (S)
+- [x] **Localisation**: string tables with keys and a fallback language. (S) — `olvin_locale` (feature `locale`): `assets/locales/<language>.ron` tables, a fallback language, `{name}`, plurals by language rules (ru/uk/be/pl/cs/fr/pt/ja and more), the language from `OLVIN_LANG`/`LANG` or the player's choice, `missing_in` for translators; a wiki page. Not yet wired into Lua or `gui`.
 
 ---
 

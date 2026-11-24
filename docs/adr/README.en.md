@@ -40,3 +40,4 @@ What got easier, what got harder, which questions are still open.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-lua-scripting.en.md) | Scripting in Lua 5.4 (mlua) | Accepted, 2026-11-19 |
+| [0002](0002-build-security.en.md) | Build, supply-chain and binary hardening | Accepted, 2026-11-24 |

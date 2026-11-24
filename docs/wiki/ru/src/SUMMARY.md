@@ -83,3 +83,4 @@
 - [Архитектура](dev/architecture.md)
 - [План (ROADMAP)](dev/roadmap.md)
 - [Языки документации](dev/language-policy.md)
+- [Безопасность сборок](dev/build-security.md)

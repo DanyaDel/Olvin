@@ -10,6 +10,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+Supply chain (needs `cargo install cargo-deny cargo-audit --locked`): `cargo deny check` and `cargo audit`. A new dependency must pass both (licences in `deny.toml`, no HTTP or telemetry crates); never silence an advisory without an id, a reason and a review date. Build-security rules: [wiki "Security of builds"](docs/wiki/en/src/dev/build-security.md), [ADR 0002](docs/adr/0002-build-security.en.md).
+
 Render tests without a GPU run on Mesa llvmpipe:
 
 ```sh

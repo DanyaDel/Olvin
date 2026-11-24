@@ -83,3 +83,4 @@
 - [Architecture](dev/architecture.md)
 - [Roadmap](dev/roadmap.md)
 - [Documentation languages](dev/language-policy.md)
+- [Security of builds](dev/build-security.md)

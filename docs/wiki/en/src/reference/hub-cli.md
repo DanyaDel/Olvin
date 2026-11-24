@@ -10,6 +10,9 @@
 | `remove <module>… [--force]` | remove modules; without `--force` you cannot remove what others depend on |
 | `run [--release]` | build and run the game |
 | `build [--release] [-o <folder>] [-a tar.gz\|zip]` | build the game and lay out a folder for players |
+| `build --release [--keep-symbols] [--no-strip] [--no-remap] [--sign-key FILE\|--no-sign] [--locked] [--trust]` | strip, symbols beside the folder, path remap, signed `manifest.json`; see [Security of builds](../dev/build-security.md) |
+| `keygen [-o FILE] [--force]` / `verify FOLDER [--pubkey KEY]` | make the release signing key / check a built folder against its manifest |
+| `trust [PATH]` / `untrust [PATH]` | allow / stop allowing the hub to build and run a project; `run` and `build` need `--trust` or `OLVIN_TRUST=1` otherwise |
 | `projects` | projects the hub knows about |
 | `register <path>` / `forget <path>` | add to / remove from the list (files stay) |
 | `engine [--path <folder> \| --git <url>]` | show or change the engine source for new projects |

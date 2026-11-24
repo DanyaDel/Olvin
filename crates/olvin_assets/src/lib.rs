@@ -33,8 +33,8 @@ pub use meta::{
     Guid, Importer, META_EXT, Meta, ModelImport, TextureImport, is_ignored_name, meta_path,
 };
 pub use model::{
-    CameraData, CameraProjection, MeshPrimitive, ModelData, ModelEntities, NodeData, import_gltf,
-    model_to_entities, write_materials,
+    CameraData, CameraProjection, MeshPrimitive, ModelData, ModelEntities, MorphClipData,
+    MorphTargetData, MorphTrackData, NodeData, import_gltf, model_to_entities, write_materials,
 };
 pub use root::{AssetEntry, AssetKind, AssetRoot};
 pub use texture::{

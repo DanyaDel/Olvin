@@ -871,6 +871,88 @@ fn write_skinned_gltf(dir: &TempDir) -> PathBuf {
     dir.write("models/rig.gltf", json.as_bytes())
 }
 
+/// A quad (indexed, with normals) with two morph targets, "smile" (lifts the
+/// top row) and "puff" (pushes everything towards +Z), default weights
+/// [0, 0.25], and an animation "talk" of both weights over one second.
+fn write_morph_gltf(dir: &TempDir) -> PathBuf {
+    let mut b = GltfBuf::default();
+    let pos = b.floats(&[0., 0., 0., 1., 0., 0., 0., 1., 0., 1., 1., 0.]);
+    let nrm = b.floats(&[0., 0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1.]);
+    let smile = b.floats(&[0., 0., 0., 0., 0., 0., 0., 0.5, 0., 0., 0.5, 0.]);
+    let puff = b.floats(&[0., 0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1.]);
+    let idx = b.add(
+        &[0u16, 1, 2, 1, 3, 2]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let times = b.floats(&[0., 1.]);
+    // Two keys, two targets each: smile 0 -> 1, puff 1 -> 0.
+    let weights = b.floats(&[0., 1., 1., 0.]);
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0, "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"name": "Face", "mesh": 0}}],
+  "meshes": [{{"name": "Face", "weights": [0, 0.25], "extras": {{"targetNames": ["smile", "puff"]}},
+    "primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1}}, "indices": 4,
+      "targets": [{{"POSITION": 2}}, {{"POSITION": 3}}]}}]}}],
+  "animations": [{{"name": "talk",
+    "channels": [{{"sampler": 0, "target": {{"node": 0, "path": "weights"}}}}],
+    "samplers": [{{"input": 5, "output": 6, "interpolation": "LINEAR"}}]}}],
+  "accessors": [
+    {{"bufferView": {pos}, "componentType": 5126, "count": 4, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": {nrm}, "componentType": 5126, "count": 4, "type": "VEC3"}},
+    {{"bufferView": {smile}, "componentType": 5126, "count": 4, "type": "VEC3"}},
+    {{"bufferView": {puff}, "componentType": 5126, "count": 4, "type": "VEC3"}},
+    {{"bufferView": {idx}, "componentType": 5123, "count": 6, "type": "SCALAR"}},
+    {{"bufferView": {times}, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1]}},
+    {{"bufferView": {weights}, "componentType": 5126, "count": 4, "type": "SCALAR"}}
+  ],
+  "bufferViews": {},
+  "buffers": {}
+}}"#,
+        b.views_json(),
+        b.buffer_json()
+    );
+    dir.write("models/face.gltf", json.as_bytes())
+}
+
+#[test]
+fn gltf_imports_morph_targets_names_weights_and_animation() {
+    let dir = TempDir::new("gltf_morph");
+    let path = write_morph_gltf(&dir);
+    let model = import_gltf(&path, dir.path(), &ModelImport::default()).unwrap();
+    assert!(model.skipped.is_empty(), "{:?}", model.skipped);
+
+    let face = &model.meshes[0];
+    assert_eq!(face.morphs.len(), 2);
+    assert_eq!(face.morphs[0].name, "smile");
+    assert_eq!(face.morphs[1].name, "puff");
+    assert_eq!(face.morph_weights, [0.0, 0.25]);
+    assert_eq!(face.morphs[0].positions.len(), face.positions.len());
+    assert_eq!(face.morphs[0].positions[2], Vec3::new(0.0, 0.5, 0.0));
+    assert_eq!(face.morphs[1].positions[0], Vec3::Z);
+    assert!(
+        face.morphs[0].normals.is_empty(),
+        "no normal offsets in the file"
+    );
+
+    assert!(model.clips.is_empty(), "weights are not skeleton animation");
+    assert_eq!(model.morph_clips.len(), 1);
+    let clip = &model.morph_clips[0];
+    assert_eq!(
+        (clip.name.as_str(), model.nodes[clip.node].name.as_str()),
+        ("talk", "Face")
+    );
+    assert_eq!(clip.primitives, [0], "the animated mesh's primitives");
+    assert_eq!(clip.tracks.len(), 2);
+    assert_eq!(clip.tracks[0].target, 0);
+    assert_eq!(clip.tracks[0].values, [0.0, 1.0]);
+    assert_eq!(clip.tracks[1].values, [1.0, 0.0]);
+    assert_eq!(clip.tracks[1].times, [0.0, 1.0]);
+}
+
 #[test]
 fn gltf_imports_skin_animation_and_camera() {
     let dir = TempDir::new("gltf_skin");

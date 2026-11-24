@@ -330,16 +330,21 @@ fn instantiate(
             }
             None => {
                 let key = (p.desc.path.clone(), i);
-                let mesh = match shared.as_mut().and_then(|s| s.0.get(&key).copied()) {
-                    Some(h) => h,
-                    None => {
-                        // Simpler copies for when the model is far away.
-                        let h =
-                            meshes.add_with_lods(primitive_mesh(prim), &olvin_render::DEFAULT_LODS);
-                        if let Some(s) = shared.as_mut() {
-                            s.0.insert(key, h);
+                // A morphed mesh is rewritten when its weights change: it owns its slot.
+                let mesh = if !prim.morphs.is_empty() {
+                    meshes.add(primitive_mesh(prim))
+                } else {
+                    match shared.as_mut().and_then(|s| s.0.get(&key).copied()) {
+                        Some(h) => h,
+                        None => {
+                            // Simpler copies for when the model is far away.
+                            let h = meshes
+                                .add_with_lods(primitive_mesh(prim), &olvin_render::DEFAULT_LODS);
+                            if let Some(s) = shared.as_mut() {
+                                s.0.insert(key, h);
+                            }
+                            h
                         }
-                        h
                     }
                 };
                 (mesh, None)
@@ -369,6 +374,9 @@ fn instantiate(
         if let Some(skin) = skin {
             let _ = world.insert_one(part, skin);
         }
+        if !prim.morphs.is_empty() {
+            let _ = world.insert(part, morph_components(model, i, prim));
+        }
         parts.push(part);
     }
 
@@ -377,6 +385,47 @@ fn instantiate(
     }
     let _ = world.insert_one(root, ModelInstance { handle, parts });
     Ok(())
+}
+
+/// The blend shapes of primitive `i`, and the weight animations that move them.
+fn morph_components(
+    model: &ModelData,
+    i: usize,
+    prim: &olvin_assets::MeshPrimitive,
+) -> (olvin_render::MorphMesh, olvin_render::MorphClips) {
+    use olvin_render::{MorphClip, MorphMesh, MorphTarget, MorphTrack};
+    let targets = prim
+        .morphs
+        .iter()
+        .map(|t| MorphTarget {
+            name: t.name.clone(),
+            positions: t.positions.clone(),
+            normals: t.normals.clone(),
+        })
+        .collect();
+    let clips = model
+        .morph_clips
+        .iter()
+        .filter(|c| c.primitives.contains(&i))
+        .map(|c| {
+            std::sync::Arc::new(MorphClip::new(
+                c.name.clone(),
+                c.tracks
+                    .iter()
+                    .map(|t| MorphTrack {
+                        target: t.target,
+                        times: t.times.clone(),
+                        values: t.values.clone(),
+                        step: t.step,
+                    })
+                    .collect(),
+            ))
+        })
+        .collect();
+    (
+        MorphMesh::new(primitive_mesh(prim), targets, &prim.morph_weights),
+        olvin_render::MorphClips(clips),
+    )
 }
 
 fn animator_entity(
@@ -631,5 +680,44 @@ mod tests {
         assert_eq!(handles[0], handles[1], "one asset for both instances");
         drop(world);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn morph_components_carry_targets_weights_and_the_matching_clips() {
+        use glam::Vec3;
+        use olvin_assets::{MeshPrimitive, MorphClipData, MorphTargetData, MorphTrackData};
+        let prim = MeshPrimitive {
+            positions: vec![Vec3::ZERO; 3],
+            normals: vec![Vec3::Z; 3],
+            indices: vec![0, 1, 2],
+            morphs: vec![MorphTargetData {
+                name: "smile".into(),
+                positions: vec![Vec3::Y; 3],
+                normals: Vec::new(),
+            }],
+            morph_weights: vec![0.5],
+            ..Default::default()
+        };
+        let clip = |name: &str, primitives: Vec<usize>| MorphClipData {
+            name: name.into(),
+            node: 0,
+            primitives,
+            tracks: vec![MorphTrackData {
+                target: 0,
+                times: vec![0.0, 1.0],
+                values: vec![0.0, 1.0],
+                step: false,
+            }],
+        };
+        let model = ModelData {
+            meshes: vec![prim.clone()],
+            morph_clips: vec![clip("grin", vec![0]), clip("elsewhere", vec![5])],
+            ..Default::default()
+        };
+        let (morph, clips) = morph_components(&model, 0, &prim);
+        assert_eq!(morph.names().collect::<Vec<_>>(), ["smile"]);
+        assert_eq!(morph.weights, [0.5]);
+        assert_eq!(clips.0.len(), 1, "only the clips of this primitive");
+        assert!(clips.find("grin").is_some() && clips.find("elsewhere").is_none());
     }
 }

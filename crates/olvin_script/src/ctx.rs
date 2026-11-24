@@ -394,6 +394,90 @@ impl<'a> ScriptCtx<'a> {
             .raycast_filtered(origin, direction, max, Some(self.entity), false)
     }
 
+    /// This object and its direct children that have blend shapes (a model's
+    /// parts are children of its root).
+    #[cfg(feature = "morph")]
+    fn morph_entities(&self) -> Vec<Entity> {
+        let me = self.entity;
+        self.world
+            .query::<(
+                Entity,
+                &olvin_render::MorphMesh,
+                Option<&olvin_transform::Parent>,
+            )>()
+            .iter()
+            .filter(|(e, _, parent)| *e == me || parent.is_some_and(|p| p.0 == me))
+            .map(|(e, _, _)| e)
+            .collect()
+    }
+
+    /// Sets the weight (usually 0..1) of the blend shape `name` on this
+    /// object's meshes; false when none has such a shape.
+    #[cfg(feature = "morph")]
+    pub fn set_morph(&mut self, name: &str, weight: f32) -> bool {
+        let mut any = false;
+        for e in self.morph_entities() {
+            if let Ok(mut m) = self.world.get::<&mut olvin_render::MorphMesh>(e) {
+                any |= m.set(name, weight);
+            }
+        }
+        any
+    }
+
+    /// The weight of the blend shape `name` (the first mesh that has it).
+    #[cfg(feature = "morph")]
+    pub fn morph(&self, name: &str) -> Option<f32> {
+        self.morph_entities().into_iter().find_map(|e| {
+            self.world
+                .get::<&olvin_render::MorphMesh>(e)
+                .ok()
+                .and_then(|m| m.weight(name))
+        })
+    }
+
+    /// Names of the blend shapes of this object's meshes, without repeats.
+    #[cfg(feature = "morph")]
+    pub fn morph_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for e in self.morph_entities() {
+            if let Ok(m) = self.world.get::<&olvin_render::MorphMesh>(e) {
+                for n in m.names() {
+                    if !names.iter().any(|x| x == n) {
+                        names.push(n.to_owned());
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// Plays the weight animation `clip` of the model on its meshes; false
+    /// when no mesh has a clip of that name.
+    #[cfg(feature = "morph")]
+    pub fn morph_play(&mut self, clip: &str, looping: bool) -> bool {
+        let mut any = false;
+        for e in self.morph_entities() {
+            let found = self
+                .world
+                .get::<&olvin_render::MorphClips>(e)
+                .ok()
+                .and_then(|c| c.find(clip));
+            if let Some(found) = found {
+                self.insert(e, (olvin_render::MorphPlayer::new(found, looping),));
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Stops the weight animations on this object's meshes (weights stay where they are).
+    #[cfg(feature = "morph")]
+    pub fn morph_stop(&mut self) {
+        for e in self.morph_entities() {
+            self.remove::<olvin_render::MorphPlayer>(e);
+        }
+    }
+
     /// Sends this entity to `target` along baked ground (see `olvin_nav`),
     /// adding a `NavAgent` the first time (it starts next frame). `speed`
     /// changes the agent's speed.

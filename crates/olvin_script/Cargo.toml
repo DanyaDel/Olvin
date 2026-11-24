@@ -20,6 +20,8 @@ audio = ["dep:olvin_audio"]
 net = ["dep:olvin_net"]
 # `ctx:nav_go` and friends through olvin_nav's `NavAgent` and `Navigation`.
 nav = ["dep:olvin_nav"]
+# `ctx:set_morph`, `ctx:morph_play` and friends through olvin_render's `MorphMesh`.
+morph = ["dep:olvin_render"]
 
 [dependencies]
 olvin_core = { path = "../olvin_core" }
@@ -31,6 +33,7 @@ olvin_physics = { path = "../olvin_physics", optional = true }
 olvin_audio = { path = "../olvin_audio", optional = true }
 olvin_net = { path = "../olvin_net", optional = true }
 olvin_nav = { path = "../olvin_nav", optional = true, features = ["engine"] }
+olvin_render = { path = "../olvin_render", optional = true }
 # Ref/RefMut/DynamicBundle are not re-exported by olvin_ecs yet.
 hecs.workspace = true
 glam.workspace = true

@@ -879,3 +879,64 @@ fn lua_sends_an_object_along_baked_ground() {
         NavStatus::Arrived
     );
 }
+
+#[cfg(feature = "morph")]
+#[test]
+fn lua_drives_blend_shapes_and_weight_clips_on_a_models_parts() {
+    use olvin_render::{
+        MeshData, MorphClip, MorphClips, MorphMesh, MorphPlayer, MorphTarget, MorphTrack, Vertex,
+    };
+    use std::sync::Arc;
+
+    let (app, _lua) = app_with(
+        "Face",
+        r#"
+        return {
+            start = function(self, ctx)
+                local names = ctx:morph_names()
+                assert(#names == 2 and names[1] == "smile" and names[2] == "puff", "names")
+                assert(ctx:set_morph("smile", 0.75))
+                assert(not ctx:set_morph("frown", 1))
+                assert(ctx:morph("smile") == 0.75 and ctx:morph("frown") == nil)
+                assert(not ctx:morph_play("nope"))
+                assert(ctx:morph_play("grin", true))
+                ctx:set_position(vec3(1, 0, 0))
+            end,
+        }
+        "#,
+    );
+    let root = spawn(&app, "Face", &[]);
+    let mesh = MeshData {
+        vertices: vec![Vertex::new([0.0; 3], [0.0, 0.0, 1.0]); 2],
+        indices: vec![0, 1, 1],
+    };
+    let target = |name: &str| MorphTarget {
+        name: name.into(),
+        positions: vec![Vec3::Y; 2],
+        normals: Vec::new(),
+    };
+    let clip = Arc::new(MorphClip::new(
+        "grin",
+        vec![MorphTrack {
+            target: 1,
+            times: vec![0.0, 1.0],
+            values: vec![0.0, 1.0],
+            step: false,
+        }],
+    ));
+    let part = {
+        let mut world = app.resources.fetch_mut::<World>();
+        world.spawn((
+            Transform::IDENTITY,
+            olvin_transform::Parent(root),
+            MorphMesh::new(mesh, vec![target("smile"), target("puff")], &[]),
+            MorphClips(vec![clip]),
+        ))
+    };
+    step(&app);
+    assert_eq!(x(&app, root), 1.0, "the script ran to the end");
+    let world = app.resources.fetch::<World>();
+    assert_eq!(world.get::<&MorphMesh>(part).unwrap().weights, [0.75, 0.0]);
+    let player = world.get::<&MorphPlayer>(part).unwrap();
+    assert!(player.looping && player.clip.name == "grin");
+}

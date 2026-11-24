@@ -462,6 +462,8 @@ impl UserData for CtxHandle {
         add_physics(m);
         #[cfg(feature = "nav")]
         add_nav(m);
+        #[cfg(feature = "morph")]
+        add_morph(m);
         #[cfg(feature = "input")]
         add_input(m);
         #[cfg(feature = "audio")]
@@ -476,6 +478,33 @@ impl CtxHandle {
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut ScriptCtx<'_>) -> R) -> mlua::Result<R> {
         self.slot.with(f)
     }
+}
+
+#[cfg(feature = "morph")]
+fn add_morph<M: UserDataMethods<CtxHandle>>(m: &mut M) {
+    m.add_method("set_morph", |_, h, (name, weight): (LuaString, f32)| {
+        let name = checked_str(&name, "a morph target name")?;
+        if !weight.is_finite() {
+            return Err(mlua::Error::runtime(
+                "set_morph: the weight must be a number",
+            ));
+        }
+        h.slot.with(|c| c.set_morph(&name, weight))
+    });
+    m.add_method("morph", |_, h, name: LuaString| {
+        let name = checked_str(&name, "a morph target name")?;
+        h.slot.with(|c| c.morph(&name))
+    });
+    m.add_method("morph_names", |_, h, ()| h.slot.with(|c| c.morph_names()));
+    m.add_method(
+        "morph_play",
+        |_, h, (clip, looping): (LuaString, Option<bool>)| {
+            let clip = checked_str(&clip, "a morph clip name")?;
+            h.slot
+                .with(|c| c.morph_play(&clip, looping.unwrap_or(false)))
+        },
+    );
+    m.add_method("morph_stop", |_, h, ()| h.slot.with(|c| c.morph_stop()));
 }
 
 #[cfg(feature = "nav")]

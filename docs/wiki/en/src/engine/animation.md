@@ -19,9 +19,23 @@ A model in a scene: `EntityDesc::model = ModelDesc { path, animation: Clip(name)
 
 ## Skinning
 
-`SkinnedMesh` is skinned on the CPU (4 influences, normals and tangents rotate) in `PostUpdate` when the `Animator`'s `version` grew. It works on all tiers and gives the pose to shadows and transparent objects; one mesh slot per instance.
+`SkinnedMesh` is skinned in `PostUpdate` when the `Animator`'s `version` grew (4 influences, normals and tangents rotate): by a compute pass on the GPU on the Full tier, on the CPU on Compat. Shadows and transparent objects get the pose; one mesh slot per instance.
 
-> **Status:** GPU skinning is not done and is in progress separately: [#8](https://github.com/DanyaDel/Olvin/issues/8). Morph targets: [#10](https://github.com/DanyaDel/Olvin/issues/10). In the editor viewport and in Play models stand in the default pose.
+> **Status:** in the editor viewport models stand in the default pose; in Play they animate. A sequencer/cutscenes is in the plan.
+
+## Morph targets (blend shapes)
+
+glTF morph targets come in with the model: a primitive that has them gets a `MorphMesh` component (the base mesh, the targets by name, their weights), and the model's weight animations become `MorphClips`. When the weights change, the blended mesh is rebuilt and uploaded into the part's own mesh slot; a skinned face is blended in its bind pose and then posed, on both tiers. Target names come from the mesh's `extras.targetNames` (Blender writes shape key names there), else `target 0`, `target 1`, ... Normal offsets are used when the file has them. Not supported: tangent offsets, and meshes without normals (their generated flat normals ignore the targets).
+
+```lua
+-- on the model's root object
+ctx:set_morph("smile", 0.7)          -- 0..1, false if there is no such shape
+local names = ctx:morph_names()      -- {"smile", "blink_L", ...}
+ctx:morph_play("talk", true)         -- a glTF weight animation, looping
+ctx:morph_stop()
+```
+
+From Rust: `MorphMesh::set("smile", 0.7)`, `MorphPlayer::new(clip, looping)`. The editor viewport shows models without morphing (the base mesh); Play and games morph.
 
 ## See also
 

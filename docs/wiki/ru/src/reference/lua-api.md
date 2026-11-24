@@ -159,6 +159,18 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:nav_status()` | | `"idle"`, `"moving"`, `"arrived"` или `"nopath"` |
 | `ctx:nav_reachable(v)` | `ctx:nav_reachable_xyz(x, y, z)` | связана ли запечённая земля между этим объектом и точкой |
 
+## Блендшейпы
+
+Фича `morph` (включена вместе с `render`); для корневого объекта модели (её части это его дети), см. [Анимация](../engine/animation.md).
+
+| Функция | Что |
+|---|---|
+| `ctx:set_morph(name, weight)` | задать вес (обычно 0..1) блендшейпа на мешах этого объекта; `false`, если ни у одного его нет |
+| `ctx:morph(name)` | вес или `nil` |
+| `ctx:morph_names()` | имена блендшейпов, список |
+| `ctx:morph_play(clip[, looping])` | запустить анимацию весов glTF; `false`, если такой нет |
+| `ctx:morph_stop()` | остановить анимации весов |
+
 ## Ввод
 
 Фича `input`. `action` это имя действия из `InputMap` ([Ввод](../engine/input.md)).

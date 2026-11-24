@@ -159,6 +159,18 @@ Feature `nav` and `NavPlugin` with a baked level (see [Navigation](../engine/nav
 | `ctx:nav_status()` | | `"idle"`, `"moving"`, `"arrived"` or `"nopath"` |
 | `ctx:nav_reachable(v)` | `ctx:nav_reachable_xyz(x, y, z)` | whether baked ground connects this object to the point |
 
+## Blend shapes
+
+Feature `morph` (on with `render`); for a model's root object (its parts are its children), see [Animation](../engine/animation.md).
+
+| Function | What |
+|---|---|
+| `ctx:set_morph(name, weight)` | set the weight (usually 0..1) of the blend shape on this object's meshes; `false` if none has it |
+| `ctx:morph(name)` | the weight, or `nil` |
+| `ctx:morph_names()` | the names of the blend shapes, a list |
+| `ctx:morph_play(clip[, looping])` | play a glTF weight animation; `false` if there is none of that name |
+| `ctx:morph_stop()` | stop the weight animations |
+
 ## Input
 
 Feature `input`. `action` is an action name from `InputMap` ([Input](../engine/input.md)).

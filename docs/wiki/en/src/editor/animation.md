@@ -29,7 +29,7 @@ Space play/pause, `←`/`→` frame, `↑`/`↓` key, `Esc` stop and return to t
 
 glTF skeletal animation is set in the Model section of the inspector (a clip or an animation graph `*.animgraph.ron`). In the viewport a model stands in its default pose and is not animated.
 
-> **Status:** there is no GPU skinning (skinning is on the CPU), see [#8](https://github.com/DanyaDel/Olvin/issues/8). Morph targets: [#10](https://github.com/DanyaDel/Olvin/issues/10). A sequencer/cutscenes is in the plan.
+> **Status:** a sequencer/cutscenes is in the plan.
 
 ## See also
 

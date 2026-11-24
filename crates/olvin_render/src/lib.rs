@@ -10,6 +10,7 @@ mod light;
 mod lod;
 mod material;
 mod mesh;
+mod morph;
 mod overlay;
 mod particles;
 mod particles_gpu;
@@ -34,6 +35,7 @@ pub use light::{
 pub use lod::{DEFAULT_LODS, LodSpec, MIN_TRIANGLES_FOR_LOD, MeshLod};
 pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
+pub use morph::{MorphClip, MorphClips, MorphMesh, MorphPlayer, MorphTarget, MorphTrack};
 pub use overlay::{Overlay, OverlayQuad, OverlayRenderer, begin_overlay_pass};
 pub use particles::{
     Burst, EmitShape, EmitterParams, FlipBook, MAX_GPU_PARTICLES, ParticleEmitter, ParticleMode,

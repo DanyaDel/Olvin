@@ -37,6 +37,48 @@ pub struct MeshPrimitive {
     /// Index into [`ModelData::skeletons`]: the skin of the node using this
     /// primitive (the first one, if several nodes share the mesh).
     pub skin: Option<usize>,
+    /// Blend shapes (glTF morph targets), as offsets from `positions`.
+    pub morphs: Vec<MorphTargetData>,
+    /// The mesh's default weight of each target (zeros when the file has none).
+    pub morph_weights: Vec<f32>,
+}
+
+/// One morph target of a primitive: per-vertex offsets added to the base
+/// mesh, scaled by the target's weight.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphTargetData {
+    /// From the mesh's `extras.targetNames` (Blender writes shape key names
+    /// there), else `target N`.
+    pub name: String,
+    /// Same length as the primitive's `positions`.
+    pub positions: Vec<Vec3>,
+    /// Same length as `positions`, or empty when the target leaves normals alone.
+    pub normals: Vec<Vec3>,
+}
+
+/// Weight keys of one node's morph targets in one glTF animation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphClipData {
+    /// The animation's name.
+    pub name: String,
+    /// Index into [`ModelData::nodes`]: the node whose mesh is morphed.
+    pub node: usize,
+    /// Indices into [`ModelData::meshes`]: every primitive of that mesh (they
+    /// share the target weights).
+    pub primitives: Vec<usize>,
+    /// One per morph target that has keys.
+    pub tracks: Vec<MorphTrackData>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphTrackData {
+    /// Index of the morph target.
+    pub target: usize,
+    pub times: Vec<f32>,
+    /// The weight at each key.
+    pub values: Vec<f32>,
+    /// glTF `STEP` keys hold the value until the next key; the others blend.
+    pub step: bool,
 }
 
 /// A node of the model's hierarchy, parents always before children.
@@ -100,6 +142,8 @@ pub struct ModelData {
     pub skeletons: Vec<Skeleton>,
     /// glTF animations; `Channel::target` is a node index in `nodes`.
     pub clips: Vec<Clip>,
+    /// glTF animations of morph target weights (skeleton animation stays in `clips`).
+    pub morph_clips: Vec<MorphClipData>,
     pub cameras: Vec<CameraData>,
     /// Things the importer ignored: morph targets, sparse/other features, unsupported extensions.
     pub skipped: Vec<String>,
@@ -362,15 +406,7 @@ pub fn import_gltf(
         let mesh_name = mesh
             .name()
             .map_or_else(|| format!("Mesh {}", mesh.index()), str::to_string);
-        if mesh.weights().is_some()
-            || mesh
-                .primitives()
-                .any(|p| p.morph_targets().next().is_some())
-        {
-            model
-                .skipped
-                .push(format!("{mesh_name}: morph targets ignored"));
-        }
+        let target_names = morph_target_names(&mesh);
         for (pi, prim) in mesh.primitives().enumerate() {
             let name = if pi == 0 {
                 mesh_name.clone()
@@ -378,7 +414,17 @@ pub fn import_gltf(
                 format!("{mesh_name}.{pi}")
             };
             match read_primitive(&prim, &buffers, name.clone(), scale) {
-                Ok(p) => {
+                Ok(mut p) => {
+                    let defaults = mesh.weights().unwrap_or(&[]);
+                    p.morph_weights = (0..p.morphs.len())
+                        .map(|i| defaults.get(i).copied().unwrap_or(0.0))
+                        .collect();
+                    for (i, target) in p.morphs.iter_mut().enumerate() {
+                        target.name = target_names
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| format!("target {i}"));
+                    }
                     list.push(model.meshes.len());
                     model.meshes.push(p);
                 }
@@ -539,7 +585,7 @@ pub fn import_gltf(
             .name()
             .map_or_else(|| format!("#{}", anim.index()), str::to_string);
         let mut channels = Vec::new();
-        let mut morph = false;
+        let mut morph_tracks: Vec<MorphClipData> = Vec::new();
         for ch in anim.channels() {
             let Some(&target) = node_map.get(&ch.target().node().index()) else {
                 model.skipped.push(format!(
@@ -569,8 +615,26 @@ pub fn import_gltf(
                     Property::Rotation,
                     r.into_f32().map(Vec4::from_array).collect(),
                 ),
-                ReadOutputs::MorphTargetWeights(_) => {
-                    morph = true;
+                ReadOutputs::MorphTargetWeights(w) => {
+                    let interpolation = ch.sampler().interpolation();
+                    let primitives = ch
+                        .target()
+                        .node()
+                        .mesh()
+                        .and_then(|m| mesh_prims.get(m.index()).cloned())
+                        .unwrap_or_default();
+                    match morph_track(
+                        target,
+                        primitives,
+                        times,
+                        w.into_f32().collect(),
+                        interpolation,
+                    ) {
+                        Ok(clip) => morph_tracks.push(clip),
+                        Err(e) => model
+                            .skipped
+                            .push(format!("animation {name}: morph weights {e}")),
+                    }
                     continue;
                 }
             };
@@ -599,10 +663,19 @@ pub fn import_gltf(
                 values,
             });
         }
-        if morph {
-            model
-                .skipped
-                .push(format!("animation {name}: morph target weights ignored"));
+        // One clip per node: the node's channels are its tracks.
+        for track in morph_tracks {
+            match model
+                .morph_clips
+                .iter_mut()
+                .find(|c| c.name == name && c.node == track.node)
+            {
+                Some(clip) => clip.tracks.extend(track.tracks),
+                None => model.morph_clips.push(MorphClipData {
+                    name: name.clone(),
+                    ..track
+                }),
+            }
         }
         if !channels.is_empty() {
             model.clips.push(Clip::new(name, channels));
@@ -617,6 +690,59 @@ pub fn import_gltf(
         model.skipped.push(format!("extension {ext} ignored"));
     }
     Ok(model)
+}
+
+/// Names of a mesh's morph targets: `extras.targetNames`, where Blender and
+/// most exporters put them.
+fn morph_target_names(mesh: &gltf::Mesh) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Extras {
+        #[serde(rename = "targetNames", default)]
+        target_names: Vec<String>,
+    }
+    mesh.extras()
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<Extras>(raw.get()).ok())
+        .map(|e| e.target_names)
+        .unwrap_or_default()
+}
+
+/// One node's weight keys: glTF stores the weights of all targets per key
+/// (and, for cubic splines, in/out tangents around each value).
+fn morph_track(
+    node: usize,
+    primitives: Vec<usize>,
+    times: impl Iterator<Item = f32>,
+    weights: Vec<f32>,
+    interpolation: gltf::animation::Interpolation,
+) -> Result<MorphClipData, String> {
+    let times: Vec<f32> = times.collect();
+    let cubic = interpolation == gltf::animation::Interpolation::CubicSpline;
+    let per_key = if cubic { 3 } else { 1 };
+    if times.is_empty()
+        || weights.is_empty()
+        || !weights.len().is_multiple_of(times.len() * per_key)
+    {
+        return Err("have mismatched keys".into());
+    }
+    let targets = weights.len() / (times.len() * per_key);
+    let tracks = (0..targets)
+        .map(|t| MorphTrackData {
+            target: t,
+            times: times.clone(),
+            // Cubic: the value sits between the in- and out-tangent.
+            values: (0..times.len())
+                .map(|k| weights[(k * per_key + usize::from(cubic)) * targets + t])
+                .collect(),
+            step: interpolation == gltf::animation::Interpolation::Step,
+        })
+        .collect();
+    Ok(MorphClipData {
+        name: String::new(),
+        node,
+        primitives,
+        tracks,
+    })
 }
 
 fn read_primitive(
@@ -661,6 +787,18 @@ fn read_primitive(
                 .collect()
         })
         .unwrap_or_default();
+    let mut morphs: Vec<MorphTargetData> = reader
+        .read_morph_targets()
+        .map(|(p, n, _tangents)| MorphTargetData {
+            name: String::new(),
+            positions: p
+                .map(|p| p.map(|d| Vec3::from_array(d) * scale).collect())
+                .unwrap_or_default(),
+            normals: n
+                .map(|n| n.map(Vec3::from_array).collect())
+                .unwrap_or_default(),
+        })
+        .collect();
     let raw: Vec<u32> = match reader.read_indices() {
         Some(i) => i.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
@@ -700,7 +838,21 @@ fn read_primitive(
         joints: if skinned { joints } else { Vec::new() },
         weights: if skinned { weights } else { Vec::new() },
         skin: None,
+        morphs: Vec::new(),
+        morph_weights: Vec::new(),
     };
+    // A target whose offsets do not match the vertices is dropped; a target
+    // with no position offsets (normals only) moves nothing and is kept so
+    // the indices of the others stay right.
+    for m in &mut morphs {
+        if m.positions.len() != n {
+            m.positions = vec![Vec3::ZERO; n];
+        }
+        if m.normals.len() != n {
+            m.normals.clear();
+        }
+    }
+    out.morphs = morphs;
     if normals.len() != n {
         flatten_with_normals(&mut out);
     } else {
@@ -732,6 +884,11 @@ fn flatten_with_normals(p: &mut MeshPrimitive) {
     if !p.joints.is_empty() {
         p.joints = idx.iter().map(|&i| p.joints[i as usize]).collect();
         p.weights = idx.iter().map(|&i| p.weights[i as usize]).collect();
+    }
+    for m in &mut p.morphs {
+        m.positions = pick(&m.positions);
+        // The generated flat normals know nothing of the target's.
+        m.normals.clear();
     }
     p.indices = (0..positions.len() as u32).collect();
     p.positions = positions;

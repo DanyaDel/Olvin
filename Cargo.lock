@@ -3736,6 +3736,7 @@ dependencies = [
  "olvin_scene",
  "ron",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4088,6 +4089,7 @@ dependencies = [
  "olvin_nav",
  "olvin_net",
  "olvin_physics",
+ "olvin_render",
  "olvin_scene",
  "olvin_transform",
  "ron",

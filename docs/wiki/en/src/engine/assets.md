@@ -17,7 +17,7 @@ Assets work as in Unity: next to a file lies `<name>.meta` (RON) with a GUID and
 | Materials | `*.mat.ron` |
 | Prefabs | `*.prefab.ron` (`AssetKind::Prefab`) |
 
-Not supported in glTF: morphs, orthographic cameras as a component, animation of nodes outside the skeleton on entities.
+Not supported in glTF: tangent offsets of morph targets, orthographic cameras as a component, animation of nodes outside the skeleton on entities.
 
 ## AssetManager
 

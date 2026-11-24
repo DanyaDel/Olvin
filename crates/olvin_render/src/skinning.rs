@@ -229,6 +229,21 @@ impl SkinnedMesh {
         true
     }
 
+    /// Replaces the bind-pose geometry (a morphed bind pose) and forgets the
+    /// applied pose, so the next [`pose`](Self::pose) skins the new one.
+    /// Joints, weights and the vertex count stay.
+    pub(crate) fn set_bind(&mut self, bind: MeshData) {
+        if bind.vertices.len() != self.source.bind.vertices.len() {
+            return;
+        }
+        self.source = Arc::new(SkinSource::new(
+            bind,
+            self.source.joints.clone(),
+            self.source.weights.clone(),
+        ));
+        self.last_version = None;
+    }
+
     /// Forgets the applied animator version, so the next [`pose`](Self::pose)
     /// poses again (a new animator started counting from scratch).
     pub fn invalidate(&mut self) {
@@ -265,6 +280,8 @@ impl Meshes {
 /// Queues the pose of every skinned mesh whose animator changed since last
 /// time (`RenderDataPlugin` runs it in `PostUpdate`).
 pub fn skin_meshes(res: &mut Resources) {
+    // Morph targets first: a skinned mesh is posed from its blended bind pose.
+    crate::morph::update(res);
     let world = res.fetch::<World>();
     let mut meshes = res.fetch_mut::<Meshes>();
     let jobs: Vec<(Entity, MeshHandle, Entity)> = world

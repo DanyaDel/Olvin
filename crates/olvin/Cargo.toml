@@ -9,7 +9,7 @@ repository.workspace = true
 [features]
 default = ["window", "render"]
 window = ["dep:olvin_window"]
-render = ["dep:olvin_render", "olvin_gui?/render"]
+render = ["dep:olvin_render", "olvin_gui?/render", "olvin_script?/morph"]
 # Load .scene.ron files saved by olvin-editor (with their glTF models and animators).
 scene = ["render", "anim", "assets", "olvin_scene/serde", "dep:olvin_csg", "dep:serde", "dep:ron"]
 # Skeletal animation without the renderer: Animator, AnimGraph, AnimPlugin.

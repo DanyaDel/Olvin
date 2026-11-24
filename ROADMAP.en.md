@@ -89,7 +89,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
   - [x] Hub: the `lua` module appears in the catalogue only once the crate is ready. — `hub/olvin_hub/catalog.toml`: `lua` and `game` modules.
 - [ ] **Timeline and cutscenes** (sequencer): tracks for animation, sound, camera, events. (L) [P2]
 - [x] **Input**: rebinding keys at runtime, saving bindings, gamepad prompts, vibration. Action maps already exist. (S) [P1] — `rebind.rs` with autosave, `hints.rs`, `Haptics` via gilrs.
-- [ ] **Networking**: transport (UDP through `quinn` or `renet`), component replication, client-side prediction, interpolation. A separate `olvin_net` crate. (XL) [P3]
+- [x] **Networking**: transport (UDP through `quinn` or `renet`), component replication, client-side prediction, interpolation. A separate `olvin_net` crate. (XL) [P3] — done: `olvin_net` (QUIC on quinn, the `Loopback` network simulator, replication of components and variables, commands validated on the server, prediction and reconciliation, Lua bindings), ADR 0004, a wiki page. Snapshot interpolation and NAT traversal remain.
 - [x] **Timer systems**: timer events, coroutines or async tasks for delays in behaviours. (S) [P2] — `olvin_core::Timers` (`after`/`every`, scaled and `_unscaled`, `cancel`, the `TimerFired` event), in Lua `ctx:after`/`every`/`cancel_timer` with `on_message`, limits of 32 per object and 4096 in all; a "Timers" section in the wiki. Coroutines (`wait`) for scripts are left out: timers cover delays without them.
 
 ---
@@ -121,11 +121,11 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 ## Phase 6. Ecosystem and documentation (P2–P3)
 
-- [ ] **Documentation**: an mdbook. A "first game in an hour" tutorial, a description of each subsystem, a table of "what lives where". (M) [P1]
+- [x] **Documentation**: an mdbook. A "first game in an hour" tutorial, a description of each subsystem, a table of "what lives where". (M) [P1] — done as the wiki (see the Wiki item).
 - [ ] **Examples**: one per subsystem (physics, sound, animation, UI, networking), each runnable with one command. Currently only `sandbox` and `script_demo`. (M) [P2]
 - [ ] **Versioning and changelog**: semver, `CHANGELOG.md`, release tags. The version is 0.1.0 with no release history. (S) [P2]
 - [ ] **Publishing crates** on crates.io once the API is stable. (M) [P3]
-- [ ] **Contributor guide**: how to run tests, how to add a new plugin, code style, how commits are organised. (S) [P2]
+- [x] **Contributor guide**: how to run tests, how to add a new plugin, code style, how commits are organised. (S) [P2] — done: `CONTRIBUTING.md` and a wiki page.
 - [ ] **Benchmarks**: a separate set with the frame cost on reference scenes, results recorded in CI so regressions are visible. (M) [P2]
 
 ---
@@ -134,8 +134,8 @@ Goal: what has been written is reliable, and the documentation does not lie.
 
 Suggestions from users and the NLPA team. The first two are being built now, the rest are dreams for later; keep them in mind while designing (stable `SceneId`s, a serialisable scene, events through `Events<T>`).
 
-- [ ] **Preset library** (like the Unity Asset Store, but built in and offline): packs in a `library/` folder with a `pack.ron` manifest; a "Library" panel in the editor (search, categories, previews, "Import") copies files into the project's `assets/`, keeping GUIDs and dependencies; a `library` module in the hub. First packs: character controllers (first person, third person, top down) with Lua scripts, gameplay scripts (door, pickup, health and damage, checkpoint, moving platform, patrol and chase, spawner, camera shake), ready shaders (toon, outline, hologram, dissolve, water), materials, picture "filters" (looks). (L) [P1 for the first release]
-- [ ] **Wiki** in the spirit of the Arch Wiki and Hyprland Wiki: one page per topic, cross-links, search, FAQ and troubleshooting, a Lua API reference, a "first game in an hour" guide; Russian is the primary language with an English copy. Book engine: mdBook, published to GitHub Pages. (M) [P1]
+- [x] **Preset library** (like the Unity Asset Store, but built in and offline): packs in a `library/` folder with a `pack.ron` manifest; a "Library" panel in the editor (search, categories, previews, "Import") copies files into the project's `assets/`, keeping GUIDs and dependencies; a `library` module in the hub. First packs: character controllers (first person, third person, top down) with Lua scripts, gameplay scripts (door, pickup, health and damage, checkpoint, moving platform, patrol and chase, spawner, camera shake), ready shaders (toon, outline, hologram, dissolve, water), materials, picture "filters" (looks). (L) [P1 for the first release] — done: `library/<id>/pack.ron`, the Library panel in the editor, a hub module, built-in packs (characters, gameplay scripts, shaders, materials, looks), `library.lock.ron`.
+- [x] **Wiki** in the spirit of the Arch Wiki and Hyprland Wiki: one page per topic, cross-links, search, FAQ and troubleshooting, a Lua API reference, a "first game in an hour" guide; Russian is the primary language with an English copy. Book engine: mdBook, published to GitHub Pages. (M) [P1] — done: an mdBook in Russian and English (134 pages), link and Lua-reference checks in CI, publishing is switched on by the `WIKI_PAGES` variable.
 - [ ] **Online package registry**: browse and install library packs over the network, versions and dependencies, signatures, ratings. After the local library settles. (L) [P3]
 - [ ] **Collaborative editing like Roblox Studio**: several people edit one scene in real time, teammates' cursors and selections, per-object locks, change history. The groundwork exists: scene operations are `SceneFile` snapshots with stable `SceneId`s; what is missing is network synchronisation of operations (CRDT or operational transforms) and a session server. (XL) [P3]
 - [ ] **Easy multiplayer**: ready "network object" and "owner" components, replication through `Events<T>` and the save registry, lobbies and joining by room code, presets for typical games (co-op, arena). Tied to the "Networking" item of phase 3 (`olvin_net`). (XL) [P3]
@@ -146,9 +146,9 @@ Goal: cover the whole threat model, not one case at a time. Assets: money and ac
 
 ### Build and distribution
 
-- [ ] **Strip in release (B1)**: `strip` in `[profile.release]` or a flag for `olvin-hub build`; debug symbols in a separate file so crash reports stay readable. Gives deterrence. (S) [P0]
-- [ ] **Hash manifest and archive signature (B2)**: SHA-256 of every build file, a signature (minisign or Ed25519), verified at startup. Gives protection against a swapped binary and a signal on patching. (M) [P0]
-- [ ] **Supply chain (B4)**: `Cargo.lock` in releases, `cargo audit` and `cargo deny` in CI. Gives protection against a swapped dependency. (S) [P0]
+- [x] **Strip in release (B1)**: `strip` in `[profile.release]` or a flag for `olvin-hub build`; debug symbols in a separate file so crash reports stay readable. Gives deterrence. (S) [P0] — done: `strip = "symbols"` in the game template and the hub build.
+- [x] **Hash manifest and archive signature (B2)**: SHA-256 of every build file, a signature (minisign or Ed25519), verified at startup. Gives protection against a swapped binary and a signal on patching. (M) [P0] — done: an Ed25519-signed SHA-256 manifest and a start-up check (`IntegrityPlugin`).
+- [x] **Supply chain (B4)**: `Cargo.lock` in releases, `cargo audit` and `cargo deny` in CI. Gives protection against a swapped dependency. (S) [P0] — done: `cargo deny` and `cargo audit` in CI (`supply-chain`).
 - [ ] **Build paths and user name in the binary (B3)**: `--remap-path-prefix` in the build, a string check on the finished binary in CI. (S) [P1]
 - [ ] **Warning about third-party `build.rs` (B5)**: the hub warns when a crates.io dependency is added, because its `build.rs` runs on the developer's machine; optionally build in a container. (M) [P2]
 - [ ] **Signed `catalog.toml` (B6)**: the catalog is built into the binary now, but it needs a signature once it becomes downloadable. (S) [P2]

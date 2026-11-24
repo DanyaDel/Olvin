@@ -40,6 +40,8 @@ impl RenderCore {
         let local = self.plan_local_shadows(world, settings, cam.eye, &frustum);
         let mut sun: Option<(Vec3, Vec3, bool, f32, f32)> = None;
         let mut lights = LightList::new();
+        // Lights that did not make the best sixteen, for the clusters.
+        let mut extra: Vec<(crate::light::PackedLight, f32)> = Vec::new();
         let mut query =
             world.query::<(Entity, &Light, Option<&GlobalTransform>, Option<&Transform>)>();
         for (entity, light, global, transform) in query.iter().filter(|_| settings.scene_lights) {
@@ -72,8 +74,11 @@ impl RenderCore {
             if let Some((first, texel, point)) = local.of(entity) {
                 packed.shadow = [(first + 1) as f32, light.shadow_bias, texel, flag(point)];
             }
-            lights.push(packed, score);
+            if let Some(left_out) = lights.push(packed, score) {
+                extra.push(left_out);
+            }
         }
+        extra.sort_by(|a, b| a.1.total_cmp(&b.1));
         let (sun_dir, sun_color, sun_shadows, sun_size, sun_bias) = sun.unwrap_or((
             settings.light_dir,
             Vec3::from_slice(&settings.light_color.0[..3]),
@@ -147,7 +152,7 @@ impl RenderCore {
                 .as_ref()
                 .map_or(&self.dummy_shadow, |(v, _)| v);
             let sky = sky_texture.map_or(&self.defaults.base, |t| &t.view);
-            view.bind = self.main_bind_group(&view.globals, shadow, local_map, sky);
+            view.bind = self.main_bind_group(&view.globals, shadow, local_map, sky, &view.clusters);
             view.sky_bound = sky_generation;
         }
 
@@ -261,6 +266,24 @@ impl RenderCore {
                 .casters
                 .finish(&self.device, &self.queue, &mut view.staging, |_| 0);
         }
+
+        // Lights past the best sixteen: sorted into view clusters.
+        let cluster_lights = if extra.is_empty() {
+            0
+        } else {
+            let packed: Vec<_> = extra.iter().map(|(l, _)| *l).collect();
+            let set = crate::cluster::build(&packed, &view_proj, cam.view_plane);
+            if set.dropped > 0 {
+                log::warn!(
+                    "{} lights do not fit the light clusters (at most {} lights and {} list entries)",
+                    set.dropped,
+                    crate::MAX_CLUSTER_LIGHTS,
+                    crate::cluster::MAX_INDICES
+                );
+            }
+            view.clusters.upload(&self.queue, &set);
+            set.lights.len()
+        };
 
         // Uniforms.
         let mut fog = settings.fog;
@@ -420,6 +443,12 @@ impl RenderCore {
                 flag(retro.shadows),
                 retro.draw_distance.max(0.0),
                 flag(retro.dissolve),
+            ],
+            cluster_cfg: [
+                cluster_lights as f32,
+                crate::cluster::slice_scale(),
+                0.0,
+                0.0,
             ],
             lights: lights.lights,
         };

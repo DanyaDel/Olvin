@@ -25,6 +25,10 @@ Instancing by (material, mesh), one draw per run, frustum culling, no allocation
 
 The component `Light { kind: Directional | Point | Spot, color, intensity, range, spot_angle_deg, shadows, shadow_bias, size }`, forward is −Z. The first directional light becomes the sun; the others: up to `MAX_LIGHTS = 16` nearest after culling. `RenderSettings.scene_lights = false` disables the components (the editor's Solid view).
 
+## Many lights
+
+The fragment shader tries the 16 most important lights directly (they also carry the shadows). Every light past them goes into **view clusters**: a grid of 16 × 9 screen tiles and 24 depth slices (exponential, from 0.1 m to 250 m), built on the CPU each frame. A fragment finds its cluster and loops only over the lights that reach it, so a scene with hundreds of lamps costs about what its closest few cost. Up to 1024 extra lights are kept (a cluster lists at most 255 and the lists together at most 65 536 entries; what does not fit is dropped and logged). The data goes through three textures read with `textureLoad`, not storage buffers, so Compat devices (GL, WebGL2) work too. The most important are chosen by distance from the camera minus range; lights outside the view are skipped. Retro per-vertex lighting still uses only the best 16.
+
 ## Shadows
 
 - **Sun:** up to 4 cascades (`shadow_cascades`) within `shadow_distance` (60 m by default), a 2×2 `Depth32Float` atlas, texel snapping, smooth transitions.

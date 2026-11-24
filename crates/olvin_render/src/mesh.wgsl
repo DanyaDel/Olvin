@@ -450,6 +450,33 @@ fn height_fog_amount(p: vec3<f32>, v: vec3<f32>, view_depth: f32) -> f32 {
     return 1.0 - exp(-density * len * mean);
 }
 
+// One light's contribution to a lit surface point (with its shadow, if it has one).
+fn shade_light(light: Light, p: vec3<f32>, geo_n: vec3<f32>, sn: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, roughness: f32, frag: vec2<f32>) -> vec3<f32> {
+    let range = light.position_range.w;
+    let dir = light.direction_spot_offset.xyz;
+    var l = -dir;
+    var atten = 1.0;
+    if (range > 0.0) {
+        let to_light = light.position_range.xyz - p;
+        let d2 = max(dot(to_light, to_light), 1e-8);
+        l = to_light * inverseSqrt(d2);
+        // Unity-style: inverse square with a smooth window to zero at `range`.
+        let f = d2 / (range * range);
+        let window = clamp(1.0 - f * f, 0.0, 1.0);
+        atten = window * window / (d2 + 1.0);
+        // Spot cone (scale 0, offset 1 for point lights).
+        let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
+        atten *= cone * cone;
+        if (atten > 0.0 && light.shadow.x > 0.5) {
+            atten *= local_shadow(light, p, geo_n, l, sqrt(d2), frag);
+        }
+    }
+    if (atten > 0.0) {
+        return brdf(albedo, metallic, roughness, sn, v, l, light.color_spot_scale.rgb * atten);
+    }
+    return vec3<f32>(0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let geo_n = normalize(in.normal);
@@ -559,28 +586,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
         let count = min(u32(globals.ground.w), MAX_LIGHTS);
         for (var i = 0u; i < count; i++) {
-            let light = globals.lights[i];
-            let range = light.position_range.w;
-            let dir = light.direction_spot_offset.xyz;
-            var l = -dir;
-            var atten = 1.0;
-            if (range > 0.0) {
-                let to_light = light.position_range.xyz - p;
-                let d2 = max(dot(to_light, to_light), 1e-8);
-                l = to_light * inverseSqrt(d2);
-                // Unity-style: inverse square with a smooth window to zero at `range`.
-                let f = d2 / (range * range);
-                let window = clamp(1.0 - f * f, 0.0, 1.0);
-                atten = window * window / (d2 + 1.0);
-                // Spot cone (scale 0, offset 1 for point lights).
-                let cone = clamp(dot(-l, dir) * light.color_spot_scale.w + light.direction_spot_offset.w, 0.0, 1.0);
-                atten *= cone * cone;
-                if (atten > 0.0 && light.shadow.x > 0.5) {
-                    atten *= local_shadow(light, p, geo_n, l, sqrt(d2), in.clip.xy);
-                }
-            }
-            if (atten > 0.0) {
-                color += brdf(albedo, metallic, roughness, sn, v, l, light.color_spot_scale.rgb * atten);
+            color += shade_light(globals.lights[i], p, geo_n, sn, v, albedo, metallic, roughness, in.clip.xy);
+        }
+        // The lights past the sixteen best: only those that reach this cluster.
+        if (globals.cluster_cfg.x > 0.5) {
+            let record = cluster_record(p);
+            let first = record >> 8u;
+            let n = record & 255u;
+            for (var k = 0u; k < n; k++) {
+                let index = textureLoad(cluster_index, cluster_texel(first + k), 0).r;
+                color += shade_light(cluster_light(index), p, geo_n, sn, v, albedo, metallic, roughness, in.clip.xy);
             }
         }
         color += s.emissive;

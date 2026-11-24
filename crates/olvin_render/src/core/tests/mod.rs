@@ -2,6 +2,7 @@
 //! target and reads the pixels back.
 
 mod blend;
+mod clusters;
 mod edge;
 mod fog;
 mod library;

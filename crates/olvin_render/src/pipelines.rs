@@ -74,6 +74,16 @@ pub(crate) fn create_layouts(
         },
         count: None,
     };
+    let data_texture = |binding, sample_type| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: fragment,
+        ty: wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
     let globals = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("globals"),
         entries: &[
@@ -110,6 +120,10 @@ pub(crate) fn create_layouts(
                 },
                 count: None,
             },
+            // Clustered lights: light data, grid, index lists (read with `textureLoad`).
+            data_texture(6, wgpu::TextureSampleType::Float { filterable: false }),
+            data_texture(7, wgpu::TextureSampleType::Uint),
+            data_texture(8, wgpu::TextureSampleType::Uint),
         ],
     });
     let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

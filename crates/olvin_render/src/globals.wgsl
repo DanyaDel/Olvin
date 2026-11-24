@@ -81,6 +81,8 @@ struct Globals {
     // x = 1: per-vertex lighting; y = 1: sun shadows with it; z: draw
     // distance (m, 0: none); w = 1: dissolve before the cut.
     retro_c: vec4<f32>,
+    // x: lights in the clusters (0: none); y: depth slices per doubling of depth.
+    cluster_cfg: vec4<f32>,
     lights: array<Light, 16>,
 };
 
@@ -90,6 +92,44 @@ struct Globals {
 @group(0) @binding(3) var sky_texture: texture_2d<f32>;
 @group(0) @binding(4) var sky_sampler: sampler;
 @group(0) @binding(5) var local_shadow_map: texture_depth_2d;
+// Clustered lights (see cluster.rs): the lights past the sixteen in `globals`,
+// 4 texels each; per cluster `offset << 8 | count`; the lists of light indices.
+@group(0) @binding(6) var cluster_lights: texture_2d<f32>;
+@group(0) @binding(7) var cluster_grid: texture_2d<u32>;
+@group(0) @binding(8) var cluster_index: texture_2d<u32>;
+
+const CLUSTER_TILES_X: u32 = 16u;
+const CLUSTER_TILES_Y: u32 = 9u;
+const CLUSTER_SLICES: u32 = 24u;
+const CLUSTER_NEAR: f32 = 0.1;
+const CLUSTER_TEX_W: u32 = 1024u;
+
+fn cluster_texel(i: u32) -> vec2<i32> {
+    return vec2<i32>(i32(i % CLUSTER_TEX_W), i32(i / CLUSTER_TEX_W));
+}
+
+fn cluster_light(i: u32) -> Light {
+    let b = i * 4u;
+    return Light(
+        textureLoad(cluster_lights, cluster_texel(b), 0),
+        textureLoad(cluster_lights, cluster_texel(b + 1u), 0),
+        textureLoad(cluster_lights, cluster_texel(b + 2u), 0),
+        textureLoad(cluster_lights, cluster_texel(b + 3u), 0),
+    );
+}
+
+// The cluster of the world point `p`: `offset << 8 | count`.
+fn cluster_record(p: vec3<f32>) -> u32 {
+    let clip = globals.view_proj * vec4<f32>(p, 1.0);
+    let ndc = clip.xy / max(clip.w, 1e-4);
+    let tx = u32(clamp(floor((ndc.x * 0.5 + 0.5) * f32(CLUSTER_TILES_X)), 0.0, f32(CLUSTER_TILES_X - 1u)));
+    let ty = u32(clamp(floor((0.5 - ndc.y * 0.5) * f32(CLUSTER_TILES_Y)), 0.0, f32(CLUSTER_TILES_Y - 1u)));
+    let depth = dot(globals.view_plane.xyz, p) + globals.view_plane.w;
+    let s = log2(max(depth, CLUSTER_NEAR) / CLUSTER_NEAR) * globals.cluster_cfg.y;
+    let tz = u32(clamp(floor(s), 0.0, f32(CLUSTER_SLICES - 1u)));
+    let id = (tz * CLUSTER_TILES_Y + ty) * CLUSTER_TILES_X + tx;
+    return textureLoad(cluster_grid, cluster_texel(id), 0).r;
+}
 
 // Hemisphere ambient (the settings' sky / ground ambient) along `d`.
 fn hemisphere(d: vec3<f32>) -> vec3<f32> {

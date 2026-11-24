@@ -151,12 +151,14 @@ impl LightList {
     }
 
     /// Lower score = more important. When full, replaces the worst light.
-    pub fn push(&mut self, light: PackedLight, score: f32) {
+    /// Returns the light that did not make it (the new one, or the one it
+    /// replaced) with its score, for the clustered path.
+    pub fn push(&mut self, light: PackedLight, score: f32) -> Option<(PackedLight, f32)> {
         if self.len < MAX_LIGHTS {
             self.lights[self.len] = light;
             self.scores[self.len] = score;
             self.len += 1;
-            return;
+            return None;
         }
         let (worst, &worst_score) = self
             .scores
@@ -165,8 +167,12 @@ impl LightList {
             .max_by(|a, b| a.1.total_cmp(b.1))
             .expect("MAX_LIGHTS > 0");
         if score < worst_score {
+            let evicted = (self.lights[worst], worst_score);
             self.lights[worst] = light;
             self.scores[worst] = score;
+            Some(evicted)
+        } else {
+            Some((light, score))
         }
     }
 }

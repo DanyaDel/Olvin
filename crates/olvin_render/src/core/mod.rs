@@ -67,6 +67,8 @@ pub(crate) struct Globals {
     retro_a: [f32; 4],
     retro_b: [f32; 4],
     retro_c: [f32; 4],
+    /// x: lights in the clusters; y: depth slices per octave of depth (see `cluster.rs`).
+    cluster_cfg: [f32; 4],
     lights: [PackedLight; MAX_LIGHTS],
 }
 
@@ -191,6 +193,8 @@ pub struct ViewData {
     sky_active: bool,
     /// Retro settings of the last `prepare`: nearest textures for retro
     /// materials, and whether materials without an opinion are retro.
+    /// Lights past the first sixteen, sorted into view clusters.
+    clusters: crate::cluster::ClusterTextures,
     retro_nearest: bool,
     retro_global: bool,
 }

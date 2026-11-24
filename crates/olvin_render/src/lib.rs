@@ -2,6 +2,7 @@
 //! Reads the ECS world and a [`SurfaceTarget`](olvin_core::SurfaceTarget);
 //! knows nothing about the windowing library.
 
+mod cluster;
 pub mod core;
 mod frustum;
 mod gl_check;
@@ -22,6 +23,7 @@ mod skinning;
 mod sprite;
 mod texture;
 
+pub use cluster::MAX_CLUSTER_LIGHTS;
 pub use core::{GpuMeshes, RenderCore, ViewData, camera_view_proj};
 pub use frustum::Frustum;
 pub use gl_check::{GlCheck, GlCheckInput, check_gl};

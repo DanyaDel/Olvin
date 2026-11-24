@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use crate::cluster::ClusterTextures;
 use crate::pipelines::{
     create_layouts, create_mesh_pipeline, create_shadow_pipeline, create_sky_pipeline,
     shadow_texture,
@@ -167,11 +168,13 @@ impl RenderCore {
             })
         };
         let globals = uniform("olvin globals", size_of::<Globals>() as u64);
+        let clusters = ClusterTextures::new(&self.device);
         let bind = self.main_bind_group(
             &globals,
             &self.dummy_shadow,
             &self.dummy_shadow,
             &self.defaults.base,
+            &clusters,
         );
         ViewData {
             globals,
@@ -191,6 +194,7 @@ impl RenderCore {
             sky_active: false,
             retro_nearest: false,
             retro_global: false,
+            clusters,
         }
     }
 
@@ -200,6 +204,7 @@ impl RenderCore {
         shadow: &wgpu::TextureView,
         local: &wgpu::TextureView,
         sky: &wgpu::TextureView,
+        clusters: &ClusterTextures,
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("olvin globals"),
@@ -228,6 +233,18 @@ impl RenderCore {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(local),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&clusters.lights_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&clusters.grid_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&clusters.index_view),
                 },
             ],
         })

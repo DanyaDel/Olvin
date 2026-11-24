@@ -68,6 +68,9 @@ pub struct BuildOptions {
     /// a key the manifest is written unsigned and the game has no public key
     /// to check against.
     pub signing: Signing,
+    /// `cargo build --locked`: the build fails instead of changing `Cargo.lock`
+    /// (dependencies are exactly the audited ones). Needs a committed lock file.
+    pub locked: bool,
 }
 
 #[derive(Debug)]
@@ -193,6 +196,9 @@ impl Project {
         cmd.args(["build", "--message-format=json-render-diagnostics"])
             .arg("--manifest-path")
             .arg(&manifest);
+        if options.locked {
+            cmd.arg("--locked");
+        }
         if options.release {
             cmd.arg("--release");
             for (key, value) in release_profile(options) {

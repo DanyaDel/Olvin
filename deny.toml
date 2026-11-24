@@ -1,0 +1,66 @@
+# cargo-deny (roadmap B4): advisories, licences, bans and sources of the whole workspace.
+#   cargo deny check
+# Every exception below has a reason; ignores of advisories also need a review date.
+
+[graph]
+# Platforms we build for; dependencies only used elsewhere (wasm, android) do not count.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+# Vulnerabilities fail the check, unmaintained crates only warn.
+unmaintained = "workspace"
+yanked = "warn"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "OFL-1.1",
+    "CC0-1.0",
+    "BSL-1.0",
+    "0BSD",
+]
+exceptions = [
+    # egui's bundled default fonts (Ubuntu-Light, Hack, emoji fonts). Fonts are embedded
+    # data, not linked code; the Ubuntu Font Licence allows use and redistribution
+    # with the licence text, which THIRD_PARTY.md covers.
+    { crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] },
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+# Nothing is sent anywhere automatically (S3): no HTTP client or telemetry crate may
+# slip into the engine, the hub or the editor unnoticed. Adding one (the online
+# registry, B6/L5) is a decision: remove it from this list in the same change.
+deny = [
+    { crate = "reqwest", reason = "no automatic network traffic" },
+    { crate = "ureq", reason = "no automatic network traffic" },
+    { crate = "hyper", reason = "no automatic network traffic" },
+    { crate = "isahc", reason = "no automatic network traffic" },
+    { crate = "attohttpc", reason = "no automatic network traffic" },
+    { crate = "curl", reason = "no automatic network traffic" },
+    { crate = "sentry", reason = "no telemetry" },
+    { crate = "sentry-core", reason = "no telemetry" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

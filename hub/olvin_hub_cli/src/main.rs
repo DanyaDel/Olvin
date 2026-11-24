@@ -107,6 +107,9 @@ enum Cmd {
         /// Build a project that is not trusted (this once; same as OLVIN_TRUST=1)
         #[arg(long)]
         trust: bool,
+        /// Fail instead of changing Cargo.lock (use for release builds; commit the lock file)
+        #[arg(long)]
+        locked: bool,
     },
     /// Trust a project: building and running it is allowed without asking (default: the one in the current folder)
     Trust { path: Option<PathBuf> },
@@ -336,6 +339,7 @@ fn run(cli: Cli) -> Result<()> {
             sign_key,
             no_sign,
             trust,
+            locked,
         } => {
             let project = open(project.as_deref())?;
             require_trust(&project, trust)?;
@@ -353,6 +357,7 @@ fn run(cli: Cli) -> Result<()> {
                 keep_symbols,
                 no_strip,
                 no_remap,
+                locked,
                 signing: match (sign_key, no_sign) {
                     (Some(key), _) => Signing::Key(key),
                     (None, true) => Signing::Off,

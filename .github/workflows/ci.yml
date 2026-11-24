@@ -8,6 +8,9 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+  # Новые уязвимости появляются без наших коммитов: supply-chain гоняется раз в неделю.
+  schedule:
+    - cron: "17 5 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -26,6 +29,7 @@ env:
 jobs:
   fmt:
     name: rustfmt
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +42,7 @@ jobs:
 
   check:
     name: clippy, тесты, сборка
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,3 +89,15 @@ jobs:
 
       - name: сборка бинарников (olvin-hub, olvin-hub-gui, olvin-editor-dev, примеры)
         run: cargo build --workspace --bins --locked
+
+  supply-chain:
+    name: cargo deny, cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      # Лицензии, запрещённые крейты, источники (deny.toml) и RustSec (уязвимости падают, unmaintained только предупреждение).
+      - run: cargo deny --locked check
+      - run: cargo audit

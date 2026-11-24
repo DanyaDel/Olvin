@@ -167,6 +167,8 @@ pub struct EditorState {
     /// vertices); the editor then won't delete or duplicate the object.
     /// Cleared every frame.
     pub tool_owns_keys: bool,
+    /// The Settings window waits for a key to bind: no shortcut fires meanwhile.
+    pub capturing_key: bool,
     /// `tool_owns_keys` of the previous frame: panels drawn before the tool
     /// (the viewport's own hotkeys) check this one.
     pub keys_owned_last_frame: bool,
@@ -228,6 +230,7 @@ impl EditorState {
             local_space: false,
             snap: SnapSettings::default(),
             tool_owns_keys: false,
+            capturing_key: false,
             keys_owned_last_frame: false,
             prefs: crate::prefs::Preferences::default(),
             settings_page: None,

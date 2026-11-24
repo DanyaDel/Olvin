@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use egui::{Id, Key, KeyboardShortcut, Modifiers, RichText, TextEdit, ViewportCommand};
+use egui::{Id, Key, RichText, TextEdit, ViewportCommand};
+
+use crate::keymap::Command;
 use egui_dock::{DockArea, DockState, NodePath, TabViewer};
 
 use crate::panels::hierarchy::create_menu;
@@ -160,11 +162,15 @@ impl EditorApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
         let panel_keys = std::mem::take(&mut self.state.panel_owns_edit_keys);
-        let shortcut = |m, k| KeyboardShortcut::new(m, k);
+        // The Settings window is waiting for a key to bind: nothing fires.
+        if self.state.capturing_key {
+            return;
+        }
+        let keys = self.state.prefs.keymap.clone();
         let (save, new) = ctx.input_mut(|i| {
             (
-                i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::S)),
-                i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::N)),
+                keys.pressed(i, Command::Save),
+                keys.pressed(i, Command::NewScene),
             )
         });
         if save {
@@ -176,14 +182,13 @@ impl EditorApp {
         if typing {
             return; // Text fields keep their own undo, delete, etc.
         }
+        // Redo before Undo: Ctrl+Shift+Z must not be taken for Ctrl+Z.
         let (redo, undo, duplicate, delete) = ctx.input_mut(|i| {
-            let redo = i.consume_shortcut(&shortcut(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
-                || i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::Y));
             (
-                redo,
-                i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::Z)),
-                i.consume_shortcut(&shortcut(Modifiers::COMMAND, Key::D)),
-                i.key_pressed(Key::Delete),
+                keys.pressed(i, Command::Redo),
+                keys.pressed(i, Command::Undo),
+                keys.pressed(i, Command::Duplicate),
+                keys.pressed(i, Command::Delete),
             )
         });
         if redo {
@@ -916,13 +921,12 @@ impl EditorApp {
         for hook in self.registry.frame_hooks() {
             hook(&ctx, &mut self.state);
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P)))
-        {
+        let keys = self.state.prefs.keymap.clone();
+        let capturing = self.state.capturing_key;
+        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Play)) {
             self.toggle_play();
         }
-        if ctx.input_mut(|i| {
-            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma))
-        }) {
+        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Settings)) {
             self.state.settings_page = match self.state.settings_page {
                 Some(_) => None,
                 None => Some(crate::settings::Page::default()),

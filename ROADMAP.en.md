@@ -115,7 +115,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [x] **Animation editor**: connect Animator to the runtime after phase 2. (L) [P2] — a Blender-like animator: F-curves with Auto Clamped Bezier (Blender's maths ported), Timeline, Dope Sheet, Graph Editor, I/Alt+I and key colours in the inspector; scene format v3 (`SceneFile::animation`), played in games and Play by `olvin_anim::ActionPlayer`. Missing: auto-keying, markers, Normalize, animating anything but Transform; rotation order is YXZ, not XYZ.
 - [~] **Search in the scene and assets**, filters in the console. (S) [P2] — partial: filters in the assets panel and the console; no hierarchy search.
 - [ ] **Multi-scene**: open several scenes at once and switch between them. (M) [P3]
-- [ ] **Configurable hotkeys** (currently hard-coded). (S) [P3]
+- [~] **Configurable hotkeys** (currently hard-coded). (S) [P3] — done for the editor and scene-view commands (17 of them: save, undo, the tools, frame and so on): a Keymap page in Settings, key capture, clash display, reset, stored in `preferences.ron`. The keys of Edit Mode, the UV editor and the timeline stay fixed.
 
 ---
 

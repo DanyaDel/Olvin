@@ -2128,3 +2128,53 @@ fn joint_section_shows_the_kind_fields_and_connects_to_the_world() {
     h.get_by_label("Connected To");
     h.get_by_label("Axis");
 }
+
+#[test]
+fn a_rebound_tool_key_works_and_the_old_one_does_not() {
+    use olvin_editor::keymap::{Chord, Command};
+    let p = project("rebound-tool");
+    let mut h = editor(&p);
+    state(&mut h)
+        .prefs
+        .keymap
+        .set(Command::ToolRotate, Chord::plain(egui::Key::M));
+    state(&mut h).select(Some(3));
+    h.run_steps(3);
+    h.hover_at(egui::pos2(800.0, 400.0));
+    h.run_steps(2);
+    let before = state(&mut h).tool.clone();
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(state(&mut h).tool, before, "E no longer rotates");
+    h.key_press(egui::Key::M);
+    h.run_steps(3);
+    assert_eq!(state(&mut h).tool, olvin_editor::tools::ROTATE);
+}
+
+#[test]
+fn settings_rebinds_a_command_by_pressing_the_new_key() {
+    use olvin_editor::keymap::Command;
+    let p = project("rebind-ui");
+    let mut h = editor(&p);
+    state(&mut h).settings_page = Some(olvin_editor::settings::Page::Keymap);
+    h.run_steps(5);
+    h.get_by_label("W").click();
+    h.run_steps(3);
+    assert!(state(&mut h).capturing_key, "waiting for a key");
+    h.key_press(egui::Key::M);
+    h.run_steps(3);
+    assert!(!state(&mut h).capturing_key);
+    let chords = state(&mut h).prefs.keymap.chords(Command::ToolMove);
+    assert_eq!(chords.len(), 1);
+    assert_eq!(chords[0].to_string(), "M");
+    // Esc while waiting changes nothing.
+    h.get_by_label("M").click();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!state(&mut h).capturing_key);
+    assert_eq!(
+        state(&mut h).prefs.keymap.chords(Command::ToolMove)[0].to_string(),
+        "M"
+    );
+}

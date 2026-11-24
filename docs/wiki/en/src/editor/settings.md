@@ -7,7 +7,7 @@ The window **Edit → Settings…** (`Ctrl+,` or ⚙ at the top right). Values a
 | Rendering | scene environment (saved in the scene) and the quality of editor views |
 | Scene Camera | sensitivity, Invert Y, fly speed, zoom, FOV |
 | Interface | theme, Reduce motion, UI scale |
-| Keymap | the key table (read-only) |
+| Keymap | rebind the editor and scene-view keys (see [Hotkeys](hotkeys.md)); the fixed keys table |
 
 ![Rendering settings](../images/settings-rendering.png)
 

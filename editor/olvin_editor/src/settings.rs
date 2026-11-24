@@ -4,6 +4,7 @@
 use egui::{RichText, Slider};
 
 use crate::EditorState;
+use crate::keymap::{Chord, Command};
 use crate::panels::inspector::{grid, row, section};
 use crate::panels::lighting::{environment_ui, look_ui, presets};
 use crate::prefs::Preferences;
@@ -67,7 +68,7 @@ pub(crate) fn window(ctx: &egui::Context, state: &mut EditorState) {
                         Page::Rendering => rendering(ui, state),
                         Page::Camera => camera(ui, &mut state.prefs),
                         Page::Interface => interface(ui, &mut state.prefs),
-                        Page::Keymap => keymap(ui),
+                        Page::Keymap => keymap(ui, state),
                     });
             });
         });
@@ -274,11 +275,110 @@ const KEYS: [(&str, &[(&str, &str)]); 4] = [
     ),
 ];
 
-fn keymap(ui: &mut egui::Ui) {
+/// The key pressed this frame, with modifiers, for the capture field.
+fn captured_chord(ui: &egui::Ui) -> Option<Option<Chord>> {
+    ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } => Some(if *key == egui::Key::Escape {
+                None // cancel
+            } else {
+                Some(Chord {
+                    key: *key,
+                    command: modifiers.command,
+                    shift: modifiers.shift,
+                    alt: modifiers.alt,
+                })
+            }),
+            _ => None,
+        })
+    })
+}
+
+fn keymap(ui: &mut egui::Ui, state: &mut EditorState) {
     heading(
         ui,
         "Keymap",
-        "Unity-style object keys, Blender-style Edit Mode.",
+        "Unity-style object keys, Blender-style Edit Mode. Click a key to change it.",
+    );
+    let capture_id = egui::Id::new("keymap capture");
+    let mut waiting: Option<Command> =
+        ui.data(|d| d.get_temp::<Option<Command>>(capture_id).flatten());
+    for group in ["Editor", "Scene view"] {
+        section(ui, group, None, |ui| {
+            egui::Grid::new(group)
+                .num_columns(4)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for command in Command::ALL.into_iter().filter(|c| c.group() == group) {
+                        ui.label(command.label());
+                        let chords = state.prefs.keymap.chords(command);
+                        let text = chords
+                            .iter()
+                            .map(Chord::to_string)
+                            .collect::<Vec<_>>()
+                            .join("  /  ");
+                        let is_waiting = waiting == Some(command);
+                        let label = if is_waiting {
+                            "Press a key…".to_owned()
+                        } else {
+                            text
+                        };
+                        let button = egui::Button::selectable(
+                            is_waiting,
+                            RichText::new(label).monospace().strong(),
+                        );
+                        if ui.add_sized([210.0, 22.0], button).clicked() {
+                            waiting = if is_waiting { None } else { Some(command) };
+                        }
+                        let conflicts = state.prefs.keymap.conflicts(command);
+                        if conflicts.is_empty() {
+                            ui.label("");
+                        } else {
+                            let names: Vec<_> = conflicts.iter().map(|c| c.label()).collect();
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                format!("also: {}", names.join(", ")),
+                            );
+                        }
+                        ui.add_enabled_ui(!state.prefs.keymap.is_default(command), |ui| {
+                            if ui.small_button("Reset").clicked() {
+                                state.prefs.keymap.reset(command);
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+    if let Some(command) = waiting {
+        match captured_chord(ui) {
+            Some(Some(chord)) => {
+                state.prefs.keymap.set(command, chord);
+                waiting = None;
+            }
+            Some(None) => waiting = None,
+            None => {}
+        }
+    }
+    state.capturing_key = waiting.is_some();
+    ui.data_mut(|d| d.insert_temp(capture_id, waiting));
+    ui.horizontal(|ui| {
+        if ui.button("Reset all keys").clicked() {
+            state.prefs.keymap.reset_all();
+        }
+        ui.weak("Esc cancels while a key is awaited.");
+    });
+    ui.add_space(8.0);
+    heading(
+        ui,
+        "Fixed keys",
+        "Edit Mode, the UV editor, the timeline and text fields use these.",
     );
     for (title, keys) in KEYS {
         section(ui, title, None, |ui| {

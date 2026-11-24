@@ -28,6 +28,8 @@ pub struct Preferences {
     pub theme: olvin_ui::ThemeKind,
     /// No transitions or blinking cursor (STYLE.md §7).
     pub reduce_motion: bool,
+    /// Changed keys (see the Keymap page of Settings).
+    pub keymap: crate::keymap::Keymap,
 }
 
 impl Default for Preferences {
@@ -45,6 +47,7 @@ impl Default for Preferences {
             show_stats: false,
             theme: olvin_ui::ThemeKind::default(),
             reduce_motion: false,
+            keymap: Default::default(),
         }
     }
 }
@@ -58,7 +61,11 @@ impl Preferences {
     pub fn load() -> Self {
         Self::path()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|text| ron::from_str(&text).ok())
+            .and_then(|text| ron::from_str::<Self>(&text).ok())
+            .map(|mut p| {
+                p.keymap = p.keymap.cleaned();
+                p
+            })
             .unwrap_or_default()
     }
 

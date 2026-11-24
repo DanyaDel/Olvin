@@ -8,6 +8,7 @@ use glam::{Mat4, Vec3};
 use super::{STEPS, Viewport};
 use crate::EditorState;
 use crate::ext::ViewCamera;
+use crate::keymap::Command;
 use crate::state::tools;
 
 const NEAR: f32 = 0.05;
@@ -72,10 +73,13 @@ impl Viewport {
         {
             return;
         }
+        if state.capturing_key {
+            return;
+        }
+        let keys = state.prefs.keymap.clone();
         let pressed = |k| ui.input(|i| i.key_pressed(k) && i.modifiers.is_none());
-        if ui.input(|i| {
-            i.key_pressed(egui::Key::Z) && i.modifiers.matches_exact(egui::Modifiers::SHIFT)
-        }) {
+        let command = |c| ui.input_mut(|i| keys.pressed(i, c));
+        if command(Command::ToggleShading) {
             use crate::engine::Shading;
             self.shading = if self.shading == Shading::Solid {
                 Shading::Rendered
@@ -83,13 +87,13 @@ impl Viewport {
                 Shading::Solid
             };
         }
-        for (key, tool) in [
-            (egui::Key::Q, tools::VIEW),
-            (egui::Key::W, tools::MOVE),
-            (egui::Key::E, tools::ROTATE),
-            (egui::Key::R, tools::SCALE),
+        for (cmd, tool) in [
+            (Command::ToolView, tools::VIEW),
+            (Command::ToolMove, tools::MOVE),
+            (Command::ToolRotate, tools::ROTATE),
+            (Command::ToolScale, tools::SCALE),
         ] {
-            if pressed(key) {
+            if command(cmd) {
                 state.tool = tool.to_owned();
             }
         }
@@ -100,18 +104,17 @@ impl Viewport {
                 }
             }
         }
-        if pressed(egui::Key::X) {
+        if command(Command::ToggleSpace) {
             state.local_space = !state.local_space;
         }
-        if pressed(egui::Key::F) {
+        if command(Command::FrameSelection) {
             state.frame_selection = true;
         }
         // Blender: I keys Location, Rotation and Scale of the selection at
         // the current frame, Alt+I removes the keys on that frame.
-        let alt_i = ui.input(|i| {
-            i.key_pressed(egui::Key::I) && i.modifiers.matches_exact(egui::Modifiers::ALT)
-        });
-        if pressed(egui::Key::I) || alt_i {
+        // Delete keys first: its chord has Alt, the other's is a bare key.
+        let alt_i = command(Command::DeleteKeys);
+        if command(Command::KeyTransform) || alt_i {
             let frame = state.anim_frame as f32;
             let ids = state.selected_ids();
             let mut count = 0;

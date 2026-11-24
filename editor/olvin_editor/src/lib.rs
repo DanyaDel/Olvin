@@ -6,6 +6,7 @@ mod app;
 pub mod engine;
 pub mod ext;
 mod fx;
+pub mod keymap;
 pub mod materials;
 mod os_drop;
 pub mod panels;

@@ -1,6 +1,6 @@
 # Hotkeys
 
-The keys are hard-coded; a configurable keymap is not done, see [#45](https://github.com/DanyaDel/Olvin/issues/45). The same table is in the editor: **Edit → Settings… → Keymap**. On macOS `Ctrl` is `Cmd` in the `Ctrl+S/N/Z/D/P/,` combinations.
+The editor and scene-view commands (save, new, undo, redo, duplicate, delete, play, settings, the four tools, Global/Local, frame, Solid/Rendered, keying) can be rebound in **Edit → Settings… → Keymap**: click a key, press the new one (`Esc` cancels); a clash with another command is shown next to it, *Reset* puts the default back, the changes are saved per user in `preferences.ron`. The keys of Edit Mode, the UV editor, the animation timeline and text fields are fixed. The tables below are the defaults. On macOS `Ctrl` is `Cmd` in combinations with `Ctrl+S/N/Z/D/P/,`.
 
 ## Editor
 

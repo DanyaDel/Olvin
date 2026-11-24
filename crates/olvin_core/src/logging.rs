@@ -7,12 +7,22 @@
 //! и последние строки лога. Относительные пути считаются от папки проекта
 //! ([`ProjectPaths::detect`](crate::ProjectPaths::detect)), а не от рабочей папки.
 //!
+//! Приватность (S3). Строки лога, отчёты о панике и сообщения о них проходят через
+//! [`Redactor`]: домашняя папка пишется как `~`, папка проекта как `<project>`,
+//! имя пользователя ОС как `<user>`. Так лог и `crash-*.txt` можно приложить к
+//! багу, не раскрыв имя и раскладку папок. Это чистка текста на нашей стороне, а
+//! не защита: пути внутри бинарника убирает `olvin-hub build` (ремап путей), а
+//! вывод стандартного хука паники в stderr (его зовёт наш хук следом) мы не
+//! правим. Ничего никуда не отправляется: логи и отчёты — только локальные
+//! файлы, в движке нет ни сетевого клиента, ни телеметрии.
+//!
 //! ```no_run
 //! olvin_core::logging::Logging::new("info,wgpu_core=warn")
 //!     .file("logs/olvin.log")
 //!     .init();
 //! ```
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::{self, File};
@@ -33,6 +43,8 @@ pub struct Logging {
     file: Option<PathBuf>,
     crash_dir: Option<PathBuf>,
     panic_hook: bool,
+    redactor: Option<Redactor>,
+    redact: bool,
 }
 
 impl Logging {
@@ -46,7 +58,21 @@ impl Logging {
             file: None,
             crash_dir: None,
             panic_hook: true,
+            redactor: None,
+            redact: true,
         }
+    }
+
+    /// Не чистить пути и имя пользователя (для отладки у себя; по умолчанию чистятся).
+    pub fn without_redaction(mut self) -> Self {
+        self.redact = false;
+        self
+    }
+
+    /// Свои правила чистки вместо взятых из окружения (тесты).
+    pub fn redactor(mut self, redactor: Redactor) -> Self {
+        self.redactor = Some(redactor);
+        self
     }
 
     /// Дублировать лог в файл (перезаписывается при запуске, папки создаются).
@@ -99,8 +125,15 @@ impl Logging {
             })
             .unwrap_or_else(|| paths.root.clone());
 
+        let redactor = match (self.redact, self.redactor.take()) {
+            (false, _) => Redactor::default(),
+            (true, Some(custom)) => custom,
+            (true, None) => Redactor::from_env(),
+        };
         let max = filter.max_level();
+        let hook_redactor = redactor.clone();
         let logger = LOGGER.get_or_init(|| Logger {
+            redactor,
             filter,
             start: Instant::now(),
             out: Mutex::new(Output {
@@ -113,7 +146,7 @@ impl Logging {
         }
         log::set_max_level(max);
         if self.panic_hook {
-            install_panic_hook(crash_dir);
+            install_panic_hook(crash_dir, hook_redactor);
         }
         true
     }
@@ -122,6 +155,7 @@ impl Logging {
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 struct Logger {
+    redactor: Redactor,
     filter: Filter,
     start: Instant,
     out: Mutex<Output>,
@@ -148,6 +182,7 @@ impl Log for Logger {
             record.target(),
             record.args()
         );
+        let line = self.redactor.redact(&line).into_owned();
         eprintln!("{line}");
         let Ok(mut out) = self.out.lock() else { return };
         if let Some(file) = out.file.as_mut() {
@@ -220,18 +255,165 @@ impl Filter {
     }
 }
 
-fn install_panic_hook(dir: PathBuf) {
+/// Чистит из текста то, что выдаёт человека и его машину: папку проекта
+/// (`<project>`), домашнюю папку (`~`) и имя пользователя ОС (`<user>`).
+///
+/// * Пути заменяются целиком по границе компонента: `/home/ann` не заденет
+///   `/home/annabel`. Подходят обе записи разделителей (`/` и `\`), а также
+///   канонический путь, если он отличается (симлинки). Раньше идёт более
+///   длинный путь, поэтому проект внутри домашней папки станет `<project>/src/…`.
+/// * Имя пользователя заменяется как целое слово (не внутри `abundant`), только
+///   если оно не короче трёх символов и не `root`: иначе чистка портила бы текст.
+/// * Корень (`/`, `C:\`) и пустые значения не используются как образец.
+///
+/// Это чистка текста лога, а не защита: см. документацию модуля.
+#[derive(Clone, Debug, Default)]
+pub struct Redactor {
+    /// Образец и замена, от длинного образца к короткому.
+    paths: Vec<(String, &'static str)>,
+    user: Option<String>,
+}
+
+impl Redactor {
+    /// Правила из заданных значений (тесты, свои хосты). Любое можно не задавать.
+    pub fn new(home: Option<&str>, user: Option<&str>, project: Option<&str>) -> Self {
+        let mut paths: Vec<(String, &'static str)> = Vec::new();
+        let mut add = |path: &str, to: &'static str| {
+            let path = path.trim_end_matches(['/', '\\']);
+            // Корень после обрезки разделителей пуст; одна буква диска тоже не образец.
+            if path.len() < 2 || path.ends_with(':') {
+                return;
+            }
+            let mut spellings = vec![path.to_owned(), path.replace('\\', "/")];
+            spellings.push(path.replace('/', "\\"));
+            if let Ok(real) = Path::new(path).canonicalize()
+                && let Some(real) = real.to_str()
+            {
+                spellings.push(real.to_owned());
+                spellings.push(real.replace('/', "\\"));
+            }
+            for spelling in spellings {
+                if !paths.iter().any(|(p, _)| *p == spelling) {
+                    paths.push((spelling, to));
+                }
+            }
+        };
+        // Проект раньше дома: он обычно внутри и должен выиграть.
+        if let Some(project) = project {
+            add(project, "<project>");
+        }
+        if let Some(home) = home {
+            add(home, "~");
+        }
+        paths.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
+
+        // Имя берём из `user`, а если его нет, из `/home/<имя>` или `C:\Users\<имя>`.
+        let from_home = home.and_then(|h| {
+            let h = h.trim_end_matches(['/', '\\']);
+            let (parent, name) = h.rsplit_once(['/', '\\'])?;
+            let parent = parent.rsplit(['/', '\\']).next().unwrap_or_default();
+            matches!(parent, "home" | "Users").then_some(name)
+        });
+        let user = user
+            .filter(|u| !u.is_empty())
+            .or(from_home)
+            .filter(|u| u.chars().count() >= 3 && *u != "root")
+            .map(str::to_owned);
+        Self { paths, user }
+    }
+
+    /// Домашняя папка и имя из окружения (`HOME`/`USERPROFILE`, `USER`/`USERNAME`/`LOGNAME`),
+    /// папка проекта из [`ProjectPaths::detect`](crate::ProjectPaths::detect).
+    pub fn from_env() -> Self {
+        let var = |names: &[&str]| {
+            names
+                .iter()
+                .find_map(|n| std::env::var(n).ok().filter(|v| !v.is_empty()))
+        };
+        let home = var(&["HOME", "USERPROFILE"]);
+        let user = var(&["USER", "USERNAME", "LOGNAME"]);
+        let project = crate::ProjectPaths::detect()
+            .root
+            .to_string_lossy()
+            .into_owned();
+        Self::new(home.as_deref(), user.as_deref(), Some(&project))
+    }
+
+    /// Текст без путей и имени. Без совпадений ничего не копируется.
+    pub fn redact<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        let mut out = Cow::Borrowed(text);
+        for (path, to) in &self.paths {
+            if out.contains(path.as_str()) {
+                out = Cow::Owned(replace_bounded(&out, path, to, path_end_ok));
+            }
+        }
+        if let Some(user) = &self.user
+            && out.contains(user.as_str())
+        {
+            out = Cow::Owned(replace_bounded(&out, user, "<user>", word_end_ok));
+        }
+        out
+    }
+}
+
+/// После пути должен идти разделитель или не-имя: `/home/ann` не часть `/home/annabel`.
+fn path_end_ok(next: Option<char>) -> bool {
+    next.is_none_or(|c| {
+        matches!(c, '/' | '\\') || !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    })
+}
+
+fn word_end_ok(next: Option<char>) -> bool {
+    next.is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+}
+
+/// Заменяет вхождения `needle` на `to`, если перед ними не буква или цифра (`before_ok`
+/// для пути ослаблено ниже) и после них `after_ok`.
+fn replace_bounded(
+    text: &str,
+    needle: &str,
+    to: &str,
+    after_ok: fn(Option<char>) -> bool,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (start, _) in text.match_indices(needle) {
+        let end = start + needle.len();
+        // Мы могли уже пройти это место перекрывающимся вхождением.
+        if start < last {
+            continue;
+        }
+        let before = text[..start].chars().next_back();
+        let before_ok = before.is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            || needle.starts_with(['/', '\\']);
+        if before_ok && after_ok(text[end..].chars().next()) {
+            out.push_str(&text[last..start]);
+            out.push_str(to);
+            last = end;
+        }
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+fn install_panic_hook(dir: PathBuf, redactor: Redactor) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let report = panic_report(info);
+        let report = redactor.redact(&panic_report(info)).into_owned();
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let path = dir.join(format!("crash-{secs}.txt"));
         let _ = fs::create_dir_all(&dir);
         match fs::write(&path, &report) {
-            Ok(()) => eprintln!("olvin: отчёт о панике сохранён в {}", path.display()),
-            Err(err) => eprintln!("olvin: не удалось сохранить отчёт о панике: {err}"),
+            Ok(()) => eprintln!(
+                "olvin: отчёт о панике сохранён в {}",
+                redactor.redact(&path.display().to_string())
+            ),
+            Err(err) => eprintln!(
+                "olvin: не удалось сохранить отчёт о панике: {}",
+                redactor.redact(&err.to_string())
+            ),
         }
         log::logger().flush();
         previous(info);
@@ -303,22 +485,85 @@ mod tests {
     }
 
     #[test]
+    fn redactor_replaces_whole_paths_and_words_only() {
+        let r = Redactor::new(Some("/home/ann"), Some("ann"), Some("/home/ann/dev/game"));
+        assert_eq!(
+            r.redact("open /home/ann/dev/game/assets/a.ron failed"),
+            "open <project>/assets/a.ron failed"
+        );
+        assert_eq!(
+            r.redact("/home/ann/.cargo/registry/x.rs:3"),
+            "~/.cargo/registry/x.rs:3"
+        );
+        assert_eq!(r.redact("at /home/ann"), "at ~");
+        assert_eq!(r.redact("(/home/ann/dev/game)"), "(<project>)");
+        // Другой человек с похожим именем и слова с именем внутри остаются.
+        assert_eq!(
+            r.redact("/home/annabel/x ann-pc annual"),
+            "/home/annabel/x <user>-pc annual"
+        );
+        assert_eq!(r.redact("/home/ann/dev/gamekit/x"), "~/dev/gamekit/x");
+        // Имя в тексте и в `/home/<имя>` без заданной домашней папки.
+        let only_user = Redactor::new(None, Some("ann"), None);
+        assert_eq!(
+            only_user.redact("/home/ann/x by ann"),
+            "/home/<user>/x by <user>"
+        );
+        // Нечего чистить: строка не копируется.
+        assert!(matches!(r.redact("nothing here"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn redactor_handles_windows_paths_and_unsafe_values() {
+        let r = Redactor::new(Some(r"C:\Users\Bob"), None, Some(r"C:\Users\Bob\proj"));
+        assert_eq!(
+            r.redact(r"C:\Users\Bob\proj\src\main.rs"),
+            r"<project>\src\main.rs"
+        );
+        assert_eq!(r.redact("C:/Users/Bob/AppData/x"), "~/AppData/x");
+        assert_eq!(
+            r.redact("hello Bob"),
+            "hello <user>",
+            "name taken from C:\\Users\\<name>"
+        );
+        // Корень, короткие имена и root не используются: иначе портили бы весь текст.
+        let r = Redactor::new(Some("/"), Some("al"), Some(""));
+        assert_eq!(r.redact("/usr/bin al /"), "/usr/bin al /");
+        let r = Redactor::new(Some("/root"), Some("root"), None);
+        assert_eq!(r.redact("/root/x as root"), "~/x as root");
+        assert!(Redactor::default().redact("/home/x").starts_with("/home"));
+    }
+
+    #[test]
     fn writes_file_and_panic_report() {
         let dir = std::env::temp_dir().join(format!("olvin_logging_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let log_path = dir.join("olvin.log");
+        // Фальшивые HOME, имя и проект: настоящие значения машины не нужны.
+        let fake = Redactor::new(
+            Some("/home/zoe_test"),
+            Some("zoe_test"),
+            Some("/home/zoe_test/dev/game"),
+        );
         assert!(
             Logging::new("info")
                 .file(&log_path)
+                .redactor(fake.clone())
                 .without_panic_hook()
                 .init()
         );
         log::info!(target: "olvin_test", "привет из теста");
+        log::info!(target: "olvin_test", "нет файла /home/zoe_test/dev/game/assets/a.ron для zoe_test");
         log::debug!(target: "olvin_test", "скрыто фильтром");
         log::logger().flush();
         let text = fs::read_to_string(&log_path).unwrap();
         assert!(text.contains("INFO  olvin_test] привет из теста"), "{text}");
         assert!(!text.contains("скрыто"));
+        assert!(
+            text.contains("нет файла <project>/assets/a.ron для <user>"),
+            "{text}"
+        );
+        assert!(!text.contains("zoe_test"), "{text}");
         assert!(log::log_enabled!(target: "olvin_test", Level::Warn));
         assert!(!log::log_enabled!(target: "olvin_test", Level::Debug));
 
@@ -327,10 +572,10 @@ mod tests {
 
         // Отчёт о панике: ставим хук в отдельную папку, паникуем в потоке.
         let crash = dir.join("crashes");
-        install_panic_hook(crash.clone());
+        install_panic_hook(crash.clone(), fake);
         let joined = std::thread::Builder::new()
             .name("crasher".into())
-            .spawn(|| panic!("проверка отчёта"))
+            .spawn(|| panic!("проверка отчёта в /home/zoe_test/.cache от zoe_test"))
             .unwrap()
             .join();
         let _ = std::panic::take_hook();
@@ -341,6 +586,11 @@ mod tests {
             .filter_map(|e| fs::read_to_string(e.path()).ok())
             .find(|r| r.contains("проверка отчёта"))
             .expect("отчёт о панике");
+        assert!(
+            report.contains("проверка отчёта в ~/.cache от <user>"),
+            "{report}"
+        );
+        assert!(!report.contains("zoe_test"), "{report}");
         assert!(report.contains("поток: crasher"), "{report}");
         assert!(report.contains("привет из теста"));
         let _ = fs::remove_dir_all(&dir);

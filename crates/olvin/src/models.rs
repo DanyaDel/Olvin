@@ -333,7 +333,9 @@ fn instantiate(
                 let mesh = match shared.as_mut().and_then(|s| s.0.get(&key).copied()) {
                     Some(h) => h,
                     None => {
-                        let h = meshes.add(primitive_mesh(prim));
+                        // Simpler copies for when the model is far away.
+                        let h =
+                            meshes.add_with_lods(primitive_mesh(prim), &olvin_render::DEFAULT_LODS);
                         if let Some(s) = shared.as_mut() {
                             s.0.insert(key, h);
                         }

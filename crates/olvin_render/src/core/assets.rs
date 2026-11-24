@@ -51,6 +51,15 @@ impl RenderCore {
         for (handle, data) in meshes.pending.drain(..) {
             self.upload_mesh(gpu, handle, &data);
         }
+        for (handle, lods) in meshes.lod_updates.drain(..) {
+            if lods.is_empty() {
+                gpu.lods.remove(&handle.0);
+                continue;
+            }
+            let mut levels: Vec<(u32, f32)> = lods.iter().map(|l| (l.mesh.0, l.below)).collect();
+            levels.sort_by(|a, b| b.1.total_cmp(&a.1));
+            gpu.lods.insert(handle.0, levels);
+        }
         if on_gpu {
             self.skin_on_gpu(gpu, updates);
         }

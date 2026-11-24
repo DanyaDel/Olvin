@@ -166,12 +166,15 @@ impl RenderCore {
             .length()
             * retro.snap_resolution[1] as f32
             * 0.5;
+        // How much of the screen's height a metre at depth 1 covers (half-height units).
+        let lod_scale =
+            Vec3::new(view_proj.x_axis.y, view_proj.y_axis.y, view_proj.z_axis.y).length();
         for (global, transform, renderer) in world
             .query::<(Option<&GlobalTransform>, &Transform, &MeshRenderer)>()
             .iter()
         {
-            let i = renderer.mesh.0;
-            let Some(Some(mesh)) = gpu.meshes.get(i as usize) else {
+            let base = renderer.mesh.0;
+            let Some(Some(mesh)) = gpu.meshes.get(base as usize) else {
                 continue;
             };
             let material = match renderer.material {
@@ -190,6 +193,21 @@ impl RenderCore {
             let instance = InstanceRaw {
                 model: model.to_cols_array_2d(),
                 color: renderer.color.0,
+            };
+            // A simpler copy for objects that look small; the base mesh's
+            // sphere decides (so the choice does not flicker with the copy).
+            let i = match gpu.lods.get(&base) {
+                Some(lods) => {
+                    let depth =
+                        (cam.view_plane.truncate().dot(center) + cam.view_plane.w).max(0.01);
+                    let level =
+                        crate::lod::pick(base, lods, radius * lod_scale / depth, settings.lod_bias);
+                    match gpu.meshes.get(level as usize) {
+                        Some(Some(_)) => level,
+                        _ => base,
+                    }
+                }
+                None => base,
             };
             // Blended meshes don't cast shadows.
             if !blended {

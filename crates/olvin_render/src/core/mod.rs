@@ -120,6 +120,8 @@ pub struct GpuMeshes {
     pipelines: Vec<Option<SurfacePipeline>>,
     /// GPU-skinned meshes by mesh slot (Full tier, see `skin.rs`).
     skins: std::collections::HashMap<u32, skin::GpuSkin>,
+    /// Simpler copies of a mesh slot: (slot, `below`), largest `below` first.
+    lods: std::collections::HashMap<u32, Vec<(u32, f32)>>,
     generation: u64,
 }
 

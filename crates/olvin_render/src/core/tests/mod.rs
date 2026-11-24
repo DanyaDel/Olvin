@@ -6,6 +6,7 @@ mod edge;
 mod fog;
 mod library;
 mod lighting;
+mod lod;
 mod materials;
 mod perf;
 pub(super) mod post;

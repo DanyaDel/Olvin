@@ -35,6 +35,12 @@ The component `Light { kind: Directional | Point | Spot, color, intensity, range
 
 `SkyMode::{Color, Procedural{..}, Texture{..}}` (a full-screen triangle at the far plane, a sun disc). Hemisphere ambient: `ambient` (sky) and `ground_ambient`. Linear fog `Fog { color, start, end }` and height fog `HeightFog { color, density, falloff, height }` (works on all tiers and in the editor viewport). ACES tonemapping and exposure.
 
+## Levels of detail
+
+A far object does not need a million triangles. `meshes.add_with_lods(data, &DEFAULT_LODS)` registers a mesh with simpler copies made by meshoptimizer (half the triangles, then a fifth); the handle it returns is the full mesh, and a `MeshRenderer` points at it as usual. The renderer picks a copy per object by how big it looks: the fraction of the screen's height that its bounding sphere covers (a quarter of it and below: the first copy, a twelfth and below: the second), so the choice is the same at any resolution or field of view. Meshes with fewer than 120 triangles get no copies. `RenderSettings::lod_bias` scales the size (above 1 keeps detail longer, infinity always draws the full mesh). The glTF models of a scene get copies automatically; skinned meshes, CSG levels and primitives do not. Replacing a mesh's geometry with `Meshes::set` drops its copies.
+
+Instances of the same mesh and material are already drawn in one instanced call; culling on the GPU and indirect draws are not done yet.
+
 ## Retro style
 
 A PlayStation 1 look (vertex jitter, affine textures, 15-bit dithered colour, Gouraud lighting, draw distance, low resolution) lives in the mesh shader and switches on per scene or per material: [Retro / PS1 style](retro-ps1.md).

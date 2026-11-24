@@ -6,6 +6,7 @@ pub mod core;
 mod frustum;
 mod gl_check;
 mod light;
+mod lod;
 mod material;
 mod mesh;
 mod overlay;
@@ -28,6 +29,7 @@ pub use light::{
     DEFAULT_LIGHT_SIZE, DEFAULT_SHADOW_BIAS, Light, LightKind, MAX_CASCADES, MAX_LIGHTS,
     MAX_LOCAL_TILES,
 };
+pub use lod::{DEFAULT_LODS, LodSpec, MIN_TRIANGLES_FOR_LOD, MeshLod};
 pub use material::{BlendMode, Material, MaterialHandle, Materials};
 pub use mesh::{MeshData, MeshHandle, Meshes, Vertex};
 pub use overlay::{Overlay, OverlayQuad, OverlayRenderer, begin_overlay_pass};
@@ -259,6 +261,10 @@ pub struct RenderSettings {
     pub scene_lights: bool,
     /// The retro (PS1) look; materials can opt in or out one by one.
     pub retro: RetroSettings,
+    /// Scales how big objects look when choosing a level of detail (see
+    /// [`MeshLod`]): above 1 keeps detail longer, below 1 drops it sooner,
+    /// infinity always draws the full mesh.
+    pub lod_bias: f32,
 }
 
 impl Default for RenderSettings {
@@ -290,6 +296,7 @@ impl Default for RenderSettings {
             local_shadow_size: 2048,
             scene_lights: true,
             retro: RetroSettings::default(),
+            lod_bias: 1.0,
         }
     }
 }

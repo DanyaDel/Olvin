@@ -280,6 +280,8 @@ pub struct MeshHandle(pub(crate) u32);
 pub struct Meshes {
     next: u32,
     pub(crate) pending: Vec<(MeshHandle, MeshData)>,
+    /// Level-of-detail lists waiting for the renderer (see [`Meshes::set_lods`]).
+    pub(crate) lod_updates: Vec<(MeshHandle, Vec<crate::lod::MeshLod>)>,
     /// Poses of skinned meshes waiting for the renderer (see [`Meshes::skin`]).
     pub(crate) skin_updates: Vec<crate::skinning::SkinUpdate>,
 }
@@ -296,6 +298,8 @@ impl Meshes {
     pub fn set(&mut self, handle: MeshHandle, mesh: MeshData) {
         self.pending.retain(|(h, _)| *h != handle);
         self.pending.push((handle, mesh));
+        // The levels were made from the old geometry.
+        self.set_lods(handle, Vec::new());
     }
 }
 

@@ -11,6 +11,7 @@ repository.workspace = true
 serde = ["dep:serde"]
 
 [dependencies]
+meshopt = "0.7"
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true

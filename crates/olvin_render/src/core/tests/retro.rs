@@ -352,3 +352,131 @@ fn colours_snap_to_the_5_bit_lattice_with_a_bayer_dither() {
     let rows2: Vec<u8> = (12..16).map(|y| dithered(30, y)[0]).collect();
     assert_eq!(rows, rows2, "a 4x4 pattern");
 }
+
+#[test]
+fn vertex_lighting_interpolates_the_corner_lighting() {
+    let Some(mut h) = Harness::new(false) else {
+        return;
+    };
+    // One 20 m quad, a short point light above its middle: per pixel the
+    // middle is bright, per vertex (the corners are out of range) it is dark.
+    let material = h.materials.add(Material {
+        base_color: Color::WHITE,
+        ..Default::default()
+    });
+    let plane = h.meshes.add(MeshData::plane(20.0));
+    let mut world = World::new();
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(plane, Color::WHITE).with_material(material),
+    ));
+    world.spawn(top_down_camera(6.0));
+    world.spawn((
+        Transform::from_xyz(0.0, 1.5, 0.0),
+        Light::point([1.0; 3], 6.0, 5.0),
+    ));
+    let base = RenderSettings {
+        light_color: Color::BLACK,
+        ambient: Color::BLACK,
+        ground_ambient: Color::BLACK,
+        tonemapping: Tonemapping::None,
+        ..Default::default()
+    };
+    let (_, per_pixel) = h.render(&world, &base);
+    let gouraud = RenderSettings {
+        retro: RetroSettings {
+            vertex_lighting: true,
+            ..only()
+        },
+        ..base.clone()
+    };
+    let (_, per_vertex) = h.render(&world, &gouraud);
+    save_shot("lighting_pixel", SIZE, &per_pixel);
+    save_shot("lighting_vertex", SIZE, &per_vertex);
+    let mid = (SIZE / 2, SIZE / 2);
+    let (p, v) = (per_pixel(mid.0, mid.1), per_vertex(mid.0, mid.1));
+    assert!(p[0] > 120, "per-pixel light shows in the middle: {p:?}");
+    assert!(v[0] < 20, "no vertex near the light: {v:?}");
+}
+
+#[test]
+fn draw_distance_cuts_geometry_into_the_fog_colour() {
+    let Some(mut h) = Harness::new(false) else {
+        return;
+    };
+    let cube = h.meshes.add(MeshData::cube(2.0));
+    let material = h.materials.add(unlit_material(None, None));
+    let mut world = World::new();
+    for (x, z) in [(-1.2, -8.0), (1.2, -24.0)] {
+        world.spawn((
+            Transform::from_xyz(x, 0.0, z),
+            MeshRenderer::new(cube, Color::WHITE).with_material(material),
+        ));
+    }
+    world.spawn((Transform::IDENTITY, Camera::default()));
+    let settings = |distance: f32| RenderSettings {
+        retro: RetroSettings {
+            draw_distance: distance,
+            ..only()
+        },
+        clear_color: Color::rgb(0.0, 0.0, 1.0),
+        ..flat_settings()
+    };
+    let (_, all) = h.render(&world, &settings(0.0));
+    let (stats, cut) = h.render(&world, &settings(16.0));
+    let right = |at: &dyn Fn(u32, u32) -> [u8; 3]| {
+        (SIZE / 2..SIZE).any(|x| (0..SIZE).any(|y| at(x, y)[0] > 100))
+    };
+    assert!(right(&all), "the far cube is drawn without a cut");
+    assert!(!right(&cut), "the far cube is gone past the draw distance");
+    assert!(stats.culled >= 1, "culled on the CPU: {stats:?}");
+    // The near cube keeps its fog-free colour.
+    assert!(cut(SIZE / 2 - 6, SIZE / 2)[0] > 200);
+}
+
+#[test]
+fn forced_nearest_removes_the_texture_blending() {
+    let Some(mut h) = Harness::new(false) else {
+        return;
+    };
+    let texture = h.textures.add(TextureData::rgba8(
+        2,
+        2,
+        [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255; 4],
+        ]
+        .concat(),
+        true,
+    ));
+    let material = h.materials.add(unlit_material(Some(texture), None));
+    let plane = h.meshes.add(MeshData::plane(4.0));
+    let mut world = World::new();
+    world.spawn((
+        Transform::IDENTITY,
+        MeshRenderer::new(plane, Color::WHITE).with_material(material),
+    ));
+    world.spawn(top_down_camera(8.0));
+    let pure = |c: [u8; 3]| c.iter().all(|&v| v < 12 || v > 243);
+    let (_, linear) = h.render(&world, &with(only()));
+    let (_, nearest) = h.render(
+        &world,
+        &with(RetroSettings {
+            force_nearest: true,
+            ..only()
+        }),
+    );
+    let edge = |at: &dyn Fn(u32, u32) -> [u8; 3]| at(column(0.0, 8.0), column(-1.0, 8.0));
+    assert!(
+        !pure(edge(&linear)),
+        "linear blends across texels: {:?}",
+        edge(&linear)
+    );
+    assert!(
+        pure(edge(&nearest)),
+        "nearest keeps one texel: {:?}",
+        edge(&nearest)
+    );
+}

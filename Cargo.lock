@@ -3777,6 +3777,7 @@ dependencies = [
  "olvin_core",
  "olvin_ecs",
  "olvin_input",
+ "olvin_net",
  "olvin_physics",
  "olvin_scene",
  "olvin_transform",

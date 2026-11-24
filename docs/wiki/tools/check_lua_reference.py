@@ -22,7 +22,7 @@ ALLOWED_EXTRA: set[str] = set()
 
 def registered() -> set[str]:
     names: set[str] = set()
-    for f in ("api.rs", "audio.rs"):
+    for f in ("api.rs", "audio.rs", "net.rs"):
         text = (LUA / f).read_text()
         names |= set(re.findall(r'add_method\(\s*"([a-z_0-9]+)"', text))
     prelude = (LUA / "prelude.lua").read_text()

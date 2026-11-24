@@ -16,6 +16,8 @@ physics = ["dep:olvin_physics"]
 lua = ["dep:mlua"]
 # Lua `ctx:play_sound*` / `ctx:play_source` through olvin_audio's `Audio` resource.
 audio = ["dep:olvin_audio"]
+# `ctx:net_send`, `on_net_message`, replicated variables through olvin_net (see lua/net.rs).
+net = ["dep:olvin_net"]
 
 [dependencies]
 olvin_core = { path = "../olvin_core" }
@@ -25,6 +27,7 @@ olvin_transform = { path = "../olvin_transform" }
 olvin_input = { path = "../olvin_input", optional = true, default-features = false }
 olvin_physics = { path = "../olvin_physics", optional = true }
 olvin_audio = { path = "../olvin_audio", optional = true }
+olvin_net = { path = "../olvin_net", optional = true }
 # Ref/RefMut/DynamicBundle are not re-exported by olvin_ecs yet.
 hecs.workspace = true
 glam.workspace = true

@@ -69,6 +69,10 @@ use crate::{
 mod api;
 #[cfg(feature = "audio")]
 mod audio;
+#[cfg(feature = "net")]
+mod net;
+#[cfg(feature = "net")]
+pub use net::LuaNetPlugin;
 
 use api::{CtxHandle, CtxSlot, entity_id, from_script_value, vec3_of};
 
@@ -94,7 +98,7 @@ impl Default for LuaLimits {
 const HOOK_STEP: u32 = 1000;
 
 /// The callbacks a script table may define, in [`Cb`] order.
-const CALLBACKS: [&str; 9] = [
+const CALLBACKS: [&str; 10] = [
     "start",
     "update",
     "fixed_update",
@@ -104,6 +108,7 @@ const CALLBACKS: [&str; 9] = [
     "on_trigger_exit",
     "on_destroy",
     "on_message",
+    "on_net_message",
 ];
 
 #[derive(Clone, Copy)]
@@ -117,6 +122,7 @@ enum Cb {
     TriggerExit,
     Destroy,
     Message,
+    NetMessage,
 }
 
 impl Cb {
@@ -684,6 +690,22 @@ impl Behaviour for LuaBehaviour {
         self.call(ctx, Cb::Destroy, ());
     }
     fn on_message(&mut self, ctx: &mut ScriptCtx<'_>, message: &ScriptMessage) {
+        // A message that came over the network is for `on_net_message` only.
+        #[cfg(feature = "net")]
+        if let Some((from, name)) = net::split_net_name(&message.name) {
+            let shared = self.shared.clone();
+            let lua = &shared.lua;
+            if let Ok(args) = (|| {
+                Ok::<_, mlua::Error>((
+                    lua.create_string(name)?,
+                    from_script_value(lua, &shared.vec3, &message.value)?,
+                    from,
+                ))
+            })() {
+                self.call(ctx, Cb::NetMessage, args);
+            }
+            return;
+        }
         if self.callbacks.borrow().get(Cb::Message).is_none() {
             return;
         }

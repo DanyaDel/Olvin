@@ -133,6 +133,8 @@ impl ScriptAppExt for App {
     }
 }
 
+#[cfg(all(test, feature = "lua", feature = "net"))]
+mod lua_net_tests;
 #[cfg(all(test, feature = "lua"))]
 mod lua_tests;
 #[cfg(test)]

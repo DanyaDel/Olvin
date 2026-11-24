@@ -456,10 +456,12 @@ impl UserData for CtxHandle {
         add_input(m);
         #[cfg(feature = "audio")]
         super::audio::add_audio(m);
+        #[cfg(feature = "net")]
+        super::net::add_net(m);
     }
 }
 
-#[cfg(feature = "audio")]
+#[cfg(any(feature = "audio", feature = "net"))]
 impl CtxHandle {
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut ScriptCtx<'_>) -> R) -> mlua::Result<R> {
         self.slot.with(f)

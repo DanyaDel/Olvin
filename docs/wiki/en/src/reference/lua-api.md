@@ -29,6 +29,7 @@ return {
 | `on_trigger_exit` | `(self, ctx, other)` | leaves a trigger |
 | `on_destroy` | `(self, ctx)` | the object is being removed |
 | `on_message` | `(self, ctx, name, value, from)` | a `ctx:send` message arrived |
+| `on_net_message` | `(self, ctx, name, value, from)` | a network message arrived (feature `net`) |
 
 Callbacks are read from the table on load: assigning `self.update = …` at runtime does not replace them. Objects in Lua are integer ids; `nil` means "no such thing".
 
@@ -109,6 +110,22 @@ Ids come from lookups, from the `other` of callbacks and from `ctx:raycast`.
 | `ctx:set_var(name, value)` | write a shared variable (`nil` deletes) |
 
 Names and strings are limited to 16 KB, the message queue to 4096, variables to 1024; exceeding that is a script error.
+
+## Network
+
+Feature `net` of `olvin_script` and `LuaNetPlugin` after `NetPlugin` (see [Networking](../engine/networking.md)). Without a network session `is_server()` is false and `is_client()` is true.
+
+| Function | What |
+|---|---|
+| `ctx:is_server()` | this process runs the authoritative world (offline, host or dedicated) |
+| `ctx:is_client()` | this process has a local player (offline, host or a remote client) |
+| `ctx:local_client()` | our client id (0 for offline and host) or `nil` before the handshake |
+| `ctx:owner()` | the client id that owns this object (`Owner`) or `nil` |
+| `ctx:is_mine()` | this object is owned by the local player |
+| `ctx:net_send(target, name, value)` | send a message: `target` is `"server"`, `"all"`, `"owner"` (this object's owner), a client id, or `{ except = id }`; a client can only send to `"server"`; `value` is a number, string, bool, vector or `nil`; name up to 64 characters, text up to 256 bytes, 64 sends per frame |
+| `ctx:replicate_var(name)` | on the server: the shared variable `name` (`ctx:set_var`) is copied to every client when it changes, and to late joiners; clients read it with `ctx:var` |
+
+The callback `on_net_message(self, ctx, name, value, from)` runs for messages that came over the network; `from` is the sender's client id, or `nil` when the server sent it. On a server, check what a client asks for here: the sender id is the one the server saw, never one the client wrote. Messages are rate- and size-limited per client like every other network message.
 
 ## Physics
 

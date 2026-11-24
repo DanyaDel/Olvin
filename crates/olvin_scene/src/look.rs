@@ -271,6 +271,17 @@ mod tests {
     }
 
     #[test]
+    fn the_ps1_look_switches_the_retro_style_on_and_other_looks_off() {
+        let looks = LookDesc::built_in();
+        let ps1 = looks.iter().find(|l| l.name == "PS1").unwrap();
+        let mut env = Environment::default();
+        ps1.apply_to(&mut env);
+        assert_eq!(env.retro, Some(RetroDesc::ps1()));
+        looks[0].apply_to(&mut env);
+        assert_eq!(env.retro, None, "Neutral turns it off again");
+    }
+
+    #[test]
     fn a_partial_file_defaults_the_rest_and_typos_are_rejected() {
         let look: LookDesc = ron::from_str("(name: \"Dim\", exposure: 0.5)").unwrap();
         assert_eq!(look.exposure, 0.5);

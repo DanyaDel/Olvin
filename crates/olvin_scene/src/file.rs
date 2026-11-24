@@ -1372,6 +1372,34 @@ mod tests {
     }
 
     #[test]
+    fn retro_block_round_trips_and_old_scenes_load_unchanged() {
+        // A scene from before the retro style: no block, nothing to write back.
+        let old = SceneFile::parse("(version: 5, entities: [], environment: (exposure: 1.5))")
+            .unwrap();
+        assert_eq!(old.environment.retro, None);
+        let dir = std::env::temp_dir().join(format!("olvin-retro-{}", std::process::id()));
+        let path = dir.join("a.scene.ron");
+        old.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("retro"));
+        // A partial block keeps the PS1 values for the rest.
+        let text = "(version: 5, entities: [], environment: (retro: Some((color_bits: 4))))";
+        let mut scene = SceneFile::parse(text).unwrap();
+        let retro = scene.environment.retro.unwrap();
+        assert_eq!(
+            (retro.color_bits, retro.snap_resolution),
+            (4, RetroDesc::ps1().snap_resolution)
+        );
+        scene.environment.retro = Some(RetroDesc {
+            draw_distance: 25.0,
+            ..RetroDesc::ps1()
+        });
+        scene.save(&path).unwrap();
+        let back = SceneFile::load(&path).unwrap();
+        assert_eq!(back.environment.retro, scene.environment.retro);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn load_reports_missing_and_broken_files() {
         let dir = std::env::temp_dir().join(format!("olvin_scene_err_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

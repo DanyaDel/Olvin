@@ -1084,6 +1084,14 @@ mod tests {
         assert!(settings.height_fog.is_some());
         assert!(!settings.post.fxaa && settings.post.ao.is_some());
         assert_eq!(settings.post.grade.saturation, 0.5);
+        // The retro block turns the renderer's retro style on, and off again.
+        assert!(!settings.retro.enabled);
+        scene.environment.retro = Some(olvin_scene::file::RetroDesc::ps1());
+        apply_lighting(&scene, &mut settings);
+        assert!(settings.retro.enabled && settings.retro.color_bits == 5);
+        scene.environment.retro = None;
+        apply_lighting(&scene, &mut settings);
+        assert!(!settings.retro.enabled);
         let path = std::env::temp_dir().join(format!("olvin-env-{}.scene.ron", std::process::id()));
         scene.save(&path).unwrap();
         assert_eq!(SceneFile::load(&path).unwrap(), scene);

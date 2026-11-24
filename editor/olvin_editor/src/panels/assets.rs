@@ -87,6 +87,7 @@ impl Panel for Assets {
             self.rescan(&dir);
         }
 
+        self.os_drops(ui, state, &dir, &root);
         let hovered = ui.ui_contains_pointer();
         // Delete and Ctrl+D act on files here, not on scene objects.
         state.panel_owns_edit_keys |= hovered;
@@ -278,6 +279,61 @@ impl Assets {
         self.textures
             .insert(path.to_path_buf(), (image, tex.clone()));
         Some(tex)
+    }
+
+    /// Files dragged in from the OS file manager: a hint while they hover, and
+    /// the copy on drop. They land in the folder this panel shows; the drop may
+    /// happen anywhere in the window, as in most file managers.
+    fn os_drops(&mut self, ui: &mut egui::Ui, state: &mut EditorState, dir: &Path, root: &Path) {
+        let ctx = ui.ctx().clone();
+        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if hovering {
+            let palette = crate::theme::palette(&ctx);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("os-drop-hint"),
+            ));
+            let screen = ctx.content_rect();
+            painter.rect_filled(screen, 0.0, palette.bg.gamma_multiply(0.7));
+            let folder = self.current.display().to_string();
+            painter.text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("Drop to import into assets/{folder}"),
+                egui::FontId::proportional(22.0),
+                palette.accent,
+            );
+        }
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        let report = crate::os_drop::import(&dropped, dir);
+        if !report.imported.is_empty() {
+            // Give every new file its `.meta` GUID, as a scan does.
+            let _ = olvin_assets::AssetRoot::new(root).scan();
+            self.selected = report.imported.first().cloned();
+            self.scanned = None;
+            state.info(format!(
+                "imported {} into assets/{}{}",
+                report.imported.len(),
+                self.current.display(),
+                if report.renamed > 0 {
+                    format!(" ({} renamed, nothing overwritten)", report.renamed)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        for reason in report.skipped {
+            state.warn(format!("not imported: {reason}"));
+        }
     }
 
     fn rescan(&mut self, dir: &Path) {

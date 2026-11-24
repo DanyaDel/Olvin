@@ -7,6 +7,7 @@ pub mod engine;
 pub mod ext;
 mod fx;
 pub mod materials;
+mod os_drop;
 pub mod panels;
 pub mod prefabs;
 pub mod prefs;

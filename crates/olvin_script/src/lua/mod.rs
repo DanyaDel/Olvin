@@ -122,6 +122,8 @@ enum Cb {
     TriggerExit,
     Destroy,
     Message,
+    // Only built with the `net` feature, like the branch that calls it.
+    #[cfg(feature = "net")]
     NetMessage,
 }
 

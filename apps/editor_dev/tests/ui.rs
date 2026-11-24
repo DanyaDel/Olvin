@@ -2041,3 +2041,43 @@ fn model_inspector_picks_clips_and_previews_without_dirtying_the_scene() {
         None
     );
 }
+
+/// A file dragged in from the OS file manager, as the window backend reports it.
+#[derive(Debug)]
+struct OsFile(PathBuf);
+
+impl egui::DroppedFile for OsFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+#[test]
+fn files_dropped_from_the_os_land_in_the_shown_folder() {
+    let p = project("os-drop");
+    let mut h = editor(&p);
+    let src = std::env::temp_dir().join(format!("olvin-os-src-{}", std::process::id()));
+    fs::create_dir_all(&src).unwrap();
+    let file = src.join("rock.png");
+    fs::write(&file, b"png bytes").unwrap();
+
+    // Dropped on the window once, then again: the second copy must not overwrite.
+    for _ in 0..2 {
+        h.input_mut()
+            .dropped_files
+            .push(std::sync::Arc::new(OsFile(file.clone())));
+        h.run_steps(5);
+    }
+
+    assert_eq!(fs::read(p.join("assets/rock.png")).unwrap(), b"png bytes");
+    assert!(p.join("assets/rock-2.png").exists(), "second drop renamed");
+    assert!(
+        p.join("assets/rock.png.meta").exists(),
+        "a GUID was created"
+    );
+    assert!(p.join("assets/rock-2.png.meta").exists());
+}

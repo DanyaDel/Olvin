@@ -47,6 +47,7 @@
 - [Ассеты и GUID](engine/assets.md)
 - [Префабы](engine/prefabs.md)
 - [Рендер](engine/rendering.md)
+- [Ретро-стиль PS1](engine/retro-ps1.md)
 - [Физика](engine/physics.md)
 - [Звук](engine/audio.md)
 - [Ввод и переназначение](engine/input.md)

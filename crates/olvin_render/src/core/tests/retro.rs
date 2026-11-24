@@ -459,7 +459,7 @@ fn forced_nearest_removes_the_texture_blending() {
         MeshRenderer::new(plane, Color::WHITE).with_material(material),
     ));
     world.spawn(top_down_camera(8.0));
-    let pure = |c: [u8; 3]| c.iter().all(|&v| v < 12 || v > 243);
+    let pure = |c: [u8; 3]| c.iter().all(|&v| !(12..=243).contains(&v));
     let (_, linear) = h.render(&world, &with(only()));
     let (_, nearest) = h.render(
         &world,

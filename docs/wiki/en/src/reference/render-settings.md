@@ -27,6 +27,7 @@ Two levels: the `RenderSettings` resource (code, `olvin_render`) and `Environmen
 | `max_spot_shadows` / `max_point_shadows` | `4` / `2` | 2 / 1 on Compat |
 | `local_shadow_size` | `2048` | spot and point atlas (4×4 tiles) |
 | `scene_lights` | `true` | `false`: ignore `Light` components |
+| `retro` | off, PS1 values | `RetroSettings`, see [Retro / PS1 style](../engine/retro-ps1.md) |
 
 `PostSettings`: `fxaa: bool` (on), `ao: Option<AmbientOcclusion { radius, strength, bias }>` (off), `grade: ColorGrade { lut, lut_strength, saturation, contrast, lift, gamma, gain }` (a neutral one is skipped).
 
@@ -50,6 +51,7 @@ Written to the file only if it differs from the default; colours are linear.
 | `shadow_cascades` | `4` | 1..4 |
 | `max_spot_shadows`, `max_point_shadows` | `4`, `2` | |
 | `local_shadow_resolution` | `2048` | |
+| `retro` | `None` | `Some(RetroDesc)` = the PS1 style on, see [Retro / PS1 style](../engine/retro-ps1.md) |
 | `post` | `PostDesc::default()` | `fxaa`, `ao`, `saturation`, `contrast`, `lift`/`gamma`/`gain`, `lut` (a path), `lut_strength` |
 
 The `Environment::PRESETS`: Day, Sunset, Night, Studio (they set the sky too). New fields have serde defaults, old scenes load without a migration.

@@ -35,6 +35,10 @@ The component `Light { kind: Directional | Point | Spot, color, intensity, range
 
 `SkyMode::{Color, Procedural{..}, Texture{..}}` (a full-screen triangle at the far plane, a sun disc). Hemisphere ambient: `ambient` (sky) and `ground_ambient`. Linear fog `Fog { color, start, end }` and height fog `HeightFog { color, density, falloff, height }` (works on all tiers and in the editor viewport). ACES tonemapping and exposure.
 
+## Retro style
+
+A PlayStation 1 look (vertex jitter, affine textures, 15-bit dithered colour, Gouraud lighting, draw distance, low resolution) lives in the mesh shader and switches on per scene or per material: [Retro / PS1 style](retro-ps1.md).
+
 ## Post-processing (Full)
 
 The scene is drawn into `Rgba16Float`, then: bloom (`Bloom { threshold, intensity }`, off by default), FXAA 3.11 (on), GTAO (ambient occlusion, off: the most expensive effect), colour grading (`ColorGrade`: LUT, saturation, contrast, lift/gamma/gain). Compat and the editor stay on the path without it, with tonemapping in the mesh shader. The game UI is drawn after post-processing, so it gets no bloom.

@@ -47,6 +47,7 @@
 - [Assets and GUIDs](engine/assets.md)
 - [Prefabs](engine/prefabs.md)
 - [Rendering](engine/rendering.md)
+- [Retro / PS1 style](engine/retro-ps1.md)
 - [Physics](engine/physics.md)
 - [Audio](engine/audio.md)
 - [Input and rebinding](engine/input.md)

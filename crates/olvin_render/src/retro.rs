@@ -53,10 +53,9 @@ pub struct RetroSettings {
 
 impl Default for RetroSettings {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            ..Self::ps1()
-        }
+        let mut off = Self::ps1();
+        off.enabled = false;
+        off
     }
 }
 
@@ -92,8 +91,9 @@ impl RetroSettings {
         if !self.enabled {
             return None;
         }
+        let scale = self.pixel_scale.max(1);
         let size = if self.pixel_scale > 0 {
-            ((w / self.pixel_scale).max(1), (h / self.pixel_scale).max(1))
+            ((w / scale).max(1), (h / scale).max(1))
         } else if self.internal_resolution[0] > 0 && self.internal_resolution[1] > 0 {
             let [iw, ih] = self.internal_resolution;
             if self.letterbox {

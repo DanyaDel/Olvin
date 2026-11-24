@@ -26,6 +26,7 @@
 | `shadow_light_size` | `3.0` | угловой размер запасного солнца для PCSS, градусы |
 | `max_spot_shadows` / `max_point_shadows` | `4` / `2` | на Compat 2 / 1 |
 | `local_shadow_size` | `2048` | атлас spot и point (4×4 тайла) |
+| `retro` | выкл, значения PS1 | `RetroSettings`, см. [Ретро-стиль PS1](../engine/retro-ps1.md) |
 | `scene_lights` | `true` | `false`: игнорировать компоненты `Light` |
 
 `PostSettings`: `fxaa: bool` (включён), `ao: Option<AmbientOcclusion { radius, strength, bias }>` (выключен), `grade: ColorGrade { lut, lut_strength, saturation, contrast, lift, gamma, gain }` (нейтральный пропускается).
@@ -50,6 +51,7 @@
 | `shadow_cascades` | `4` | 1..4 |
 | `max_spot_shadows`, `max_point_shadows` | `4`, `2` | |
 | `local_shadow_resolution` | `2048` | |
+| `retro` | `None` | `Some(RetroDesc)` = ретро-стиль PS1 включён, см. [Ретро-стиль PS1](../engine/retro-ps1.md) |
 | `post` | `PostDesc::default()` | `fxaa`, `ao`, `saturation`, `contrast`, `lift`/`gamma`/`gain`, `lut` (путь), `lut_strength` |
 
 Пресеты `Environment::PRESETS`: Day, Sunset, Night, Studio (задают и небо). Новые поля имеют serde-умолчания, старые сцены грузятся без миграции.

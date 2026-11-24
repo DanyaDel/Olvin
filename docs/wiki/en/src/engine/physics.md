@@ -8,6 +8,8 @@
 
 **Pose ownership:** Fixed and Dynamic bodies are teleported when code changed `Transform` (velocity is kept); a static collider that moves every frame is better made Kinematic. `Physics::teleport(world, entity)` places a body at once and zeroes velocities.
 
+**Layers:** a collider has a `layer` (0..31) and a `mask`, the layers it collides with (bit `n` is layer `n`; the default is layer 0 and every layer). Two colliders collide only when **each** one's mask has the other's layer, so a ghost on layer 3 passes through what leaves layer 3 out. In the inspector: *Layer* and *Collides With* of the collider. Queries pick layers on their own, see Queries.
+
 ## Forces and velocities
 
 `Physics::apply_force` (one-shot, for the next step), `apply_impulse` (Δv = impulse / mass), `set_velocity`, `velocity`, `angular_velocity`. They work only with a Dynamic body, otherwise false. From Lua: `ctx:apply_force`, `ctx:apply_impulse`, `ctx:set_velocity`, `ctx:velocity`.
@@ -22,9 +24,11 @@ A collider with `is_trigger: true` does not collide but produces events. `Collis
 
 ## Queries
 
-`raycast(_filtered)`, `spherecast(_filtered)`, `overlap_sphere`. In Lua: `ctx:raycast(origin, dir, max)`.
+`raycast(_filtered)`, `spherecast(_filtered)`, `overlap_sphere`, and the general ones with `QueryOptions { mask, exclude, hit_triggers }`: `raycast_with`, `shapecast(shape, position, rotation, direction, max, &options)` (a sphere, a box or a capsule: `CastShape`) and `overlap(shape, position, rotation, &options)`. The `mask` picks collision layers by the **collider's layer** (bit `n` is layer `n`), not by its own mask, like Unity's `LayerMask`.
 
-> **Status:** not done: joints, collision layers and masks ([#2](https://github.com/DanyaDel/Olvin/issues/2)). A NaN step is ignored, a mesh collider with indices outside the vertices is skipped with a warning.
+In Lua: `ctx:raycast(origin, dir, max[, mask])`, `ctx:spherecast(origin, radius, dir, max[, mask])`, `ctx:boxcast(origin, half_extents, dir, max[, mask])` (all return `{ entity, point, normal, distance }` or `nil`) and `ctx:overlap_sphere(center, radius[, mask])` (a list of ids). The caster's own collider is skipped.
+
+> **Status:** not done: joints ([#2](https://github.com/DanyaDel/Olvin/issues/2)). A NaN step is ignored, a mesh collider with indices outside the vertices is skipped with a warning.
 
 ## See also
 

@@ -390,8 +390,60 @@ impl<'a> ScriptCtx<'a> {
     /// First solid hit along a ray, ignoring this entity's own body.
     #[cfg(feature = "physics")]
     pub fn raycast(&self, origin: Vec3, direction: Vec3, max: f32) -> Option<olvin_physics::Hit> {
+        self.raycast_mask(origin, direction, max, u32::MAX)
+    }
+
+    /// [`ScriptCtx::raycast`] that only sees the collision layers in `mask`
+    /// (bit `n` is layer `n`).
+    #[cfg(feature = "physics")]
+    pub fn raycast_mask(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max: f32,
+        mask: u32,
+    ) -> Option<olvin_physics::Hit> {
+        let options = olvin_physics::QueryOptions::default()
+            .mask(mask)
+            .exclude(self.entity);
         self.physics()?
-            .raycast_filtered(origin, direction, max, Some(self.entity), false)
+            .raycast_with(origin, direction, max, &options)
+    }
+
+    /// Sweeps a sphere, box or capsule from `origin` (see `olvin_physics::CastShape`).
+    #[cfg(feature = "physics")]
+    pub fn shapecast(
+        &self,
+        shape: olvin_physics::CastShape,
+        origin: Vec3,
+        direction: Vec3,
+        max: f32,
+        mask: u32,
+    ) -> Option<olvin_physics::Hit> {
+        let options = olvin_physics::QueryOptions::default()
+            .mask(mask)
+            .exclude(self.entity);
+        self.physics()?
+            .shapecast(shape, origin, Quat::IDENTITY, direction, max, &options)
+    }
+
+    /// Entities whose colliders overlap a sphere (this entity excluded).
+    #[cfg(feature = "physics")]
+    pub fn overlap_sphere(&self, center: Vec3, radius: f32, mask: u32) -> Vec<Entity> {
+        let options = olvin_physics::QueryOptions::default().mask(mask);
+        self.physics()
+            .map(|p| {
+                p.overlap(
+                    olvin_physics::CastShape::Sphere { radius },
+                    center,
+                    Quat::IDENTITY,
+                    &options,
+                )
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| *e != self.entity)
+            .collect()
     }
 
     /// This object and its direct children that have blend shapes (a model's

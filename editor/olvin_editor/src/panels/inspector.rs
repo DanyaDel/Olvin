@@ -1002,6 +1002,44 @@ fn collider_ui(ui: &mut egui::Ui, c: &mut ColliderDesc) {
         row(ui, "Is Trigger", |ui| {
             ui.checkbox(&mut c.is_trigger, "");
         });
+        row(ui, "Layer", |ui| {
+            let mut layer = u32::from(c.layer);
+            if ui
+                .add(DragValue::new(&mut layer).range(0..=31).speed(0.1))
+                .changed()
+            {
+                c.layer = layer as u8;
+            }
+        });
+        row(ui, "Collides With", |ui| {
+            let count = c.mask.count_ones();
+            let label = match count {
+                32 => "All layers".to_string(),
+                0 => "Nothing".to_string(),
+                n => format!("{n} layers"),
+            };
+            ui.menu_button(label, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("All").clicked() {
+                        c.mask = u32::MAX;
+                    }
+                    if ui.small_button("None").clicked() {
+                        c.mask = 0;
+                    }
+                });
+                egui::Grid::new("collider mask").show(ui, |ui| {
+                    for layer in 0..32u32 {
+                        let mut on = c.mask & (1 << layer) != 0;
+                        if ui.checkbox(&mut on, layer.to_string()).changed() {
+                            c.mask ^= 1 << layer;
+                        }
+                        if layer % 8 == 7 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            });
+        });
         if c.shape != ColliderShape::Mesh {
             row(ui, "Center", |ui| vec3(ui, &mut c.center, 0.02, ""));
         }

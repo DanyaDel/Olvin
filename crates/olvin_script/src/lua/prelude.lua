@@ -136,15 +136,37 @@ if M.axis2d_xy then
     end
 end
 
+local function hit_table(e, px, py, pz, nx, ny, nz, dist)
+    if e == nil then return nil end
+    return { entity = e, point = new(px, py, pz), normal = new(nx, ny, nz), distance = dist }
+end
+
 if M.raycast_xyz then
     local raw = M.raycast_xyz
-    -- raycast(origin, direction, max) -> nil or { entity, point, normal, distance }
-    M.raycast = function(ctx, o, d, max)
+    -- raycast(origin, direction, max[, mask]) -> nil or { entity, point, normal, distance }
+    M.raycast = function(ctx, o, d, max, mask)
         local ox, oy, oz = xyz(o)
         local dx, dy, dz = xyz(d)
-        local e, px, py, pz, nx, ny, nz, dist = raw(ctx, ox, oy, oz, dx, dy, dz, max)
-        if e == nil then return nil end
-        return { entity = e, point = new(px, py, pz), normal = new(nx, ny, nz), distance = dist }
+        return hit_table(raw(ctx, ox, oy, oz, dx, dy, dz, max, mask))
+    end
+    local sphere, box, overlap = M.spherecast_xyz, M.boxcast_xyz, M.overlap_sphere_xyz
+    -- spherecast(origin, radius, direction, max[, mask]), same result as raycast
+    M.spherecast = function(ctx, o, radius, d, max, mask)
+        local ox, oy, oz = xyz(o)
+        local dx, dy, dz = xyz(d)
+        return hit_table(sphere(ctx, ox, oy, oz, radius, dx, dy, dz, max, mask))
+    end
+    -- boxcast(origin, half_extents, direction, max[, mask])
+    M.boxcast = function(ctx, o, half, d, max, mask)
+        local ox, oy, oz = xyz(o)
+        local hx, hy, hz = xyz(half)
+        local dx, dy, dz = xyz(d)
+        return hit_table(box(ctx, ox, oy, oz, hx, hy, hz, dx, dy, dz, max, mask))
+    end
+    -- overlap_sphere(center, radius[, mask]) -> list of ids
+    M.overlap_sphere = function(ctx, c, radius, mask)
+        local x, y, z = xyz(c)
+        return overlap(ctx, x, y, z, radius, mask)
     end
 end
 

@@ -589,26 +589,126 @@ fn add_physics<M: UserDataMethods<CtxHandle>>(m: &mut M) {
     // nil, or entity, point xyz, normal xyz, distance.
     m.add_method(
         "raycast_xyz",
-        |_, h, (ox, oy, oz, dx, dy, dz, max): (f32, f32, f32, f32, f32, f32, f32)| {
-            let hit = h
-                .slot
-                .with(|c| c.raycast(Vec3::new(ox, oy, oz), Vec3::new(dx, dy, dz), max))?;
-            let Some(hit) = hit else {
-                return Ok((None, None, None, None, None, None, None, None));
-            };
-            let (p, n) = (hit.point, hit.normal);
-            Ok((
-                Some(entity_id(hit.entity)),
-                Some(p.x),
-                Some(p.y),
-                Some(p.z),
-                Some(n.x),
-                Some(n.y),
-                Some(n.z),
-                Some(hit.distance),
-            ))
+        |_,
+         h,
+         (ox, oy, oz, dx, dy, dz, max, mask): (f32, f32, f32, f32, f32, f32, f32, Option<i64>)| {
+            let hit = h.slot.with(|c| {
+                c.raycast_mask(
+                    Vec3::new(ox, oy, oz),
+                    Vec3::new(dx, dy, dz),
+                    max,
+                    layer_mask(mask),
+                )
+            })?;
+            Ok(hit_values(hit))
         },
     );
+    // Sphere sweep: the same results as the ray.
+    m.add_method(
+        "spherecast_xyz",
+        |_, h, (ox, oy, oz, radius, dx, dy, dz, max, mask): SphereCastArgs| {
+            let hit = h.slot.with(|c| {
+                c.shapecast(
+                    olvin_physics::CastShape::Sphere { radius },
+                    Vec3::new(ox, oy, oz),
+                    Vec3::new(dx, dy, dz),
+                    max,
+                    layer_mask(mask),
+                )
+            })?;
+            Ok(hit_values(hit))
+        },
+    );
+    // Box sweep (axis-aligned; `hx, hy, hz` are half the size).
+    m.add_method(
+        "boxcast_xyz",
+        |_, h, (ox, oy, oz, hx, hy, hz, dx, dy, dz, max, mask): BoxCastArgs| {
+            let hit = h.slot.with(|c| {
+                c.shapecast(
+                    olvin_physics::CastShape::Box {
+                        half_extents: Vec3::new(hx, hy, hz),
+                    },
+                    Vec3::new(ox, oy, oz),
+                    Vec3::new(dx, dy, dz),
+                    max,
+                    layer_mask(mask),
+                )
+            })?;
+            Ok(hit_values(hit))
+        },
+    );
+    // Ids of the objects whose colliders overlap a sphere.
+    m.add_method(
+        "overlap_sphere_xyz",
+        |_, h, (x, y, z, radius, mask): (f32, f32, f32, f32, Option<i64>)| {
+            h.slot.with(|c| {
+                c.overlap_sphere(Vec3::new(x, y, z), radius, layer_mask(mask))
+                    .into_iter()
+                    .take(MAX_OVERLAP_RESULTS)
+                    .map(entity_id)
+                    .collect::<Vec<u64>>()
+            })
+        },
+    );
+}
+
+/// Origin, radius, direction, max distance, layer mask.
+#[cfg(feature = "physics")]
+type SphereCastArgs = (f32, f32, f32, f32, f32, f32, f32, f32, Option<i64>);
+/// Origin, half extents, direction, max distance, layer mask.
+#[cfg(feature = "physics")]
+type BoxCastArgs = (
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    Option<i64>,
+);
+
+/// Most ids `overlap_sphere` hands to Lua at once.
+#[cfg(feature = "physics")]
+const MAX_OVERLAP_RESULTS: usize = 256;
+
+/// A Lua layer mask (an integer; `nil` means every layer) as bits.
+#[cfg(feature = "physics")]
+fn layer_mask(mask: Option<i64>) -> u32 {
+    mask.map_or(u32::MAX, |m| m as u32)
+}
+
+type HitValues = (
+    Option<u64>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+);
+
+/// A cast's result as the values `raycast_xyz` returns: nils for no hit.
+#[cfg(feature = "physics")]
+fn hit_values(hit: Option<olvin_physics::Hit>) -> HitValues {
+    let Some(hit) = hit else {
+        return (None, None, None, None, None, None, None, None);
+    };
+    let (p, n) = (hit.point, hit.normal);
+    (
+        Some(entity_id(hit.entity)),
+        Some(p.x),
+        Some(p.y),
+        Some(p.z),
+        Some(n.x),
+        Some(n.y),
+        Some(n.z),
+        Some(hit.distance),
+    )
 }
 
 /// Moves `e` to `at` (its local position) and tells physics to follow at once.

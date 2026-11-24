@@ -165,6 +165,11 @@ pub(crate) fn collider_builder(
         .sensor(desc.is_trigger)
         .friction(desc.friction)
         .restitution(desc.restitution)
+        .collision_groups(rp::InteractionGroups::new(
+            rp::Group::from_bits_truncate(desc.layer_bit()),
+            rp::Group::from_bits_truncate(desc.mask),
+            rp::InteractionTestMode::And,
+        ))
         .active_events(rp::ActiveEvents::COLLISION_EVENTS);
     if desc.is_trigger {
         // Triggers also fire for kinematic bodies and characters, like in

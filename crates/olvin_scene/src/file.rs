@@ -23,7 +23,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -31,7 +31,7 @@ pub const FORMAT_VERSION: u32 = 5;
 pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
-pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
+pub const MIGRATIONS: &[Migration] = &[v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
 fn v0_to_v1(_: &mut SceneFile) {}
@@ -83,6 +83,11 @@ fn v3_to_v4(_: &mut SceneFile) {}
 /// none, so the data stays as it is; the bump makes version-4 builds refuse new
 /// files instead of dropping the emitters.
 fn v4_to_v5(_: &mut SceneFile) {}
+
+/// Version 6 adds `ColliderDesc::layer` and `mask` (collision layers). Older
+/// colliders get layer 0 and collide with everything, as before; the bump
+/// makes version-5 builds refuse new files instead of ignoring the layers.
+fn v5_to_v6(_: &mut SceneFile) {}
 
 /// The timeline clip of format versions 1 and 2.
 #[derive(Deserialize)]
@@ -594,6 +599,21 @@ pub struct ColliderDesc {
     pub is_trigger: bool,
     pub friction: f32,
     pub restitution: f32,
+    /// Collision layer, 0..=31 (bigger values count as 31).
+    #[serde(default)]
+    pub layer: u8,
+    /// Layers this collider collides with: bit `n` is layer `n`. A pair
+    /// collides only when each one's mask has the other's layer.
+    #[serde(default = "all_layers")]
+    pub mask: u32,
+}
+
+/// How many collision layers there are.
+pub const LAYER_COUNT: u8 = 32;
+
+/// The default [`ColliderDesc::mask`]: every layer.
+pub fn all_layers() -> u32 {
+    u32::MAX
 }
 
 impl ColliderDesc {
@@ -604,7 +624,14 @@ impl ColliderDesc {
             is_trigger: false,
             friction: 0.6,
             restitution: 0.0,
+            layer: 0,
+            mask: all_layers(),
         }
+    }
+
+    /// The bit of this collider's layer in a layer mask.
+    pub fn layer_bit(&self) -> u32 {
+        1 << self.layer.min(LAYER_COUNT - 1)
     }
 
     /// The collider Unity adds for a primitive.
@@ -1442,7 +1469,32 @@ mod tests {
     const V3: &str = include_str!("../tests/fixtures/v3.scene.ron");
     const V4: &str = include_str!("../tests/fixtures/v4.scene.ron");
     const V5: &str = include_str!("../tests/fixtures/v5.scene.ron");
+    const V6: &str = include_str!("../tests/fixtures/v6.scene.ron");
     const CRATE_PREFAB: &str = include_str!("../tests/fixtures/crate.prefab.ron");
+
+    #[test]
+    fn collision_layers_default_for_old_colliders_and_round_trip() {
+        let scene = SceneFile::parse(V6).unwrap();
+        assert_eq!(scene.version, FORMAT_VERSION);
+        let level = scene.get(1).unwrap().collider.as_ref().unwrap();
+        assert_eq!(
+            (level.layer, level.mask),
+            (0, u32::MAX),
+            "no fields: layer 0, collides with all"
+        );
+        let ghost = scene.get(2).unwrap().collider.as_ref().unwrap();
+        assert_eq!((ghost.layer, ghost.mask), (3, 5));
+        assert_eq!(ghost.layer_bit(), 1 << 3);
+        let text = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        assert_eq!(SceneFile::parse(&text).unwrap(), scene);
+        // A version-5 file with colliders loads with the defaults.
+        let v5 = SceneFile::parse(V5).unwrap();
+        assert_eq!(v5.version, FORMAT_VERSION);
+        // An absurd layer is clamped when a bit is made of it.
+        let mut wild = ColliderDesc::new(ColliderShape::Sphere { radius: 1.0 });
+        wild.layer = 200;
+        assert_eq!(wild.layer_bit(), 1 << 31);
+    }
 
     #[test]
     fn legacy_file_without_version_loads_as_current() {

@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use olvin_core::{Events, Resources};
 use olvin_ecs::{Entity, World};
 use olvin_scene::file::{CharacterControllerDesc, ColliderDesc, ColliderShape, RigidbodyDesc};
@@ -661,4 +661,152 @@ fn non_finite_frame_time_is_ignored() {
     assert_eq!(physics.consume(-1.0), 0);
     assert_eq!(physics.consume(f32::INFINITY), 0);
     assert_eq!(physics.consume(FIXED_DT), 1);
+}
+
+/// A ground box and a falling ball, the ball's layer and mask set by the test.
+fn layered_drop(ground_layer: u8, ground_mask: u32, ball_layer: u8, ball_mask: u32) -> f32 {
+    let res = res_with(Physics::new(Vec3::new(0.0, -9.81, 0.0)));
+    let ball = {
+        let mut world = res.fetch_mut::<World>();
+        let mut floor = ColliderDesc::new(ColliderShape::Box {
+            size: Vec3::new(20.0, 1.0, 20.0),
+        });
+        (floor.layer, floor.mask) = (ground_layer, ground_mask);
+        world.spawn((Transform::from_xyz(0.0, -0.5, 0.0), floor));
+        let mut sphere = ColliderDesc::new(ColliderShape::Sphere { radius: 0.5 });
+        (sphere.layer, sphere.mask) = (ball_layer, ball_mask);
+        world.spawn((
+            Transform::from_xyz(0.0, 3.0, 0.0),
+            sphere,
+            RigidbodyDesc::default(),
+        ))
+    };
+    for _ in 0..180 {
+        step(&res, FIXED_DT);
+    }
+    let world = res.fetch::<World>();
+    let pose = *world.get::<&Transform>(ball).unwrap();
+    pose.translation.y
+}
+
+#[test]
+fn layers_and_masks_decide_who_collides() {
+    // Everything on layer 0 and with the full mask: the ball rests on the floor.
+    assert!((layered_drop(0, u32::MAX, 0, u32::MAX) - 0.5).abs() < 0.05);
+    // Ball on layer 2, the floor's mask leaves layer 2 out: it falls through.
+    assert!(layered_drop(0, !(1 << 2), 2, u32::MAX) < -5.0);
+    // Both sides must agree: the ball's mask leaves the floor's layer out.
+    assert!(layered_drop(1, u32::MAX, 2, !(1 << 1)) < -5.0);
+    // Masks that include each other's layers collide.
+    assert!((layered_drop(1, 1 << 2, 2, 1 << 1) - 0.5).abs() < 0.05);
+}
+
+#[test]
+fn queries_filter_by_the_collider_layer_not_its_mask() {
+    let res = res_with(Physics::new(Vec3::ZERO));
+    let (wall, glass) = {
+        let mut world = res.fetch_mut::<World>();
+        let mut a = ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE });
+        a.layer = 1;
+        // A mask that includes nothing must not hide it from queries.
+        a.mask = 0;
+        let mut b = ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE });
+        b.layer = 4;
+        (
+            world.spawn((Transform::from_xyz(5.0, 0.0, 0.0), a)),
+            world.spawn((Transform::from_xyz(10.0, 0.0, 0.0), b)),
+        )
+    };
+    step(&res, FIXED_DT);
+    let physics = res.fetch::<Physics>();
+    let ray = |opts: QueryOptions| physics.raycast_with(Vec3::ZERO, Vec3::X, 50.0, &opts);
+    assert_eq!(ray(QueryOptions::default()).unwrap().entity, wall);
+    assert_eq!(
+        ray(QueryOptions::default().mask(1 << 1)).unwrap().entity,
+        wall
+    );
+    // Mask without layer 1: the ray goes through the wall and hits the glass.
+    let hit = ray(QueryOptions::default().mask(1 << 4)).unwrap();
+    assert_eq!(hit.entity, glass);
+    assert!((hit.distance - 9.5).abs() < 1e-3);
+    assert!(ray(QueryOptions::default().mask(1 << 7)).is_none());
+    assert_eq!(
+        ray(QueryOptions::default().exclude(wall)).unwrap().entity,
+        glass
+    );
+}
+
+#[test]
+fn shapecasts_sweep_boxes_and_capsules_and_overlap_finds_neighbours() {
+    let res = res_with(Physics::new(Vec3::ZERO));
+    let target = {
+        let mut world = res.fetch_mut::<World>();
+        world.spawn((
+            Transform::from_xyz(6.0, 0.0, 0.0),
+            ColliderDesc::new(ColliderShape::Box {
+                size: Vec3::splat(2.0),
+            }),
+        ))
+    };
+    step(&res, FIXED_DT);
+    let physics = res.fetch::<Physics>();
+    let opts = QueryOptions::default();
+    // The box's front starts at x = 1 and meets the target's face (x = 5): 4 m.
+    let hit = physics
+        .shapecast(
+            CastShape::Box {
+                half_extents: Vec3::ONE,
+            },
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::X,
+            20.0,
+            &opts,
+        )
+        .unwrap();
+    assert_eq!(hit.entity, target);
+    assert!((hit.distance - 4.0).abs() < 1e-3, "{}", hit.distance);
+    assert!(hit.normal.x < -0.9);
+    // A capsule lying on its side (rotated) fits through a gap the box does not.
+    let capsule = CastShape::Capsule {
+        radius: 0.25,
+        half_height: 0.5,
+    };
+    let up = physics.shapecast(
+        capsule,
+        Vec3::new(0.0, 5.0, 0.0),
+        Quat::IDENTITY,
+        Vec3::X,
+        20.0,
+        &opts,
+    );
+    assert!(up.is_none(), "passes above the target");
+    // Overlap: a sphere around the target finds it, one far away does not.
+    let near = physics.overlap(
+        CastShape::Sphere { radius: 1.5 },
+        Vec3::new(4.5, 0.0, 0.0),
+        Quat::IDENTITY,
+        &opts,
+    );
+    assert_eq!(near, [target]);
+    assert!(
+        physics
+            .overlap(
+                CastShape::Sphere { radius: 1.0 },
+                Vec3::new(0.0, 9.0, 0.0),
+                Quat::IDENTITY,
+                &opts
+            )
+            .is_empty()
+    );
+    assert!(
+        physics
+            .overlap(
+                CastShape::Sphere { radius: 1.5 },
+                Vec3::new(4.5, 0.0, 0.0),
+                Quat::IDENTITY,
+                &opts.mask(1 << 5)
+            )
+            .is_empty()
+    );
 }

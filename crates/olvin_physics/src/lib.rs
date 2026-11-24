@@ -26,7 +26,7 @@ mod sync;
 
 pub use character::{CharacterMotor, CharacterMove, ControllerHit, move_character};
 pub use events::{CollisionEvent, CollisionEvents};
-pub use query::Hit;
+pub use query::{CastShape, Hit, QueryOptions};
 
 use bodies::*;
 pub use sync::step;

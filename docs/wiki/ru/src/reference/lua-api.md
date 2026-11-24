@@ -145,7 +145,10 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:grounded()` | | персонаж стоит на земле |
 | `ctx:gravity()` | | гравитация мира, м/с², положительная |
 | `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | поставить тело (любого вида, в том числе персонажа) в точку сразу и остановить; `false`, если объекта нет. Для респауна: обычный `set_position` тоже работает, но сохраняет скорость |
-| `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | луч: `nil` или `{ entity, point, normal, distance }`; быстрый путь возвращает `entity, px, py, pz, nx, ny, nz, distance` |
+| `ctx:raycast(origin, direction, max[, mask])` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max[, mask])` | луч: `nil` или `{ entity, point, normal, distance }`; быстрый путь возвращает `entity, px, py, pz, nx, ny, nz, distance`. `mask` выбирает слои коллизий (бит `n` это слой `n`; по умолчанию все); сам объект пропускается |
+| `ctx:spherecast(origin, radius, direction, max[, mask])` | `ctx:spherecast_xyz(ox, oy, oz, r, dx, dy, dz, max[, mask])` | протащить сферу, результат тот же |
+| `ctx:boxcast(origin, half_extents, direction, max[, mask])` | `ctx:boxcast_xyz(ox, oy, oz, hx, hy, hz, dx, dy, dz, max[, mask])` | протащить коробку по осям, результат тот же |
+| `ctx:overlap_sphere(center, radius[, mask])` | `ctx:overlap_sphere_xyz(x, y, z, r[, mask])` | id объектов, чьи коллайдеры пересекают сферу (не больше 256) |
 
 ## Навигация
 

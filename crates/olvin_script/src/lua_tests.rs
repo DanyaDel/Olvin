@@ -940,3 +940,65 @@ fn lua_drives_blend_shapes_and_weight_clips_on_a_models_parts() {
     let player = world.get::<&MorphPlayer>(part).unwrap();
     assert!(player.looping && player.clip.name == "grin");
 }
+
+#[cfg(feature = "physics")]
+#[test]
+fn lua_casts_see_only_the_layers_in_the_mask() {
+    use olvin_scene::file::{ColliderDesc, ColliderShape};
+
+    let (mut app, _lua) = app_with(
+        "Scout",
+        r#"return {
+            update = function(self, ctx)
+                local from, ahead = vec3(0, 0, 0), vec3(1, 0, 0)
+                local any = ctx:raycast(from, ahead, 50)
+                local only_glass = ctx:raycast(from, ahead, 50, 1 << 4)
+                local nothing = ctx:raycast(from, ahead, 50, 1 << 9)
+                local box = ctx:boxcast(from, vec3(0.5, 0.5, 0.5), ahead, 50)
+                local ball = ctx:spherecast(from, 0.4, ahead, 50, 1 << 4)
+                local near = ctx:overlap_sphere(vec3(5, 0, 0), 1.5)
+                local near_glass = ctx:overlap_sphere(vec3(5, 0, 0), 1.5, 1 << 4)
+                local score = 0
+                if any and any.distance > 4.4 and any.distance < 4.6 then score = score + 1 end
+                if only_glass and only_glass.distance > 9.4 and only_glass.distance < 9.6 then score = score + 2 end
+                if nothing == nil then score = score + 4 end
+                if box and box.distance > 3.9 and box.distance < 4.1 then score = score + 8 end
+                if ball and ball.distance > 8.9 and ball.distance < 9.2 then score = score + 16 end
+                if #near == 1 and #near_glass == 0 then score = score + 32 end
+                -- Report once, from the first frame that saw the colliders.
+                if score > 0 and not self.done then
+                    self.done = true
+                    ctx:translate(vec3(score, 0, 0))
+                end
+            end,
+        }"#,
+    );
+    app.add_plugin(olvin_physics::PhysicsPlugin::default());
+    let scout = {
+        let mut world = app.resources.fetch_mut::<World>();
+        let mut wall = ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE });
+        wall.layer = 1;
+        let mut glass = ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE });
+        glass.layer = 4;
+        world.spawn((Transform::from_translation(Vec3::new(5.0, 0.0, 0.0)), wall));
+        world.spawn((
+            Transform::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            glass,
+        ));
+        world.spawn((
+            Transform::from_translation(Vec3::new(0.0, 0.0, 30.0)),
+            Name("scout".into()),
+            Scripts::new().with("Scout", []),
+        ))
+    };
+    // A few fixed steps, so physics has made the bodies the casts look at.
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(1.0 / 60.0));
+    app.startup();
+    for _ in 0..3 {
+        app.update();
+    }
+    // The scout stands away from the line; the casts start at the origin, it only reports.
+    assert_eq!(x(&app, scout), 63.0, "all six checks passed");
+}

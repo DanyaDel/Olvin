@@ -145,7 +145,10 @@ Feature `physics`; for a Dynamic body only (otherwise the functions do nothing).
 | `ctx:grounded()` | | the character stands on the ground |
 | `ctx:gravity()` | | the world's gravity, m/s², positive |
 | `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | put a body (any kind, a character too) at a position now and stop it; `false` when there is no such object. For respawns: a plain `set_position` also works but keeps the velocity |
-| `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | a ray: `nil` or `{ entity, point, normal, distance }`; the fast path returns `entity, px, py, pz, nx, ny, nz, distance` |
+| `ctx:raycast(origin, direction, max[, mask])` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max[, mask])` | a ray: `nil` or `{ entity, point, normal, distance }`; the fast path returns `entity, px, py, pz, nx, ny, nz, distance`. `mask` picks collision layers (bit `n` is layer `n`; default all); this object is skipped |
+| `ctx:spherecast(origin, radius, direction, max[, mask])` | `ctx:spherecast_xyz(ox, oy, oz, r, dx, dy, dz, max[, mask])` | sweep a sphere, the same result |
+| `ctx:boxcast(origin, half_extents, direction, max[, mask])` | `ctx:boxcast_xyz(ox, oy, oz, hx, hy, hz, dx, dy, dz, max[, mask])` | sweep an axis-aligned box, the same result |
+| `ctx:overlap_sphere(center, radius[, mask])` | `ctx:overlap_sphere_xyz(x, y, z, r[, mask])` | ids of the objects whose colliders overlap the sphere (at most 256) |
 
 ## Navigation
 

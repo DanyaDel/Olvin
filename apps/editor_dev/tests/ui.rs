@@ -2081,3 +2081,30 @@ fn files_dropped_from_the_os_land_in_the_shown_folder() {
     );
     assert!(p.join("assets/rock-2.png.meta").exists());
 }
+
+#[test]
+fn collider_layer_mask_menu_edits_the_scene() {
+    use olvin_editor::olvin_scene::file::{ColliderDesc, ColliderShape};
+    let p = project("collider-mask");
+    let mut h = editor(&p);
+    {
+        let s = state(&mut h);
+        s.scene.get_mut(3).unwrap().collider =
+            Some(ColliderDesc::new(ColliderShape::Box { size: Vec3::ONE }));
+        s.select(Some(3));
+    }
+    h.run_steps(5);
+    h.get_by_label("All layers").click();
+    h.run_steps(3);
+    h.get_by_label("None").click();
+    h.run_steps(3);
+    let c = state(&mut h)
+        .scene
+        .get(3)
+        .unwrap()
+        .collider
+        .clone()
+        .unwrap();
+    assert_eq!(c.mask, 0, "None cleared every layer");
+    assert_eq!(c.layer, 0);
+}

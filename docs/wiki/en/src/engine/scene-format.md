@@ -64,7 +64,7 @@ Unknown names and broken values are skipped with a warning, the editor keeps the
 
 ## Versions and migrations
 
-`FORMAT_VERSION` is 4 now and is always written; a file without the field is version 0. `SceneFile::parse` / `load` reject a version newer than supported and run the `MIGRATIONS` chain (`fn(&mut SceneFile)`, entry `n` takes `n → n+1`).
+`FORMAT_VERSION` is 6 now and is always written; a file without the field is version 0. `SceneFile::parse` / `load` reject a version newer than supported and run the `MIGRATIONS` chain (`fn(&mut SceneFile)`, entry `n` takes `n → n+1`).
 
 | Version | What changed |
 |---|---|

@@ -1,0 +1,12 @@
+// Scene of version 6: v5 plus collision layers (`layer`, `mask` of a collider).
+// A collider without them is on layer 0 and collides with every layer.
+(
+    version: 6,
+    entities: [
+        (id: 1, name: "Level", position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Box(size: (10.0, 1.0, 10.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0))),
+        (id: 2, name: "Ghost", position: (0.0, 2.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            collider: Some((shape: Sphere(radius: 0.5), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.6, restitution: 0.0,
+                layer: 3, mask: 5))),
+    ],
+)

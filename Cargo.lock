@@ -3677,6 +3677,7 @@ dependencies = [
  "olvin_game",
  "olvin_gui",
  "olvin_input",
+ "olvin_locale",
  "olvin_net",
  "olvin_physics",
  "olvin_render",
@@ -3949,6 +3950,15 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tempfile",
+]
+
+[[package]]
+name = "olvin_locale"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "olvin_core",
+ "ron",
 ]
 
 [[package]]

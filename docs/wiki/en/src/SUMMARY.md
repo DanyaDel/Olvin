@@ -56,6 +56,7 @@
 - [Scripting](engine/scripting.md)
 - [States and saves](engine/game-states-saves.md)
 - [Time and events](engine/time-events.md)
+- [Localization](engine/localization.md)
 - [Networking](engine/networking.md)
 - [Profiler](engine/profiler.md)
 

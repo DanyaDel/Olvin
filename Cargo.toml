@@ -27,6 +27,7 @@ olvin = { path = "crates/olvin" }
 olvin_ui = { path = "crates/olvin_ui" }
 # The list of projects the hub and the editor may build and run (T1).
 olvin_trust = { path = "crates/olvin_trust" }
+olvin_locale = { path = "crates/olvin_locale" }
 
 glam = { version = "0.34", features = ["bytemuck", "serde"] }
 hecs = "0.11"

@@ -38,6 +38,7 @@ crates/
   olvin_window/       winit: window, Input, main loop (runner)
   olvin_render/       wgpu: PBR materials, textures, sky, custom shaders, lights (up to 16), cascaded shadows, transparency, fog, ACES, bloom/GTAO/FXAA/LUT (Full), height fog
   olvin/              facade: re-exports, DefaultPlugins, prelude, features window/render/scene/physics/script/lua/input/audio/game/gui
+  olvin_locale/       localisation (feature `locale`): `Locale` string tables per language (`assets/locales/*.ron`), fallback language, `{name}` placeholders, plural forms by language rules, `LocalePlugin`
   olvin_trust/        list of trusted projects (hub and editor): `TrustStore`, the question text (T1)
   olvin_ui/           shared UI kit of the editor and the hub (egui): 4 themes from STYLE.md, fonts, logo drawn in code, animations
   olvin_text/         text without a GPU: font (ab_glyph), glyph atlas, line layout, built-in Inter (Latin + Cyrillic)

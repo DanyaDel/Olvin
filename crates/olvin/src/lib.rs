@@ -19,6 +19,8 @@ pub use olvin_ecs as ecs;
 pub use olvin_game as game;
 #[cfg(feature = "gui")]
 pub use olvin_gui as gui;
+#[cfg(feature = "locale")]
+pub use olvin_locale as locale;
 #[cfg(feature = "net")]
 pub mod net;
 #[cfg(feature = "input")]

@@ -38,6 +38,7 @@ crates/
   olvin_window/       winit: окно, Input, главный цикл (runner)
   olvin_render/       wgpu: PBR-материалы, текстуры, небо, свои шейдеры, свет (до 16), каскадные тени, прозрачность, туман, ACES, bloom/GTAO/FXAA/LUT (Full), height fog
   olvin/              фасад: реэкспорты, DefaultPlugins, prelude, features window/render/scene/physics/script/lua/input/audio/game/gui
+  olvin_locale/       локализация (фича `locale`): таблицы строк `Locale` по языкам (`assets/locales/*.ron`), резервный язык, подстановки `{name}`, формы множественного числа по правилам языка, `LocalePlugin`
   olvin_trust/        список доверенных проектов (хаб и редактор): `TrustStore`, текст вопроса (T1)
   olvin_ui/           общий UI-кит редактора и хаба (egui): 4 темы из STYLE.md, шрифты, логотип кодом, анимации
   olvin_text/         текст без GPU: шрифт (ab_glyph), атлас глифов, раскладка строк, встроенный Inter (латиница + кириллица)

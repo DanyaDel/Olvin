@@ -8,7 +8,10 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+use olvin_core::integrity::{self, MANIFEST_FILE, Manifest, PUBKEY_ENV, SIGNATURE_FILE, Signer};
+
 use crate::Project;
+use crate::signing::{Signing, resolve_signer};
 
 /// Written into a folder the hub made, so a rebuild may replace it but never
 /// wipes a folder the user pointed `--out` at by mistake.
@@ -61,6 +64,10 @@ pub struct BuildOptions {
     /// Release only: keep real build paths in the binary (panic locations,
     /// debug info). By default they are rewritten, see [`remap_rules`].
     pub no_remap: bool,
+    /// Release only: which key signs `manifest.json` (see [`Signing`]). Without
+    /// a key the manifest is written unsigned and the game has no public key
+    /// to check against.
+    pub signing: Signing,
 }
 
 #[derive(Debug)]
@@ -75,6 +82,14 @@ pub struct BuildReport {
     /// Separate debug symbols of the shipped executable (`--keep-symbols`). Keep
     /// them private: they are not in `out_dir` and not in the archive.
     pub symbols: Option<PathBuf>,
+    /// `manifest.json` (release builds): hashes of every shipped file.
+    pub manifest: Option<PathBuf>,
+    /// `manifest.json` has a signature and the game has the public key.
+    pub signed: bool,
+    /// The public key embedded in the game, hex.
+    pub public_key: Option<String>,
+    /// The build id (start of the executable's SHA-256): names symbol files and crash reports.
+    pub build_id: Option<String>,
     /// `/dist` was appended to the project's `.gitignore` (see [`Project::build`]).
     pub gitignore_updated: bool,
 }
@@ -97,9 +112,15 @@ impl Project {
         if options.keep_symbols && options.no_strip {
             bail!("--keep-symbols and --no-strip contradict each other");
         }
-        let built = self.cargo_build(options)?;
-        let exe = built.exe.clone();
         let out = options.out.clone().unwrap_or_else(|| self.dist_dir());
+        // Resolved before the long cargo build: a bad key fails now, not after minutes.
+        let signer = if options.release {
+            resolve_signer(&options.signing, &[self.root(), &out])?
+        } else {
+            None
+        };
+        let built = self.cargo_build(options, signer.as_ref())?;
+        let exe = built.exe.clone();
         prepare_out(&out)?;
         let gitignore_updated = options.out.is_none() && ignore_dist(self.root())?;
 
@@ -121,6 +142,10 @@ impl Project {
             .keep_symbols
             .then(|| split_symbols(&built, &binary, &out, self.name()))
             .transpose()?;
+        let manifest = options
+            .release
+            .then(|| write_manifest(&out, &binary, signer.as_ref()))
+            .transpose()?;
         let archive = options
             .archive
             .map(|format| pack(&out, self.name(), format))
@@ -132,6 +157,10 @@ impl Project {
             licenses,
             archive,
             symbols,
+            manifest: manifest.as_ref().map(|(path, _)| path.clone()),
+            signed: signer.is_some(),
+            public_key: signer.as_ref().map(|s| s.public_key().to_hex()),
+            build_id: manifest.map(|(_, id)| id),
             gitignore_updated,
         })
     }
@@ -158,7 +187,7 @@ impl Project {
     }
 
     /// Runs `cargo build` and returns the game's executable (and the debug files next to it).
-    fn cargo_build(&self, options: &BuildOptions) -> Result<Built> {
+    fn cargo_build(&self, options: &BuildOptions, signer: Option<&Signer>) -> Result<Built> {
         let manifest = self.root().join("Cargo.toml");
         let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         cmd.args(["build", "--message-format=json-render-diagnostics"])
@@ -179,6 +208,12 @@ impl Project {
                 set_rustflags(&mut cmd, &remap_flags(&rules));
             }
         }
+        // The game reads the key with `option_env!` (`integrity_plugin!`): only
+        // a signed build has one, and a stray variable must not leak into an unsigned one.
+        match signer {
+            Some(signer) => cmd.env(PUBKEY_ENV, signer.public_key().to_hex()),
+            None => cmd.env_remove(PUBKEY_ENV),
+        };
         if let Some(dir) = &options.target_dir {
             cmd.arg("--target-dir").arg(dir);
         }
@@ -418,16 +453,28 @@ fn run_tool(cmd: &mut Command) -> Result<()> {
 /// First 16 hex digits of the file's SHA-256: names symbol files so a crash
 /// report from a shipped build finds the symbols of exactly that build.
 fn build_id(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
-    Ok(hasher
-        .finalize()
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(integrity::sha256_file(path)?[..16].to_owned())
+}
+
+/// Writes `manifest.json` (and `manifest.sig` with a `signer`) into the game
+/// folder; returns the manifest's path and the build id.
+fn write_manifest(out: &Path, binary: &Path, signer: Option<&Signer>) -> Result<(PathBuf, String)> {
+    let exe = binary
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("the executable's name is not UTF-8")?;
+    let manifest = Manifest::build(out, exe, env!("CARGO_PKG_VERSION"))
+        .context("could not hash the files of the build")?;
+    let json = manifest.to_json();
+    let path = out.join(MANIFEST_FILE);
+    fs::write(&path, &json)?;
+    if let Some(signer) = signer {
+        fs::write(
+            out.join(SIGNATURE_FILE),
+            format!("{}\n", signer.sign_hex(json.as_bytes())),
+        )?;
+    }
+    Ok((path, manifest.build_id))
 }
 
 /// Appends `/dist` to `<root>/.gitignore` unless a line already covers it.
@@ -606,6 +653,8 @@ mod tests {
     fn options(dir: &Path) -> BuildOptions {
         BuildOptions {
             target_dir: Some(dir.join("target")),
+            // Never pick up a real key from the developer's config folder.
+            signing: Signing::Off,
             ..Default::default()
         }
     }
@@ -892,6 +941,98 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.to_string().contains("contradict"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn run_stdout(binary: &Path) -> String {
+        let run = Command::new(binary).output().unwrap();
+        String::from_utf8_lossy(&run.stdout).trim().to_owned()
+    }
+
+    /// B2: a release build with a key embeds the public key in the game, writes a
+    /// signed manifest that verifies, and the archive carries it but not the key.
+    #[test]
+    fn signed_release_has_a_manifest_that_verifies_and_the_key_stays_out() {
+        let dir = temp_dir("signed");
+        let game = tiny_game(&dir);
+        fs::write(
+            game.root().join("src/main.rs"),
+            "use olvin as _;\nfn main() { println!(\"{}\", option_env!(\"OLVIN_PUBKEY\").unwrap_or(\"none\")); }\n",
+        )
+        .unwrap();
+        let key = dir.join("keys/release.key");
+        let public = crate::signing::generate_key(&key, false, &[game.root()]).unwrap();
+
+        let unsigned = game
+            .build(&BuildOptions {
+                release: true,
+                ..options(&dir)
+            })
+            .unwrap();
+        assert!(!unsigned.signed && unsigned.public_key.is_none());
+        assert!(unsigned.manifest.unwrap().is_file());
+        assert!(!unsigned.out_dir.join(SIGNATURE_FILE).exists());
+        assert_eq!(run_stdout(&unsigned.binary), "none");
+
+        let out = dir.join("out/tiny");
+        let report = game
+            .build(&BuildOptions {
+                release: true,
+                signing: Signing::Key(key.clone()),
+                out: Some(out.clone()),
+                archive: Some(ArchiveFormat::TarGz),
+                ..options(&dir)
+            })
+            .unwrap();
+        assert!(report.signed);
+        assert_eq!(report.public_key.as_deref(), Some(public.to_hex().as_str()));
+        assert_eq!(
+            run_stdout(&report.binary),
+            public.to_hex(),
+            "the game has the key"
+        );
+        let verified = integrity::verify_dir(&out, Some(&public));
+        assert!(verified.ok(), "{:?}", verified.problems);
+        assert_eq!(verified.signature, integrity::SignatureState::Valid);
+        assert_eq!(verified.build_id, report.build_id);
+        // icon.png, scenes/main.scene.ron and the executable.
+        assert_eq!(verified.files_checked, 3);
+
+        let mut names = Vec::new();
+        let gz = flate2::read::GzDecoder::new(File::open(report.archive.unwrap()).unwrap());
+        for entry in tar::Archive::new(gz).entries().unwrap() {
+            names.push(entry.unwrap().path().unwrap().display().to_string());
+        }
+        assert!(
+            names.contains(&"tiny/manifest.json".to_owned()),
+            "{names:?}"
+        );
+        assert!(names.contains(&"tiny/manifest.sig".to_owned()));
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.contains(".key") && !n.contains("keys"))
+        );
+
+        // A patched asset in the shipped folder is found.
+        fs::write(out.join("assets/icon.png"), [9, 9, 9]).unwrap();
+        let tampered = integrity::verify_dir(&out, Some(&public));
+        assert_eq!(
+            tampered.problems,
+            [integrity::Problem::Modified("assets/icon.png".into())]
+        );
+
+        // A key inside the project is refused before cargo even starts.
+        let inside = game.root().join("release.key");
+        fs::copy(&key, &inside).unwrap();
+        let err = game
+            .build(&BuildOptions {
+                release: true,
+                signing: Signing::Key(inside),
+                ..options(&dir)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("inside"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }
 

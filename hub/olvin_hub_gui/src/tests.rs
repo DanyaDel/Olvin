@@ -42,6 +42,13 @@ fn dialogs_fit_their_content() {
             },
             "add-existing",
         ),
+        (
+            Modal::Trust {
+                root: PathBuf::from("/home/someone/downloads/a_game_with_a_rather_long_name"),
+                then: TrustThen::Run { release: true },
+            },
+            "trust",
+        ),
     ];
     for (modal, id) in cases {
         let rect = modal_rect(modal, id);
@@ -96,6 +103,69 @@ fn create_from_template_then_toggle_modules_and_forget() {
     assert!(hub.rows[0].missing);
     hub.forget(&root);
     assert!(hub.rows.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// T1: a project the hub made is trusted; one that was only added is not, and
+/// opening or running it asks first instead of starting cargo.
+#[test]
+fn untrusted_projects_ask_before_they_open_or_run() {
+    let dir = temp("trust");
+    let mut hub = Hub::new(HubConfig::default(), None);
+    hub.config_file = Some(dir.join("config/config.toml"));
+    let modules: Vec<String> = TEMPLATES[2].modules.iter().map(|m| m.to_string()).collect();
+    assert!(hub.create_project("mine", dir.to_str().unwrap(), &modules));
+    let mine = hub.rows[0].root.clone();
+    assert!(hub.trust.is_trusted(&mine), "made by the hub");
+
+    // Someone else's project, added by path.
+    let theirs = Project::create(
+        &dir,
+        "theirs",
+        &olvin_hub::EngineSource::default(),
+        &Catalog::builtin(),
+    )
+    .unwrap();
+    assert!(hub.add_existing(theirs.root().to_str().unwrap()));
+    let theirs = theirs.root().to_path_buf();
+    assert!(!hub.trust.is_trusted(&theirs));
+
+    // Run: the question comes first, nothing is started.
+    hub.row_action(theirs.clone(), RowAction::Release, 0.0);
+    assert!(
+        matches!(&hub.modal, Some(Modal::Trust { root, then: TrustThen::Run { release: true } }) if *root == theirs),
+        "no trust modal"
+    );
+    assert!(
+        hub.game.is_none() && hub.build.is_none(),
+        "cargo must not start"
+    );
+    // Open asks as well.
+    hub.modal = None;
+    hub.row_action(theirs.clone(), RowAction::Open, 0.0);
+    assert!(matches!(
+        &hub.modal,
+        Some(Modal::Trust {
+            then: TrustThen::Open,
+            ..
+        })
+    ));
+    // A trusted project goes straight through (no editor here: an error toast, no modal).
+    hub.modal = None;
+    hub.row_action(mine.clone(), RowAction::Open, 0.0);
+    assert!(hub.modal.is_none());
+
+    // "Open read-only" does not trust; the flag does not linger without an editor.
+    hub.open_read_only(theirs.clone());
+    assert!(!hub.trust.is_trusted(&theirs));
+    assert!(!hub.open_read_only);
+
+    // "Trust and continue" remembers the folder.
+    hub.trust_and_continue(theirs.clone(), TrustThen::Open);
+    assert!(hub.trust.is_trusted(&theirs));
+    hub.modal = None;
+    hub.row_action(theirs, RowAction::Open, 0.0);
+    assert!(hub.modal.is_none(), "asked again after trusting");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

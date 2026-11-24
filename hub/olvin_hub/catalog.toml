@@ -85,6 +85,15 @@ kind = "olvin"
 feature = "game"
 
 [[module]]
+id = "integrity"
+name = "Integrity check"
+category = "Olvin"
+description = "Signed manifest of the shipped files, checked at start of release builds (olvin-hub keygen, build --release); a signal against tampering, not protection from a patched executable"
+kind = "olvin"
+feature = "integrity"
+default = true
+
+[[module]]
 id = "gltf"
 name = "glTF loading"
 category = "Assets"

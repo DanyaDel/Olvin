@@ -1,4 +1,4 @@
-//! Modal dialogs: New project, Add project, Modules. Each pops in with
+//! Modal dialogs: New project, Add project, Modules, Trust this project. Each pops in with
 //! `--ease-pop` on a glass-ish surface with `--radius-lg`.
 
 use eframe::egui::{
@@ -8,7 +8,7 @@ use olvin_hub::{Catalog, Project, name_problem};
 
 use crate::ui::{self, FS_MD, FS_SM, FS_XL, Palette, RADIUS_LG, RADIUS_MD, anim};
 use crate::widgets::{Btn, Icon, bold, card_bg, mono, paint_icon, sans, since, truncated};
-use crate::{Hub, Modal, TEMPLATES};
+use crate::{Hub, Modal, TEMPLATES, TrustThen};
 
 /// Shows `content` in a modal that pops in. Returns (content result, should close).
 fn dialog<R>(
@@ -469,6 +469,65 @@ impl Hub {
                     let path = path.clone();
                     if self.add_existing(&path) {
                         keep = false;
+                    }
+                }
+            }
+            Modal::Trust { root, then } => {
+                let width = (screen.width() - 80.0).clamp(280.0, 520.0);
+                let (root, then) = (root.clone(), *then);
+                let name = crate::file_name(&root);
+                let doing = match then {
+                    TrustThen::Open => "open it in the editor".to_owned(),
+                    TrustThen::Run { .. } => "build and run it".to_owned(),
+                };
+                let mut choice = None;
+                let ((), close) = dialog(ctx, "trust", self.modal_at, width, |ui| {
+                    if title(
+                        ui,
+                        "Trust this project?",
+                        &format!("{name} was not made by this hub, and you asked to {doing}."),
+                    ) {
+                        keep = false;
+                    }
+                    ui.label(
+                        egui::RichText::new(olvin_hub::TRUST_EXPLANATION)
+                            .font(sans(FS_MD))
+                            .color(p.text_2),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(root.display().to_string())
+                            .font(mono(FS_SM))
+                            .color(p.muted),
+                    );
+                    ui.add_space(16.0);
+                    buttons_row(ui, |ui| {
+                        if ui.add(Btn::primary("Trust and continue")).clicked() {
+                            choice = Some(true);
+                        }
+                        if ui
+                            .add(Btn::secondary("Open read-only (no build)"))
+                            .on_hover_text(
+                                "Opens it in the editor. The editor will not run cargo or shell commands for it.",
+                            )
+                            .clicked()
+                        {
+                            choice = Some(false);
+                        }
+                        if ui.add(Btn::secondary("Cancel")).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if close {
+                    keep = false;
+                }
+                if let Some(trust) = choice {
+                    keep = false;
+                    if trust {
+                        self.trust_and_continue(root, then);
+                    } else {
+                        self.open_read_only(root);
                     }
                 }
             }

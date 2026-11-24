@@ -32,6 +32,9 @@ game = ["dep:olvin_game"]
 # it is drawn over the frame with real text (`olvin::text`, built-in Inter).
 gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 
+# Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
+integrity = ["olvin_core/integrity"]
+
 # Profiler scopes (puffin) over systems, render passes, physics and scripts; set OLVIN_PROFILE=1
 # or call `olvin::core::profile::set_enabled`. Off: the scopes compile to nothing.
 profile = ["olvin_core/profile"]

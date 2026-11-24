@@ -32,10 +32,15 @@ debug = false
 }
 
 /// `graphical`: window + render + scenes; otherwise a headless app.
-pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
+/// `integrity`: the `integrity` module is on, so `main.rs` adds the start-up check.
+pub fn files(name: &str, graphical: bool, integrity: bool) -> [(&'static str, String); 3] {
     let main = if graphical { MAIN_RS } else { HEADLESS_RS };
+    let check = if integrity { INTEGRITY_RS } else { "" };
     [
-        ("src/main.rs", main.replace("{name}", name)),
+        (
+            "src/main.rs",
+            main.replace("{name}", name).replace("{integrity}", check),
+        ),
         // `olvin-hub build` puts the game into dist/ (see `Project::dist_dir`).
         (".gitignore", GITIGNORE.into()),
         (
@@ -51,6 +56,15 @@ pub fn files(name: &str, graphical: bool) -> [(&'static str, String); 3] {
 /// Build output, logs and save slots are not sources.
 pub const GITIGNORE: &str = "/target\n/dist\n/logs\n/saves\n";
 
+/// Added to `main.rs` by the `integrity` module.
+const INTEGRITY_RS: &str = r#"
+    // Release builds signed by `olvin-hub build --release` (key: `olvin-hub keygen`)
+    // check their files against manifest.json at start. Development runs skip it.
+    // Policy::Warn only logs. A signal, not protection: see the wiki, "Security of builds".
+    #[cfg(not(debug_assertions))]
+    app.add_plugin(olvin::core::integrity_plugin!());
+"#;
+
 const MAIN_RS: &str = r#"use olvin::prelude::*;
 
 struct Spin(f32);
@@ -63,7 +77,7 @@ fn main() {
         .file("logs/game.log")
         .init();
 
-    let mut app = App::new();
+    let mut app = App::new();{integrity}
     app.add_plugin(DefaultPlugins {
         window: WindowPlugin { title: "{name}".into(), ..Default::default() },
         ..Default::default()
@@ -116,7 +130,7 @@ use olvin::prelude::*;
 fn main() {
     // logs/ inside the project folder, wherever the game is started from.
     olvin::core::Logging::new("info").file("logs/game.log").init();
-    let mut app = App::new();
+    let mut app = App::new();{integrity}
     app.add_plugin(HeadlessPlugins::default()).add_system(Stage::Update, |res| {
         if res.fetch::<Time>().frame() >= 3 {
             println!("{name}: headless app is running");

@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use anyhow::Context as _;
 use eframe::egui;
-use olvin_hub::{Catalog, EditorInstall, HubConfig};
+use olvin_hub::{Catalog, EditorInstall, HubConfig, TrustStore};
 
 mod chrome;
 mod dialogs;
@@ -67,12 +67,27 @@ pub(crate) const TEMPLATES: [Template; 3] = [
     Template {
         name: "3D",
         description: "Window, 3D rendering and editor scenes. The starting point for most games.",
-        modules: &["window", "render", "scenes", "scripts", "input"],
+        modules: &[
+            "window",
+            "render",
+            "scenes",
+            "scripts",
+            "input",
+            "integrity",
+        ],
     },
     Template {
         name: "3D + Physics",
         description: "Everything in 3D plus Rapier physics: rigidbodies and collisions.",
-        modules: &["window", "render", "scenes", "scripts", "input", "physics"],
+        modules: &[
+            "window",
+            "render",
+            "scenes",
+            "scripts",
+            "input",
+            "physics",
+            "integrity",
+        ],
     },
     Template {
         name: "Empty",
@@ -113,6 +128,18 @@ pub(crate) enum Modal {
     Modules {
         root: PathBuf,
     },
+    /// "Trust this project?" before the hub builds or runs a project it did not create.
+    Trust {
+        root: PathBuf,
+        then: TrustThen,
+    },
+}
+
+/// What the user was doing when the trust question came up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TrustThen {
+    Open,
+    Run { release: bool },
 }
 
 pub(crate) struct Row {
@@ -181,6 +208,10 @@ pub(crate) struct Hub {
     open_after_build: Option<Option<PathBuf>>,
     /// Cached "engine changed since the editor build" check (it walks the sources).
     stale: Option<(std::time::Instant, bool)>,
+    /// Projects the user allowed to build and run (shared with the editor).
+    trust: TrustStore,
+    /// The next editor launch is "Open read-only": no cargo or shell jobs in it.
+    open_read_only: bool,
 }
 
 pub(crate) fn theme_key(kind: ThemeKind) -> &'static str {

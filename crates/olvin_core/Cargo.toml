@@ -11,6 +11,8 @@ repository.workspace = true
 profile = ["dep:puffin"]
 # Serve the profile over TCP for puffin_viewer (OLVIN_PROFILE_HTTP=1).
 profile-http = ["profile", "dep:puffin_http"]
+# Signed manifest of the shipped files and the start-up check (`integrity::IntegrityPlugin`).
+integrity = ["dep:sha2", "dep:ed25519-dalek", "dep:serde", "dep:serde_json"]
 
 [dependencies]
 puffin = { version = "0.20", optional = true }
@@ -20,3 +22,8 @@ log.workspace = true
 # E3: secrets are wiped on drop; E1: string literals scrambled in the binary.
 zeroize = "1"
 obfstr = "0.4"
+# B2: SHA-256 hashes and Ed25519 signatures (feature `integrity`).
+sha2 = { version = "0.10", optional = true }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast", "zeroize"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }

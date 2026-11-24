@@ -32,6 +32,8 @@ impl Hub {
         .and_then(|p| {
             self.config.register(p.root())?;
             self.save_config()?;
+            // We just wrote it: no question about our own project.
+            self.trust.trust(p.root())?;
             Ok(p.name().to_owned())
         });
         let ok = result.is_ok();
@@ -150,6 +152,7 @@ impl Hub {
             return;
         }
         let Some(install) = &self.editor else {
+            self.open_read_only = false;
             self.toast_error("No data folder for the editor install on this system");
             return;
         };
@@ -161,7 +164,8 @@ impl Hub {
             return;
         }
         let name = project.as_deref().map(file_name);
-        let result = install.launch(project.as_deref());
+        let read_only = std::mem::take(&mut self.open_read_only);
+        let result = install.launch_with(project.as_deref(), read_only);
         self.report(result, |_| match name {
             Some(n) => format!("Opened {n} in the editor"),
             None => "Opened the editor".into(),
@@ -201,6 +205,7 @@ impl Hub {
                     }
                 } else {
                     self.open_after_build = None;
+                    self.open_read_only = false;
                     self.log_open = true;
                     self.toast_error("Editor build failed. Open the log on the Editor page.");
                 }
@@ -228,11 +233,42 @@ impl Hub {
         stale
     }
 
+    /// Does `then` for a trusted project; for any other asks first (the Trust modal).
+    fn guarded(&mut self, root: PathBuf, then: TrustThen, now: f64) {
+        if self.trust.is_trusted(&root) {
+            self.proceed(root, then);
+        } else {
+            self.open_modal(Modal::Trust { root, then }, now);
+        }
+    }
+
+    pub(crate) fn proceed(&mut self, root: PathBuf, then: TrustThen) {
+        match then {
+            TrustThen::Open => self.open_editor(Some(root)),
+            TrustThen::Run { release } => self.run_game(&root, release),
+        }
+    }
+
+    /// "Trust and continue": remembers the project, then does what was asked.
+    pub(crate) fn trust_and_continue(&mut self, root: PathBuf, then: TrustThen) {
+        match self.trust.trust(&root) {
+            Ok(_) => self.proceed(root, then),
+            Err(e) => self.toast_error(format!("Could not save the trust list: {e}")),
+        }
+    }
+
+    /// "Open read-only (no build)": the editor opens the project, without
+    /// permission to run cargo or shell commands for it.
+    pub(crate) fn open_read_only(&mut self, root: PathBuf) {
+        self.open_read_only = true;
+        self.open_editor(Some(root));
+    }
+
     pub(crate) fn row_action(&mut self, root: PathBuf, action: RowAction, now: f64) {
         match action {
-            RowAction::Open => self.open_editor(Some(root)),
-            RowAction::Run => self.run_game(&root, false),
-            RowAction::Release => self.run_game(&root, true),
+            RowAction::Open => self.guarded(root, TrustThen::Open, now),
+            RowAction::Run => self.guarded(root, TrustThen::Run { release: false }, now),
+            RowAction::Release => self.guarded(root, TrustThen::Run { release: true }, now),
             RowAction::Modules => self.open_modal(Modal::Modules { root }, now),
             RowAction::Reveal => {
                 if let Err(e) = Command::new("xdg-open").arg(&root).spawn() {

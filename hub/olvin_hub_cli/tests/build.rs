@@ -44,6 +44,8 @@ fn hub(dir: &Path, args: &[&str]) -> Output {
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_DATA_HOME", dir.join("data"))
         .env("HOME", dir.join("home"))
+        // These tests build projects the hub did not create; trust has its own tests.
+        .env("OLVIN_TRUST", "1")
         // The nested cargo gets its own target dir, not the test run's.
         .env("CARGO_TARGET_DIR", dir.join("target"))
         .output()

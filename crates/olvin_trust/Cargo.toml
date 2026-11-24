@@ -1,0 +1,12 @@
+[package]
+name = "olvin_trust"
+description = "Olvin: the list of projects the user trusts to build and run (shared by olvin-hub and olvin-editor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+toml.workspace = true
+serde.workspace = true
+dirs.workspace = true

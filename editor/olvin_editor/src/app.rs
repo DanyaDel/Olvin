@@ -100,6 +100,10 @@ impl EditorApp {
         let layout = Layout::load(&registry);
         let mut state = EditorState::new(project);
         state.prefs = crate::prefs::Preferences::load();
+        state.check_trust(
+            &olvin_trust::TrustStore::load(),
+            olvin_trust::env_read_only(),
+        );
         state.ext = registry.instantiate_extensions();
         state.gpu = gpu;
         if !registry.plugins().is_empty() {
@@ -622,6 +626,47 @@ impl EditorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.state.trust_pending
+            && let Some(project) = self.state.project.clone()
+        {
+            let mut choice = None;
+            egui::Modal::new(Id::new("trust")).show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.heading("Trust this project?");
+                ui.label(project.display().to_string());
+                ui.add_space(6.0);
+                ui.label(olvin_trust::EXPLANATION);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Trust and continue").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Open without building").clicked() {
+                        choice = Some(false);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                });
+            });
+            match choice {
+                Some(true) => {
+                    let mut store = olvin_trust::TrustStore::load();
+                    match store.trust(&project) {
+                        Ok(_) => {
+                            self.state.project_trusted = true;
+                            self.state.info("project trusted");
+                        }
+                        Err(e) => self
+                            .state
+                            .error(format!("could not save the trust list: {e}")),
+                    }
+                    self.state.trust_pending = false;
+                }
+                Some(false) => self.state.trust_pending = false,
+                None => {}
+            }
+        }
         if let Some(target) = self.overwrite.clone() {
             let mut choice = None;
             egui::Modal::new(Id::new("overwrite")).show(ctx, |ui| {

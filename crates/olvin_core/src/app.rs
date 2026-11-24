@@ -102,7 +102,13 @@ impl App {
     }
 
     /// Hands control to the runner. Without one, runs a headless loop until exit.
+    /// An exit already requested while the app was being built (a failed
+    /// integrity check, say) means it never starts: no window, no runner.
     pub fn run(mut self) {
+        if self.exit_requested() {
+            log::info!("exit requested before start, not running");
+            return;
+        }
         let runner = self.runner.take().unwrap_or_else(|| Box::new(run_headless));
         runner(self);
     }
@@ -162,6 +168,17 @@ mod tests {
                 }
             });
         }
+    }
+
+    #[test]
+    fn an_exit_requested_while_building_stops_run_before_the_runner() {
+        let mut app = App::new();
+        app.resources.fetch_mut::<AppExit>().requested = true;
+        let ran = Rc::new(Cell::new(false));
+        let r = ran.clone();
+        app.set_runner(move |_| r.set(true));
+        app.run();
+        assert!(!ran.get());
     }
 
     #[test]

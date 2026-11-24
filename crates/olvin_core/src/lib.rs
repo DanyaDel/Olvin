@@ -3,6 +3,8 @@
 
 mod app;
 mod events;
+#[cfg(feature = "integrity")]
+pub mod integrity;
 pub mod logging;
 mod paths;
 mod plugin;

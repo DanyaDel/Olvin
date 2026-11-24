@@ -1,7 +1,7 @@
 //! Hub state: construction from the saved config, persistence, the project
 //! list, toasts, page and dialog switching.
 
-use olvin_hub::{Catalog, EditorInstall, HubConfig, Project};
+use olvin_hub::{Catalog, EditorInstall, HubConfig, Project, TrustStore};
 
 use crate::*;
 
@@ -23,6 +23,7 @@ impl Hub {
             }
         };
         let mut hub = Self::new(config, EditorInstall::locate().ok());
+        hub.trust = TrustStore::load();
         if let Some(e) = error {
             hub.toast_error(e);
         }
@@ -64,6 +65,9 @@ impl Hub {
             log_open: false,
             open_after_build: None,
             stale: None,
+            // `load` reads the user's list; tests and `new` alone touch no file.
+            trust: TrustStore::in_memory(),
+            open_read_only: false,
             config,
         };
         hub.refresh();

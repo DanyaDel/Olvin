@@ -76,6 +76,9 @@ jobs:
       - name: литерал obf! не лежит в релизном бинарнике (E1)
         run: cargo test -p olvin_core --test obf_binary --locked -- --ignored
 
+      - name: подписанная сборка проверяет себя и отказывается от подменённых файлов (B2, E2)
+        run: cargo test -p olvin_hub_cli --test signed_game --locked -- --ignored
+
       - name: смоук-тест окна (виртуальный дисплей)
         run: OLVIN_WINDOW_SMOKE=1 xvfb-run -a cargo test -p olvin_window --test window_smoke --locked
 

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use olvin_hub::{
     ArchiveFormat, BuildOptions, Catalog, Category, EditorInstall, EngineSource, HubConfig,
-    OnConflict, Project, Status,
+    OnConflict, Project, SignatureState, Signing, Status, TrustStore,
 };
 
 /// Text logo for the help header: `Olvin_` with a green underscore cursor
@@ -71,6 +71,9 @@ enum Cmd {
         project: Option<PathBuf>,
         #[arg(long)]
         release: bool,
+        /// Run a project that is not trusted (this once; same as OLVIN_TRUST=1)
+        #[arg(long)]
+        trust: bool,
     },
     /// Build the game and lay out a folder (or archive) for players: executable + assets
     Build {
@@ -94,6 +97,37 @@ enum Cmd {
         /// Release: keep real build paths (home, project) in the binary
         #[arg(long)]
         no_remap: bool,
+        /// Release: sign manifest.json with this key file (default: $OLVIN_SIGNING_KEY_DATA,
+        /// $OLVIN_SIGNING_KEY, then the key made by `olvin-hub keygen`)
+        #[arg(long, value_name = "FILE", conflicts_with = "no_sign")]
+        sign_key: Option<PathBuf>,
+        /// Release: do not sign, even if a key is available
+        #[arg(long)]
+        no_sign: bool,
+        /// Build a project that is not trusted (this once; same as OLVIN_TRUST=1)
+        #[arg(long)]
+        trust: bool,
+    },
+    /// Trust a project: building and running it is allowed without asking (default: the one in the current folder)
+    Trust { path: Option<PathBuf> },
+    /// Stop trusting a project
+    Untrust { path: Option<PathBuf> },
+    /// Create the release signing key (Ed25519, mode 0600, outside any project)
+    Keygen {
+        /// Where to write the private key (default: <config>/olvin-hub/keys/release.key)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Overwrite an existing key (builds signed with the old one stop verifying)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Check a built game folder against its manifest.json (and its signature)
+    Verify {
+        /// The folder `olvin-hub build` made (the one with manifest.json)
+        folder: PathBuf,
+        /// Public key: 64 hex digits or a .pub file. Without it only hashes are compared
+        #[arg(long, value_name = "KEY")]
+        pubkey: Option<String>,
     },
     /// Projects the hub knows about
     Projects,
@@ -204,6 +238,9 @@ fn run(cli: Cli) -> Result<()> {
             let project = Project::create(&parent, &name, &config.engine, &catalog)?;
             config.register(project.root())?;
             config.save()?;
+            // Made here, so it is ours: no prompt for the project we just wrote.
+            let mut trusted = TrustStore::load();
+            trusted.trust(project.root())?;
             let installed: Vec<_> = project
                 .installed(&catalog)
                 .iter()
@@ -271,8 +308,13 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Cmd::Run { project, release } => {
+        Cmd::Run {
+            project,
+            release,
+            trust,
+        } => {
             let project = open(project.as_deref())?;
+            require_trust(&project, trust)?;
             let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
             cmd.arg("run").current_dir(project.root());
             if release {
@@ -291,8 +333,12 @@ fn run(cli: Cli) -> Result<()> {
             keep_symbols,
             no_strip,
             no_remap,
+            sign_key,
+            no_sign,
+            trust,
         } => {
             let project = open(project.as_deref())?;
+            require_trust(&project, trust)?;
             let archive = archive.as_deref().map(ArchiveFormat::parse).transpose()?;
             println!(
                 "building {} ({})…",
@@ -307,6 +353,11 @@ fn run(cli: Cli) -> Result<()> {
                 keep_symbols,
                 no_strip,
                 no_remap,
+                signing: match (sign_key, no_sign) {
+                    (Some(key), _) => Signing::Key(key),
+                    (None, true) => Signing::Off,
+                    (None, false) => Signing::Auto,
+                },
             })?;
             println!("game:    {}", report.binary.display());
             println!(
@@ -320,6 +371,20 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(archive) = report.archive {
                 println!("archive: {}", archive.display());
             }
+            if let Some(manifest) = &report.manifest {
+                println!(
+                    "manifest: {} (build {})",
+                    manifest.display(),
+                    report.build_id.as_deref().unwrap_or("?")
+                );
+                match &report.public_key {
+                    Some(key) => println!("signed:   yes, public key {key}"),
+                    None => println!(
+                        "signed:   no. The game has no key to check against. Make one with \
+                         `olvin-hub keygen` (see the wiki page \"Security of builds\")"
+                    ),
+                }
+            }
             if let Some(symbols) = report.symbols {
                 println!(
                     "symbols: {} (keep private: not in the folder or archive)",
@@ -330,14 +395,95 @@ fn run(cli: Cli) -> Result<()> {
                 println!("added /dist to .gitignore");
             }
         }
+        Cmd::Keygen { out, force } => {
+            let path = match out {
+                Some(out) => out,
+                None => olvin_hub::default_key_path()?,
+            };
+            // Neither the project in the current folder nor the one around the key's folder.
+            let here = Project::discover(&std::env::current_dir()?).ok();
+            let near = path
+                .parent()
+                .filter(|d| d.is_dir())
+                .and_then(|d| Project::discover(d).ok());
+            let guarded: Vec<&Path> = here.iter().chain(&near).map(Project::root).collect();
+            let public = olvin_hub::generate_key(&path, force, &guarded)?;
+            println!("private key: {} (mode 0600)", path.display());
+            println!(
+                "public key:  {}  (also in {})",
+                public.to_hex(),
+                olvin_hub::public_key_path(&path).display()
+            );
+            println!(
+                "Keep the private key off this project, out of git and backed up elsewhere: \
+                 whoever has it can sign builds as you, and lose it and old releases cannot be \
+                 re-signed. Builds pick it up on their own: `olvin-hub build --release`"
+            );
+        }
+        Cmd::Verify { folder, pubkey } => {
+            let key = pubkey
+                .as_deref()
+                .map(olvin_hub::read_public_key)
+                .transpose()?;
+            let report = olvin_hub::verify_dir(&folder, key.as_ref());
+            for problem in &report.problems {
+                println!("  {problem}");
+            }
+            let signature = match report.signature {
+                SignatureState::Valid => "signature valid",
+                SignatureState::NotChecked => "signature NOT checked (no --pubkey)",
+                SignatureState::Failed => "signature FAILED",
+            };
+            if !report.ok() {
+                bail!(
+                    "{} does not match its manifest: {} problems, {signature}",
+                    folder.display(),
+                    report.problems.len()
+                );
+            }
+            println!(
+                "ok: {} files, {} KiB, {signature}, {:.1} ms, build {}",
+                report.files_checked,
+                report.bytes_hashed / 1024,
+                report.elapsed.as_secs_f64() * 1000.0,
+                report.build_id.as_deref().unwrap_or("?")
+            );
+        }
+        Cmd::Trust { path } => {
+            let project = open(path.as_deref())?;
+            let mut store = TrustStore::load();
+            if store.trust(project.root())? {
+                println!("trusted {} ({})", project.name(), project.root().display());
+                println!("{}", olvin_hub::TRUST_EXPLANATION);
+            } else {
+                println!("{} was already trusted", project.name());
+            }
+        }
+        Cmd::Untrust { path } => {
+            let project = open(path.as_deref())?;
+            let mut store = TrustStore::load();
+            if store.untrust(project.root())? {
+                println!("no longer trusting {}", project.name());
+            } else {
+                println!("{} was not trusted", project.name());
+            }
+        }
         Cmd::Projects => {
             let config = HubConfig::load()?;
+            let trusted = TrustStore::load();
             if config.projects.is_empty() {
                 println!("No projects yet. Create one: olvin-hub new <name>");
             }
             for root in &config.projects {
                 match Project::open(root) {
-                    Ok(p) => println!("{:<20} {}", p.name(), root.display()),
+                    Ok(p) => {
+                        let mark = if trusted.is_trusted(root) {
+                            ""
+                        } else {
+                            "  (not trusted)"
+                        };
+                        println!("{:<20} {}{mark}", p.name(), root.display());
+                    }
                     Err(_) => println!("{:<20} {} (not found)", "?", root.display()),
                 }
             }
@@ -584,6 +730,24 @@ fn build_editor(
     install.mark_built(&config.engine);
     println!("done: {}", install.binary().display());
     Ok(())
+}
+
+/// Cargo runs a project's build.rs and proc-macros: for a project the hub did
+/// not create and the user did not trust, that needs `--trust` (or
+/// `OLVIN_TRUST=1`), and says so in one line either way.
+fn require_trust(project: &Project, flag: bool) -> Result<()> {
+    if TrustStore::load().is_trusted(project.root()) {
+        return Ok(());
+    }
+    let warning = olvin_hub::trust_warning(project.root());
+    if flag || olvin_hub::env_trusts() {
+        eprintln!("warning: {warning} (allowed by --trust or OLVIN_TRUST)");
+        return Ok(());
+    }
+    bail!(
+        "{warning}. Read what it does, then run `olvin-hub trust {}` or add --trust for this run",
+        project.root().display()
+    )
 }
 
 fn open(project: Option<&Path>) -> Result<Project> {

@@ -24,6 +24,8 @@ olvin_gui = { path = "crates/olvin_gui" }
 olvin = { path = "crates/olvin" }
 # Shared UI kit (themes, fonts, logo, motion) for the editor and the hub.
 olvin_ui = { path = "crates/olvin_ui" }
+# The list of projects the hub and the editor may build and run (T1).
+olvin_trust = { path = "crates/olvin_trust" }
 
 glam = { version = "0.34", features = ["bytemuck", "serde"] }
 hecs = "0.11"

@@ -530,6 +530,12 @@ impl Ide {
     }
 
     pub fn start_job(&mut self, kind: JobKind, state: &mut EditorState) {
+        if !state.project_trusted {
+            state.error(
+                "project is not trusted: cargo would run its build.rs and proc-macros. Trust it first (olvin-hub trust, or reopen it in the editor)",
+            );
+            return;
+        }
         let Some(root) = self.root.clone() else {
             state.error("no project open: nothing to build");
             return;
@@ -803,6 +809,35 @@ mod tests {
         assert_eq!(Command::QuickOpen.keys(), "Ctrl+E");
         assert_eq!(classify("error[E0308]: x"), OutKind::Error);
         assert_eq!(classify("   Finished `dev` profile"), OutKind::Success);
+    }
+
+    /// T1: an untrusted project never gets a cargo job, and says why.
+    #[test]
+    fn untrusted_projects_do_not_start_cargo() {
+        let dir = std::env::temp_dir().join(format!("olvin_ide_trust_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let mut state = EditorState::new(Some(dir.clone()));
+        state.check_trust(&olvin_trust::TrustStore::in_memory(), false);
+        assert!(!state.project_trusted && state.trust_pending);
+        let mut ide = Ide::default();
+        ide.set_root(Some(dir.clone()));
+        ide.start_job(JobKind::Check, &mut state);
+        assert!(!ide.job_running());
+        assert!(state.log.last().unwrap().text.contains("not trusted"));
+
+        // Read-only from the hub: untrusted, but no question.
+        let mut state = EditorState::new(Some(dir.clone()));
+        state.check_trust(&olvin_trust::TrustStore::in_memory(), true);
+        assert!(!state.project_trusted && !state.trust_pending);
+        // A trusted one is untouched.
+        let mut store = olvin_trust::TrustStore::in_memory();
+        store.trust(&dir).unwrap();
+        let mut state = EditorState::new(Some(dir.clone()));
+        state.check_trust(&store, false);
+        assert!(state.project_trusted && !state.trust_pending);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

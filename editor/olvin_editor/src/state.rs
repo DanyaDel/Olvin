@@ -131,6 +131,11 @@ pub struct EditorState {
     pub scene: SceneFile,
     pub scene_path: Option<PathBuf>,
     pub project: Option<PathBuf>,
+    /// The user allowed this project to be built and run (T1). Panels that start
+    /// cargo or shell jobs must check it; `start_job` in the IDE does.
+    pub project_trusted: bool,
+    /// The trust question is still to be asked (a modal in the app).
+    pub trust_pending: bool,
     /// The active object (gizmo, inspector).
     pub selection: Option<u64>,
     /// All selected objects when several are (always includes `selection`).
@@ -207,6 +212,8 @@ impl EditorState {
             scene: SceneFile::default(),
             scene_path: None,
             project,
+            project_trusted: true,
+            trust_pending: false,
             selection: None,
             multi: Vec::new(),
             preview: HashMap::new(),
@@ -283,6 +290,23 @@ impl EditorState {
 
     pub fn info(&mut self, text: impl Into<String>) {
         self.log(LogLevel::Info, text);
+    }
+
+    /// Decides the trust of the open project from the shared list (`olvin_trust`):
+    /// no project or a trusted one is fine; "Open read-only" from the hub
+    /// (`OLVIN_TRUST_MODE=readonly`) means untrusted without asking again;
+    /// anything else is untrusted and asks.
+    pub fn check_trust(&mut self, store: &olvin_trust::TrustStore, read_only: bool) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        self.project_trusted = store.is_trusted(project);
+        self.trust_pending = !self.project_trusted && !read_only;
+        if !self.project_trusted {
+            self.warn(
+                "project is not trusted: building and running are off (open the hub and trust it, or answer the question)",
+            );
+        }
     }
 
     pub fn warn(&mut self, text: impl Into<String>) {

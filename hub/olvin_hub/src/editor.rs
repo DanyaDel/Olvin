@@ -175,12 +175,24 @@ impl EditorInstall {
     }
 
     pub fn launch(&self, project: Option<&Path>) -> Result<Child> {
+        self.launch_with(project, false)
+    }
+
+    /// Starts the editor. `read_only`: the user chose not to trust the project
+    /// (`OLVIN_TRUST_MODE=readonly`), so the editor does not ask again and
+    /// refuses to run cargo or shell commands for it.
+    pub fn launch_with(&self, project: Option<&Path>, read_only: bool) -> Result<Child> {
         if !self.is_built() {
             bail!("the editor is not built. Install it: olvin-hub editor install");
         }
         let mut cmd = Command::new(self.binary());
         if let Some(project) = project {
             cmd.arg(project);
+        }
+        if read_only {
+            cmd.env(olvin_trust::MODE_ENV, "readonly");
+        } else {
+            cmd.env_remove(olvin_trust::MODE_ENV);
         }
         cmd.spawn().context("could not start olvin-editor")
     }

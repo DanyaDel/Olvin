@@ -17,4 +17,8 @@ serde_json = "1"
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate"] }
-sha2 = "0.10"
+olvin_core = { workspace = true, features = ["integrity"] }
+# Key generation: 32 random bytes from the OS.
+getrandom = "0.3"
+zeroize = "1"
+olvin_trust.workspace = true

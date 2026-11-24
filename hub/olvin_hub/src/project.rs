@@ -83,7 +83,8 @@ impl Project {
         let graphical = ["window", "render", "scenes"]
             .iter()
             .all(|m| wanted.contains(m));
-        let made = Self::write_new(&root, name, engine, catalog, modules, graphical);
+        let integrity = wanted.contains(&"integrity");
+        let made = Self::write_new(&root, name, engine, catalog, modules, graphical, integrity);
         if made.is_err() {
             // No half-made project left behind (the folder did not exist before).
             let _ = fs::remove_dir_all(&root);
@@ -98,9 +99,10 @@ impl Project {
         catalog: &Catalog,
         modules: &[&str],
         graphical: bool,
+        integrity: bool,
     ) -> Result<Self> {
         fs::create_dir_all(root.join("src"))?;
-        for (file, content) in template::files(name, graphical) {
+        for (file, content) in template::files(name, graphical, integrity) {
             fs::write(root.join(file), content)?;
         }
         let mut doc: DocumentMut = template::cargo_toml(name).parse()?;
@@ -450,7 +452,17 @@ mod tests {
                 .map(|m| m.id.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(&p), ["window", "render", "scenes", "scripts", "input"]);
+        assert_eq!(
+            ids(&p),
+            [
+                "window",
+                "render",
+                "scenes",
+                "scripts",
+                "input",
+                "integrity"
+            ]
+        );
 
         // requires pulls in serde; re-adding is a no-op.
         assert_eq!(p.add(&catalog, "saves").unwrap(), ["serde", "saves"]);
@@ -465,7 +477,7 @@ mod tests {
         assert_eq!(reopened.name(), "my_game");
         assert_eq!(
             ids(&reopened),
-            ["render", "scenes", "scripts", "input", "serde"]
+            ["render", "scenes", "scripts", "input", "integrity", "serde"]
         );
         let text = fs::read_to_string(p.root().join("Cargo.toml")).unwrap();
         assert!(

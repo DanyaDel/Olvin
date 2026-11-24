@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+olvin_trust.workspace = true
 olvin_editor.workspace = true
 serde_json = "1"
 # Same naga as wgpu 30 (see Cargo.lock), only the WGSL front end.

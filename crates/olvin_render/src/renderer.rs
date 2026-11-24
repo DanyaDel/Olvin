@@ -291,7 +291,14 @@ impl Renderer {
             self.resize(size);
         }
         olvin_core::profile_scope!("render frame");
-        let view_proj = camera_view_proj(world, size.0 as f32 / size.1 as f32);
+        // Retro low internal resolution (Full tier): the scene is drawn at
+        // `scene_size` and scaled up after the post chain.
+        let scene_size = settings
+            .retro
+            .scene_size(size)
+            .filter(|_| self.post.is_some())
+            .unwrap_or(size);
+        let view_proj = camera_view_proj(world, scene_size.0 as f32 / scene_size.1 as f32);
         let stats = {
             olvin_core::profile_scope!("render prepare meshes");
             match view_proj {
@@ -317,8 +324,13 @@ impl Renderer {
                 }
                 None => self.particles.clear(),
             }
-            self.sprites
-                .prepare(&self.core.device, &self.core.queue, &self.gpu, world, size);
+            self.sprites.prepare(
+                &self.core.device,
+                &self.core.queue,
+                &self.gpu,
+                world,
+                scene_size,
+            );
             self.overlay.prepare(
                 &self.core.device,
                 &self.core.queue,
@@ -352,7 +364,7 @@ impl Renderer {
         }
         olvin_core::profile_scope!("render scene passes");
         if let Some(post) = &mut self.post {
-            post.resize(&self.core.device, size);
+            post.resize(&self.core.device, scene_size);
             post.sync_lut(&self.core.device, &self.gpu, settings);
             let hdr = post.hdr_view().expect("resized above");
             let depth = post.depth_view().expect("resized above");

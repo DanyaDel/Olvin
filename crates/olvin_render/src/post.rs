@@ -165,6 +165,8 @@ struct Params {
     lift: [f32; 4],
     gamma: [f32; 4],
     gain: [f32; 4],
+    /// Retro colour levels - 1 (0: off), dither strength, -, -.
+    retro: [f32; 4],
 }
 
 /// Textures and bind groups that depend on the frame size.
@@ -181,6 +183,8 @@ struct Targets {
     blur_h: wgpu::BindGroup,
     blur_v: wgpu::BindGroup,
     composite: wgpu::BindGroup,
+    /// `ldr` through the nearest sampler (the retro upscale).
+    upscale: wgpu::BindGroup,
     ao_raw: wgpu::TextureView,
     ao: wgpu::BindGroup,
     ao_blur: wgpu::BindGroup,
@@ -208,6 +212,8 @@ pub struct PostProcess {
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     fxaa: wgpu::RenderPipeline,
+    upscale: wgpu::RenderPipeline,
+    nearest: wgpu::Sampler,
     ao: wgpu::RenderPipeline,
     ao_blur: wgpu::RenderPipeline,
     /// Parameter buffers: main (composite, bright-pass), horizontal and
@@ -338,6 +344,13 @@ impl PostProcess {
             blur: pipeline("fs_blur", HDR_FORMAT),
             composite: pipeline("fs_composite", output),
             fxaa: pipeline("fs_fxaa", output),
+            upscale: pipeline("fs_upscale", output),
+            nearest: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("post nearest"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                ..Default::default()
+            }),
             main: uniform("post params"),
             horizontal: uniform("post blur h"),
             vertical: uniform("post blur v"),
@@ -393,30 +406,36 @@ impl PostProcess {
         let ao_raw = target("post ao", AO_FORMAT, size);
         let ao_blurred = target("post ao blurred", AO_FORMAT, size);
         let depth = target("post depth", DEPTH_FORMAT, size);
+        let bind_with = |params: &wgpu::Buffer,
+                         source: &wgpu::TextureView,
+                         bloom: &wgpu::TextureView,
+                         sampler: &wgpu::Sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("post"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(bloom),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
         let bind =
             |params: &wgpu::Buffer, source: &wgpu::TextureView, bloom: &wgpu::TextureView| {
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("post"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: params.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(source),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(bloom),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                })
+                bind_with(params, source, bloom, &self.sampler)
             };
         let (aux_pre, aux_post) = self.aux_groups(device, &depth, &ao_blurred);
         self.targets = Some(Targets {
@@ -428,6 +447,7 @@ impl PostProcess {
             blur_v: bind(&self.vertical, &quarter_blur, &half),
             composite: bind(&self.main, &hdr, &quarter),
             fxaa: bind(&self.main, &ldr, &quarter),
+            upscale: bind_with(&self.main, &ldr, &quarter, &self.nearest),
             ao: bind(&self.main, &hdr, &quarter),
             ao_blur: bind(&self.main, &ao_raw, &quarter),
             ao_raw,
@@ -587,6 +607,16 @@ impl PostProcess {
                 if has_lut { 1.0 } else { 0.0 },
             ],
             gain: [grade.gain[0], grade.gain[1], grade.gain[2], 0.0],
+            retro: [
+                if settings.retro.enabled {
+                    settings.retro.color_levels()
+                } else {
+                    0.0
+                },
+                settings.retro.dither_strength.max(0.0),
+                0.0,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.main, 0, bytemuck::bytes_of(&main));
         if ao.is_some() {
@@ -616,7 +646,21 @@ impl PostProcess {
             pass(encoder, &t.quarter_blur, &self.blur, &t.blur_h, &t.aux_pre);
             pass(encoder, &t.quarter, &self.blur, &t.blur_v, &t.aux_pre);
         }
-        if settings.post.fxaa {
+        let window = (output.texture().width(), output.texture().height());
+        if settings.retro.enabled && window != t.size {
+            // Low internal resolution: the chain ran at `t.size`; scale up with
+            // nearest filtering, letterboxed when the aspect is kept. No FXAA.
+            pass(encoder, &t.ldr, &self.composite, &t.composite, &t.aux_post);
+            upscale_pass(
+                encoder,
+                output,
+                &self.upscale,
+                &t.upscale,
+                &t.aux_post,
+                t.size,
+                window,
+            );
+        } else if settings.post.fxaa && !settings.retro.enabled {
             pass(encoder, &t.ldr, &self.composite, &t.composite, &t.aux_post);
             pass(encoder, output, &self.fxaa, &t.fxaa, &t.aux_post);
         } else {
@@ -646,6 +690,47 @@ fn pass(
         })],
         ..Default::default()
     });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind, &[]);
+    pass.set_bind_group(1, aux, &[]);
+    pass.draw(0..3, 0..1);
+}
+
+/// The largest centred rectangle of `scene`'s aspect inside `window` (pixels
+/// x, y, width, height); the whole window when the aspects agree.
+fn letterbox(scene: (u32, u32), window: (u32, u32)) -> [f32; 4] {
+    let (sw, sh) = (scene.0 as f32, scene.1 as f32);
+    let (ww, wh) = (window.0 as f32, window.1 as f32);
+    let scale = (ww / sw).min(wh / sh);
+    let (w, h) = ((sw * scale).round().min(ww), (sh * scale).round().min(wh));
+    [((ww - w) * 0.5).floor(), ((wh - h) * 0.5).floor(), w, h]
+}
+
+/// [`pass`] into the letterboxed part of `target` (black bars around it).
+fn upscale_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+    aux: &wgpu::BindGroup,
+    scene: (u32, u32),
+    window: (u32, u32),
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("olvin upscale"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    let [x, y, w, h] = letterbox(scene, window);
+    pass.set_viewport(x, y, w, h, 0.0, 1.0);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind, &[]);
     pass.set_bind_group(1, aux, &[]);

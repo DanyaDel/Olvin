@@ -21,6 +21,8 @@ struct Params {
     lift: vec4<f32>,
     gamma: vec4<f32>,
     gain: vec4<f32>,
+    // Retro colour depth. x: levels per channel - 1 (0: off); y: dither strength.
+    retro: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -61,6 +63,15 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((max(c, vec3<f32>(0.0)) + 0.055) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// 4x4 Bayer matrix at a pixel, a threshold in (0, 1).
+fn bayer4(pixel: vec2<f32>) -> f32 {
+    let x = u32(pixel.x) & 3u;
+    let y = u32(pixel.y) & 3u;
+    let a = x ^ y;
+    let v = ((a & 1u) << 3u) | ((y & 1u) << 2u) | (a & 2u) | ((y >> 1u) & 1u);
+    return (f32(v) + 0.5) / 16.0;
 }
 
 fn tap(t: texture_2d<f32>, uv: vec2<f32>) -> vec3<f32> {
@@ -309,6 +320,20 @@ fn fs_composite(in: VertexOut) -> @location(0) vec4<f32> {
         color = aces(color);
     }
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (params.retro.x > 0.5) {
+        // Retro: graded, then rounded to the colour depth with an ordered dither.
+        var shown = linear_to_srgb(color);
+        if (params.grade.w > 0.5) {
+            shown = grade(shown);
+        }
+        let n = params.retro.x;
+        let t = (bayer4(in.clip.xy) - 0.5) * params.retro.y;
+        shown = clamp(floor(shown * n + t + 0.5), vec3<f32>(0.0), vec3<f32>(n)) / n;
+        if (params.output.x > 0.5) {
+            return vec4<f32>(shown, 1.0);
+        }
+        return vec4<f32>(srgb_to_linear(shown), 1.0);
+    }
     if (params.grade.w > 0.5) {
         // Graded in display colour; hardware sRGB targets get linear back.
         let graded = grade(linear_to_srgb(color));
@@ -321,6 +346,13 @@ fn fs_composite(in: VertexOut) -> @location(0) vec4<f32> {
         color = linear_to_srgb(color);
     }
     return vec4<f32>(color, 1.0);
+}
+
+// Nearest-neighbour upscale of the low-resolution frame (the bind group's
+// sampler is the nearest one).
+@fragment
+fn fs_upscale(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(tap(source, in.uv), 1.0);
 }
 
 // ---- FXAA 3.11 (quality preset 12): edge detection on luma, a search along

@@ -61,7 +61,12 @@ pub(super) fn post_world_sized(
     );
     core.set_hdr_output(true);
     let mut post = crate::PostProcess::new(&device, FORMAT);
-    post.resize(&device, (size, size));
+    // Retro low internal resolution: the scene is drawn smaller, scaled up by `run`.
+    let scene = settings
+        .retro
+        .scene_size((size, size))
+        .unwrap_or((size, size));
+    post.resize(&device, scene);
     let (mut gpu, mut meshes, mut materials) = (
         GpuMeshes::default(),
         Meshes::default(),
@@ -79,7 +84,7 @@ pub(super) fn post_world_sized(
     core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
     post.sync_lut(&device, &gpu, settings);
     let mut view = core.create_view();
-    let view_proj = camera_view_proj(&world, 1.0).unwrap();
+    let view_proj = camera_view_proj(&world, scene.0 as f32 / scene.1 as f32).unwrap();
     core.prepare(&mut view, &gpu, &world, view_proj, settings);
     let texture = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {

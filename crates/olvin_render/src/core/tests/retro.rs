@@ -480,3 +480,103 @@ fn forced_nearest_removes_the_texture_blending() {
         edge(&nearest)
     );
 }
+
+#[test]
+fn low_internal_resolution_upscales_in_blocks_on_the_post_chain() {
+    // A tilted white square on black; the 16x16 scene is drawn on 64 pixels.
+    let build = |meshes: &mut Meshes, materials: &mut Materials, world: &mut World| {
+        let quad = meshes.add(MeshData::plane(3.0));
+        let white = materials.add(Material {
+            base_color: Color::BLACK,
+            emissive: [1.0; 3],
+            unlit: true,
+            ..Default::default()
+        });
+        world.spawn((
+            Transform {
+                rotation: glam::Quat::from_rotation_y(0.4),
+                ..Transform::IDENTITY
+            },
+            MeshRenderer::new(quad, Color::WHITE).with_material(white),
+        ));
+        world.spawn(top_down_camera(6.0));
+    };
+    let settings = RenderSettings {
+        clear_color: Color::BLACK,
+        retro: RetroSettings {
+            internal_resolution: [16, 16],
+            ..only()
+        },
+        post: crate::PostSettings {
+            fxaa: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let Some(frame) = post::post_world_sized(SIZE, &settings, None, build) else {
+        return;
+    };
+    let at = |x, y| frame.at(x, y);
+    save_shot("lowres", SIZE, at);
+    // Every 4x4 block is one colour.
+    for by in 0..16 {
+        for bx in 0..16 {
+            let first = at(bx * 4, by * 4);
+            for (dx, dy) in [(1, 0), (3, 3), (2, 1)] {
+                assert_eq!(at(bx * 4 + dx, by * 4 + dy), first, "block {bx},{by}");
+            }
+        }
+    }
+    // The picture itself is there, and a full-resolution render isn't blocky.
+    assert!(at(SIZE / 2, SIZE / 2)[0] > 100);
+    let sharp = RenderSettings {
+        retro: RetroSettings {
+            enabled: false,
+            ..settings.retro
+        },
+        ..settings.clone()
+    };
+    let full = post::post_world_sized(SIZE, &sharp, None, build).unwrap();
+    let blocky = |f: &dyn Fn(u32, u32) -> [u8; 3]| {
+        (0..SIZE - 1).filter(|&x| f(x, 20) != f(x + 1, 20)).count()
+    };
+    assert!(blocky(&|x, y| full.at(x, y)) > 0);
+}
+
+#[test]
+fn the_post_chain_quantises_once_and_the_mesh_shader_leaves_hdr_alone() {
+    let build = |meshes: &mut Meshes, materials: &mut Materials, world: &mut World| {
+        let quad = meshes.add(MeshData::plane(20.0));
+        let grey = materials.add(Material {
+            base_color: Color::BLACK,
+            emissive: [0.2, 0.31, 0.47],
+            unlit: true,
+            ..Default::default()
+        });
+        world.spawn((
+            Transform::IDENTITY,
+            MeshRenderer::new(quad, Color::WHITE).with_material(grey),
+        ));
+        world.spawn(top_down_camera(6.0));
+    };
+    let settings = RenderSettings {
+        tonemapping: Tonemapping::None,
+        retro: RetroSettings {
+            color_bits: 5,
+            dither_strength: 0.0,
+            ..only()
+        },
+        ..Default::default()
+    };
+    let Some(frame) = post::post_world_sized(SIZE, &settings, None, build) else {
+        return;
+    };
+    let step = 255.0 / 31.0;
+    for c in frame.at(10, 10) {
+        let k = (f32::from(c) / step).round();
+        assert!(
+            (f32::from(c) - k * step).abs() <= 1.6,
+            "on the 5-bit lattice: {c}"
+        );
+    }
+}

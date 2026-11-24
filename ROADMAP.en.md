@@ -209,6 +209,17 @@ What exists: sprites, atlases, tilemaps, `Camera2d`, text (`olvin_render::sprite
 - [ ] **2D library packs**: a platformer, a top-down (Zelda-like), a shoot-em-up, a grid puzzle; ready enemies, pickups, checkpoints, a camera with bounds; a "2D game" project template in the hub. (M)
 - [ ] **2D effects**: 2D lights and shadows, sprite normals, a pixel mode and palettes, parallax, 2D particles, looks for pixel art. (M) [P2]
 
+## Phase 10. Interface polish: animations, customisation, settings
+
+The owner's wishes (2026-11-24). The common line: the interface should feel alive and pleasant but stay controllable; everything that moves respects `reduce_motion` (it already exists in `olvin_ui`).
+
+- [ ] **More animations and customisation of the engine**: animated transitions between panels, workspaces and dialogs, smooth show and hide, animated lists and drag and drop; wider customisation (themes, accents, interface density, scale, fonts, panel layouts, user themes as a file). (M) [P2]
+- [ ] **A flexible config and detailed UI settings**: one config (RON or TOML) with layers "defaults -> user -> project"; every option has a description, a default and validation; the settings window covers every option, with search, reset per option and per group, profiles, import and export; whatever can be changed in the file can be changed in the interface, and the other way round. (M) [P1]
+- [ ] **The editor right inside the IDE** (to clarify with the owner, two readings are possible): (a) the engine's own IDE as a full workplace: the scene view, Play, the inspector and the console sit as panels next to the code in one workspace, no window switching; (b) plugins for external IDEs (VS Code, RustRover, Zed) with a scene view and a game launcher. Start with (a), since the editor already has a Code workspace. (L) [P2]
+- [ ] **Telegram-style micro-animations**: hovering or pressing a button or icon makes it come alive (animated icons: frame-based vector animation, a Lottie variant or our own format), spring transitions, click feedback; a set of ready animated icons for the editor and the hub; switched off by `reduce_motion`. (M) [P2]
+- [ ] **A startup animation** (the editor and hub splash): a tidy animation of the logo and module loading, not overdone, more modest than Yulia's :) ; skippable, can be turned off in settings, does not lengthen startup (shown while loading really happens). (S) [P3]
+- [ ] **Process animations**: compilation (a progress indicator from `cargo` output: "compiling N of M crates", then success or failure with an animation), saving, asset import, installing modules and library packs, building a game in the hub, search, decryption; one shared "process indicator" component with the states running, done and failed, in the IDE, the editor and the hub. (M) [P2]
+
 ## Order of work (what to do first)
 
 1. **Phase 0** in full. Without CI and tests, everything after will break unnoticed.

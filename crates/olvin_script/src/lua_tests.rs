@@ -229,6 +229,42 @@ fn poll_picks_up_new_files() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Every check adds a bit to the score and the script moves by the total, so
+/// a failed Lua `assert` (which only logs) cannot pass unnoticed.
+#[test]
+fn load_is_text_only_and_bytecode_sources_are_gone() {
+    let (app, _lua) = app_with(
+        "Loader",
+        r#"return {
+            start = function(self, ctx)
+                local score = 0
+                -- Text still compiles, and the caller's mode cannot ask for bytecode.
+                local f = load("return 2 + 3", "chunk", "b")
+                if f and f() == 5 then score = score + 1 end
+                -- A binary chunk (bytecode signature) is refused.
+                local g, err = load("\27Lua\84\0\25\147\r\n\26\n")
+                if g == nil and err and err:find("binary") then score = score + 2 end
+                -- No way to make bytecode.
+                if string.dump == nil and ("x").dump == nil then score = score + 4 end
+                -- A custom environment still works.
+                local h = load("return x", "env", "t", { x = 7 })
+                if h and h() == 7 then score = score + 8 end
+                -- The collector can be asked, not retuned.
+                if type(collectgarbage("count")) == "number" then score = score + 16 end
+                if pcall(collectgarbage, "generational") == false then score = score + 32 end
+                ctx:translate(vec3(score, 0, 0))
+            end,
+        }"#,
+    );
+    let e = spawn(&app, "Loader", &[]);
+    step(&app);
+    assert_eq!(
+        x(&app, e),
+        63.0,
+        "a sandbox check failed (bit set = passed)"
+    );
+}
+
 #[test]
 fn sandbox_limits_and_missing_libraries() {
     let (app, lua) = app_with(

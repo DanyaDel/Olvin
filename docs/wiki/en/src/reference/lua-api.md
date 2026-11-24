@@ -178,7 +178,7 @@ Feature `audio`. Paths are relative to `assets/`, without `..` and absolute ones
 
 ## Sandbox
 
-Libraries: only `table`, `string`, `math`, `utf8`, `coroutine`. No `io`, `os`, `debug`, `package`, `dofile`, `loadfile`, `require`. Default limits (`LuaLimits`): memory 64 MB per state, 5,000,000 instructions per callback. A callback error disables the script until its file is reloaded and goes to the log, the frame does not crash. `ctx` is valid only inside a callback: do not store it.
+Libraries: only `table`, `string`, `math`, `utf8`, `coroutine`. No `io`, `os`, `debug`, `package`, `dofile`, `loadfile`, `require`. `load` compiles text only (binary chunks are refused: hand-edited bytecode corrupts the VM's memory), `string.dump` is removed, `collectgarbage` accepts only `"collect"` and `"count"`. Default limits (`LuaLimits`): memory 64 MB per state, 5,000,000 instructions per callback. A callback error disables the script until its file is reloaded and goes to the log, the frame does not crash. `ctx` is valid only inside a callback: do not store it.
 
 ## See also
 

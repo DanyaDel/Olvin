@@ -169,7 +169,7 @@ Goal: cover the whole threat model, not one case at a time. Assets: money and ac
 
 ### Lua scripts
 
-- [ ] **Close `load` and binary chunks (L2)**: remove `load`, `loadstring`, `collectgarbage`, or restrict `mode = "t"` in `crates/olvin_script/src/lua/mod.rs`; a test that a binary chunk is rejected. Gives protection against escaping the sandbox through bytecode. (S) [P0]
+- [x] **Close `load` and binary chunks (L2)**: remove `load`, `loadstring`, `collectgarbage`, or restrict `mode = "t"` in `crates/olvin_script/src/lua/mod.rs`; a test that a binary chunk is rejected. Gives protection against escaping the sandbox through bytecode. (S) [P0] — done: `load` is forced to text (the caller's mode is ignored, `env` works), `string.dump` is removed, `collectgarbage` allows only `collect` and `count`; the test `load_is_text_only_and_bytecode_sources_are_gone` was checked with a negative control (without the sandbox 26 of 63 pass). Callback fuzzing (L3, L4) remains.
 - [ ] **Encrypt or move logic (L1)**: scripts are encrypted, or critical parts (checks, economy) move to Rust or the server. Gives deterrence. (M) [P1]
 - [ ] **Library pack verification (L5)**: signed `pack.ron` and files, review before install, a warning about a pack's Lua scripts. Gives protection against a malicious pack. (M) [P1]
 - [ ] **Lua limits and fuzzing (L3, L4)**: fuzz the callbacks, check that `string.dump` and neighbouring functions give no way out of the sandbox. Gives protection against resource exhaustion and escape. (M) [P2]

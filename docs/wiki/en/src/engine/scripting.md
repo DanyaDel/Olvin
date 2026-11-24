@@ -38,7 +38,7 @@ return {
 
 **Hot reload:** a changed file is picked up, new callbacks replace the old ones, `self` survives, `start` does not run again; a file with an error leaves the working version in place.
 
-**Sandbox:** only `table`, `string`, `math`, `utf8`, `coroutine` are loaded; no `io`, `os`, `debug`, `package`, `dofile`, `loadfile`, `require`. A memory limit of 64 MB per state, 5,000,000 instructions per callback; messages (4096 queued), variables (1024), strings (16 KB) and sounds (1024) are capped. A failed callback disables the script until the file is reloaded, the frame does not crash.
+**Sandbox:** only `table`, `string`, `math`, `utf8`, `coroutine` are loaded; no `io`, `os`, `debug`, `package`, `dofile`, `loadfile`, `require`. `load` compiles text only (binary chunks are refused: hand-edited bytecode corrupts the VM's memory), `string.dump` is removed, `collectgarbage` accepts only `"collect"` and `"count"`. A memory limit of 64 MB per state, 5,000,000 instructions per callback; messages (4096 queued), variables (1024), strings (16 KB) and sounds (1024) are capped. A failed callback disables the script until the file is reloaded, the frame does not crash.
 
 **Performance:** `vec3` tables are convenient, but hot code has `*_xyz` twins without tables (the "walker" estimate is 0.42 µs, benchmark `cargo bench -p olvin_script --features lua --bench lua_vs_rust`). Why Lua: `docs/adr/0001-lua-scripting.md`.
 

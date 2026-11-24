@@ -42,7 +42,8 @@
 //!
 //! Sandbox: only `table`, `string`, `math`, `utf8` and `coroutine` are loaded
 //! (no `io`, `os`, `debug`, `package`; `dofile`/`loadfile`/`require` are
-//! removed), memory and instructions per call are limited ([`LuaLimits`]).
+//! removed; `load` is text-only, there is no `string.dump`: no bytecode),
+//! memory and instructions per call are limited ([`LuaLimits`]).
 //! Sound paths must stay inside the assets folder; messages, variables and
 //! sounds started from Lua are capped. A script that errors is skipped, with
 //! the error in the log, until its file is reloaded; the frame goes on.
@@ -198,6 +199,28 @@ pub struct LuaScripts {
     pub poll_interval: Duration,
 }
 
+/// Tightens the base library that every Lua state carries.
+/// - `load` compiles text only. A binary chunk is bytecode, and bytecode that
+///   was edited by hand can corrupt the VM's memory: the classic way out of a
+///   Lua sandbox. The caller's `mode` is ignored (`"t"` always); `env` still works.
+/// - `string.dump`, the source of bytecode, is gone.
+/// - `collectgarbage` keeps `"collect"` and `"count"`; the rest would let a
+///   script retune the collector for everyone.
+const SANDBOX: &str = r#"
+local raw_load = load
+function load(chunk, name, _mode, ...)
+    return raw_load(chunk, name, "t", ...)
+end
+string.dump = nil
+local raw_collect = collectgarbage
+function collectgarbage(opt, ...)
+    if opt == nil or opt == "collect" or opt == "count" then
+        return raw_collect(opt, ...)
+    end
+    error("collectgarbage: option '" .. tostring(opt) .. "' is not available in scripts", 2)
+end
+"#;
+
 impl LuaScripts {
     pub fn new() -> mlua::Result<Self> {
         Self::with_limits(LuaLimits::default())
@@ -210,6 +233,7 @@ impl LuaScripts {
         for name in ["dofile", "loadfile", "require"] {
             globals.set(name, Value::Nil)?;
         }
+        lua.load(SANDBOX).set_name("=olvin sandbox").exec()?;
         globals.set(
             "print",
             lua.create_function(|_, args: MultiValue| {

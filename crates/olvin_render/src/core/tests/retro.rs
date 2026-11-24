@@ -3,7 +3,7 @@
 //! nearest textures, per-material overrides.
 
 use super::*;
-use crate::RetroSettings;
+use crate::{MaterialHandle, RetroSettings};
 
 /// Retro on, every effect off: the starting point of each test.
 fn only() -> RetroSettings {
@@ -578,5 +578,146 @@ fn the_post_chain_quantises_once_and_the_mesh_shader_leaves_hdr_alone() {
             (f32::from(c) - k * step).abs() <= 1.6,
             "on the 5-bit lattice: {c}"
         );
+    }
+}
+
+/// The retro-ps1 pack's demo scene (rooms, corridor, lights) through the
+/// Full-tier chain, with the pack's retro settings or without any.
+fn demo_frame(size: u32, retro: bool) -> Option<Vec<[u8; 3]>> {
+    use olvin_scene::file::SceneFile;
+    use olvin_scene::material::MaterialDesc;
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/retro-ps1/assets");
+    let scene = SceneFile::load(root.join("scenes/retro-ps1/demo.scene.ron")).unwrap();
+    let env = &scene.environment;
+    let settings = RenderSettings {
+        ambient: Color::rgb(env.sky[0], env.sky[1], env.sky[2]),
+        ground_ambient: Color::rgb(env.ground[0], env.ground[1], env.ground[2]),
+        clear_color: Color::rgb(env.background[0], env.background[1], env.background[2]),
+        tonemapping: Tonemapping::None,
+        light_color: Color::BLACK,
+        fog: env.fog.map(|f| crate::Fog {
+            color: Color::rgb(f.color[0], f.color[1], f.color[2]),
+            start: f.start,
+            end: f.end,
+        }),
+        post: crate::PostSettings {
+            fxaa: false,
+            ..Default::default()
+        },
+        retro: match env.retro.filter(|_| retro) {
+            Some(d) => RetroSettings {
+                enabled: true,
+                snap_resolution: d.snap_resolution,
+                snap_grid_m: d.snap_grid_m,
+                affine_strength: d.affine_strength,
+                affine_fade_near: d.affine_fade_near,
+                color_bits: d.color_bits,
+                dither_strength: d.dither_strength,
+                vertex_lighting: d.vertex_lighting,
+                shadows: d.shadows,
+                draw_distance: d.draw_distance,
+                dissolve: d.dissolve,
+                cull_small_px: d.cull_small_px,
+                force_nearest: d.force_nearest,
+                internal_resolution: d.internal_resolution,
+                pixel_scale: d.pixel_scale,
+                letterbox: d.letterbox,
+            },
+            None => RetroSettings::default(),
+        },
+        ..Default::default()
+    };
+    let frame = post::post_world_textured(
+        size,
+        &settings,
+        None,
+        |meshes, materials, textures, world| {
+            let mut loaded: std::collections::HashMap<String, MaterialHandle> = Default::default();
+            for e in &scene.entities {
+                let t = e.local_transform();
+                if let Some(light) = &e.light
+                    && light.kind == olvin_scene::file::LightKind::Point
+                {
+                    world.spawn((t, Light::point(light.color, light.intensity, light.range)));
+                }
+                let Some(mesh) = &e.mesh else {
+                    continue;
+                };
+                let handle = meshes.add(MeshData::primitive(mesh.shape));
+                let mut renderer = MeshRenderer::new(handle, Color(mesh.color));
+                if let Some(path) = &e.material {
+                    let m = *loaded.entry(path.clone()).or_insert_with(|| {
+                        let d = MaterialDesc::load(root.join(path)).unwrap();
+                        let texture = d.base_texture.as_ref().map(|p| {
+                            let img = image::open(root.join(p)).unwrap().to_rgba8();
+                            textures.add(TextureData::rgba8(
+                                img.width(),
+                                img.height(),
+                                img.into_raw(),
+                                true,
+                            ))
+                        });
+                        materials.add(Material {
+                            base_color: Color(d.base_color),
+                            base_texture: texture,
+                            roughness: d.roughness,
+                            uv_scale: d.uv_scale,
+                            point_filter: d.point_filter && retro,
+                            retro: d.retro.filter(|_| retro),
+                            ..Default::default()
+                        })
+                    });
+                    renderer = renderer.with_material(m);
+                }
+                world.spawn((t, renderer));
+            }
+            world.spawn((
+                Transform::from_xyz(1.4, 1.6, 3.4).looking_at(Vec3::new(-0.3, 1.1, -9.0), Vec3::Y),
+                Camera::default(),
+            ));
+        },
+    )?;
+    Some(
+        (0..size * size)
+            .map(|i| frame.at(i % size, i / size))
+            .collect(),
+    )
+}
+
+#[test]
+fn the_retro_ps1_demo_scene_reads_as_ps1() {
+    let size = 320;
+    let (Some(plain), Some(retro)) = (demo_frame(size, false), demo_frame(size, true)) else {
+        return;
+    };
+    let mean = |f: &[[u8; 3]]| {
+        f.iter()
+            .map(|p| p.iter().map(|&v| v as f32).sum::<f32>())
+            .sum::<f32>()
+            / (f.len() * 3) as f32
+    };
+    assert!(mean(&plain) > 8.0 && mean(&retro) > 8.0, "black frames");
+    let diff = plain.iter().zip(&retro).filter(|(a, b)| a != b).count();
+    assert!(
+        diff > plain.len() / 4,
+        "the look changes the picture: {diff}"
+    );
+    // 15-bit colour: every channel is on the 5-bit lattice.
+    let step = 255.0 / 31.0;
+    assert!(retro.iter().flatten().all(|&c| {
+        let k = (f32::from(c) / step).round();
+        (f32::from(c) - k * step).abs() <= 1.6
+    }));
+    // `OLVIN_RETRO_PREVIEW=<file.png>` writes the before / after sheet.
+    if let Some(path) = std::env::var_os("OLVIN_RETRO_PREVIEW") {
+        let mut img = image::RgbImage::new(size * 2, size);
+        for (i, p) in plain.iter().chain(&[]).enumerate() {
+            img.put_pixel(i as u32 % size, i as u32 / size, image::Rgb(*p));
+        }
+        for (i, p) in retro.iter().enumerate() {
+            img.put_pixel(size + i as u32 % size, i as u32 / size, image::Rgb(*p));
+        }
+        img.save(path).unwrap();
     }
 }

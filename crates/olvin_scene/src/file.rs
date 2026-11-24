@@ -1374,8 +1374,8 @@ mod tests {
     #[test]
     fn retro_block_round_trips_and_old_scenes_load_unchanged() {
         // A scene from before the retro style: no block, nothing to write back.
-        let old = SceneFile::parse("(version: 5, entities: [], environment: (exposure: 1.5))")
-            .unwrap();
+        let old =
+            SceneFile::parse("(version: 5, entities: [], environment: (exposure: 1.5))").unwrap();
         assert_eq!(old.environment.retro, None);
         let dir = std::env::temp_dir().join(format!("olvin-retro-{}", std::process::id()));
         let path = dir.join("a.scene.ron");

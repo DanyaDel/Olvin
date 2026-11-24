@@ -1,0 +1,9 @@
+(
+    base_color: (1.0, 1.0, 1.0, 1.0),
+    base_texture: Some("retro-ps1/textures/tile.png"),
+    metallic: 0.0,
+    roughness: 1.0,
+    uv_scale: (1.0, 1.0),
+    point_filter: true,
+    retro: Some(true),
+)

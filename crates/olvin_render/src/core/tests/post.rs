@@ -51,6 +51,18 @@ pub(super) fn post_world_sized(
     lut: Option<TextureData>,
     build: impl FnOnce(&mut Meshes, &mut Materials, &mut World),
 ) -> Option<Frame> {
+    post_world_textured(size, settings, lut, |meshes, materials, _, world| {
+        build(meshes, materials, world)
+    })
+}
+
+/// [`post_world_sized`] whose `build` can add textures too.
+pub(super) fn post_world_textured(
+    size: u32,
+    settings: &RenderSettings,
+    lut: Option<TextureData>,
+    build: impl FnOnce(&mut Meshes, &mut Materials, &mut Textures, &mut World),
+) -> Option<Frame> {
     let (device, queue) = device()?;
     let mut core = RenderCore::new(
         device.clone(),
@@ -79,7 +91,7 @@ pub(super) fn post_world_sized(
     }
     let settings = &settings;
     let mut world = World::new();
-    build(&mut meshes, &mut materials, &mut world);
+    build(&mut meshes, &mut materials, &mut textures, &mut world);
     core.upload(&mut gpu, &mut meshes);
     core.upload_assets(&mut gpu, &mut textures, &mut materials, &mut shaders);
     post.sync_lut(&device, &gpu, settings);

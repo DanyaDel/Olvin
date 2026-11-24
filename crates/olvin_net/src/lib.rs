@@ -18,6 +18,7 @@ mod client;
 mod config;
 pub mod crypto;
 mod ext;
+mod lagcomp;
 mod loopback;
 mod message;
 mod net;
@@ -37,6 +38,7 @@ pub mod wire;
 pub use auth::{AllowAll, AuthInfo, AuthRequest, AuthResult, Authenticator, SharedPassword};
 pub use config::{NetConfig, NetLimits, NetMode};
 pub use ext::NetAppExt;
+pub use lagcomp::{LagCompensation, PoseHistory};
 pub use loopback::{Conditioned, Loopback, LoopbackClient, LoopbackServer};
 pub use message::{
     CommandCtx, Direction, MessageOptions, NetCommandRejected, NetMessage, NetReceived, Sender,

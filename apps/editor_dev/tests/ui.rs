@@ -1509,7 +1509,15 @@ fn profiler_panel_opens_and_shows_frame_time_counters_and_scopes() {
     h.get_by_label("4 242");
     h.get_by_label("31");
     h.get_by_label("123 456");
-    // The editor's own frame scope shows up in the scope table.
+    // The editor's own frame scope shows up in the scope table. Profiler
+    // frames arrive on wall-clock time, so wait for it instead of counting
+    // steps (a loaded machine made the fixed count flaky).
+    for _ in 0..60 {
+        if h.query_by_label("editor frame").is_some() {
+            break;
+        }
+        h.run_steps(5);
+    }
     h.get_by_label("editor frame");
     // Pausing keeps the numbers on screen.
     h.get_by_label("⏸ Pause").click();

@@ -35,6 +35,9 @@ gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 # String tables with a fallback language, placeholders and plurals (`olvin::locale`).
 locale = ["dep:olvin_locale"]
 
+# Navigation (`olvin::nav`): bake walkable ground from colliders, A* paths, `NavAgent`.
+nav = ["dep:olvin_nav", "olvin_nav/engine"]
+
 # Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
 integrity = ["olvin_core/integrity"]
 # Netcode (`olvin::net`): transports, sessions, replication, messages, prediction.
@@ -50,6 +53,7 @@ profile-http = ["olvin_core/profile-http"]
 
 [dependencies]
 olvin_locale = { workspace = true, optional = true }
+olvin_nav = { workspace = true, optional = true }
 olvin_core.workspace = true
 olvin_ecs.workspace = true
 olvin_scene.workspace = true

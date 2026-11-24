@@ -3678,6 +3678,7 @@ dependencies = [
  "olvin_gui",
  "olvin_input",
  "olvin_locale",
+ "olvin_nav",
  "olvin_net",
  "olvin_physics",
  "olvin_render",
@@ -3967,6 +3968,18 @@ version = "0.1.0"
 dependencies = [
  "glam 0.34.3",
  "serde",
+]
+
+[[package]]
+name = "olvin_nav"
+version = "0.1.0"
+dependencies = [
+ "glam 0.34.3",
+ "log",
+ "olvin_core",
+ "olvin_ecs",
+ "olvin_scene",
+ "olvin_transform",
 ]
 
 [[package]]

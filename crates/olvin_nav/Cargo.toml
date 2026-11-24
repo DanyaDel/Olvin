@@ -1,0 +1,19 @@
+[package]
+name = "olvin_nav"
+description = "Olvin navigation: bakes walkable surfaces from triangles into a grid and finds paths with A*"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# `NavPlugin`, `NavAgent` and baking from the colliders of a scene (`olvin::nav`).
+engine = ["dep:log", "dep:olvin_core", "dep:olvin_ecs", "dep:olvin_scene", "dep:olvin_transform"]
+
+[dependencies]
+glam.workspace = true
+log = { workspace = true, optional = true }
+olvin_core = { workspace = true, optional = true }
+olvin_ecs = { workspace = true, optional = true }
+olvin_scene = { workspace = true, features = ["serde"], optional = true }
+olvin_transform = { workspace = true, optional = true }

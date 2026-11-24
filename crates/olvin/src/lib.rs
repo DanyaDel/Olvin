@@ -21,6 +21,8 @@ pub use olvin_game as game;
 pub use olvin_gui as gui;
 #[cfg(feature = "locale")]
 pub use olvin_locale as locale;
+#[cfg(feature = "nav")]
+pub use olvin_nav as nav;
 #[cfg(feature = "net")]
 pub mod net;
 #[cfg(feature = "input")]

@@ -57,6 +57,7 @@
 - [Состояния и сохранения](engine/game-states-saves.md)
 - [Время и события](engine/time-events.md)
 - [Локализация](engine/localization.md)
+- [Навигация](engine/navigation.md)
 - [Сеть](engine/networking.md)
 - [Профилировщик](engine/profiler.md)
 

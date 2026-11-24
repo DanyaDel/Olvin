@@ -36,7 +36,7 @@ gui = ["input", "dep:olvin_gui", "dep:olvin_text"]
 locale = ["dep:olvin_locale"]
 
 # Navigation (`olvin::nav`): bake walkable ground from colliders, A* paths, `NavAgent`.
-nav = ["dep:olvin_nav", "olvin_nav/engine"]
+nav = ["dep:olvin_nav", "olvin_nav/engine", "olvin_script?/nav"]
 
 # Signed manifest of the shipped files and `olvin::core::integrity::IntegrityPlugin` (olvin-hub build --release).
 integrity = ["olvin_core/integrity"]

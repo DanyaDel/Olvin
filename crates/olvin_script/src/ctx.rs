@@ -394,6 +394,49 @@ impl<'a> ScriptCtx<'a> {
             .raycast_filtered(origin, direction, max, Some(self.entity), false)
     }
 
+    /// Sends this entity to `target` along baked ground (see `olvin_nav`),
+    /// adding a `NavAgent` the first time (it starts next frame). `speed`
+    /// changes the agent's speed.
+    #[cfg(feature = "nav")]
+    pub fn nav_go(&mut self, target: Vec3, speed: Option<f32>) {
+        if let Some(mut agent) = self.get_mut::<olvin_nav::NavAgent>(self.entity) {
+            agent.go_to(target);
+            if let Some(s) = speed {
+                agent.speed = s;
+            }
+            return;
+        }
+        let mut agent = olvin_nav::NavAgent::new(speed.unwrap_or(3.0));
+        agent.go_to(target);
+        self.insert(self.entity, (agent,));
+    }
+
+    /// Stops the errand started by [`ScriptCtx::nav_go`].
+    #[cfg(feature = "nav")]
+    pub fn nav_stop(&mut self) {
+        if let Some(mut agent) = self.get_mut::<olvin_nav::NavAgent>(self.entity) {
+            agent.stop();
+        }
+    }
+
+    /// How the errand goes; `Idle` without a `NavAgent`.
+    #[cfg(feature = "nav")]
+    pub fn nav_status(&self) -> olvin_nav::NavStatus {
+        self.get::<olvin_nav::NavAgent>(self.entity)
+            .map_or(olvin_nav::NavStatus::Idle, |a| a.status)
+    }
+
+    /// Whether baked ground connects this entity's position to `target`.
+    #[cfg(feature = "nav")]
+    pub fn nav_reachable(&self, target: Vec3) -> bool {
+        let Some(nav) = self.res::<olvin_nav::Navigation>() else {
+            return false;
+        };
+        nav.grid
+            .as_ref()
+            .is_some_and(|g| g.is_reachable(self.world_position(), target, 1.5))
+    }
+
     /// Pushes this entity's dynamic body with a force (N) for the next physics
     /// step: call it from `fixed_update` every step. False without a dynamic body.
     #[cfg(feature = "physics")]

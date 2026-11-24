@@ -106,6 +106,7 @@ for _, n in ipairs({
     "set_position", "translate", "translate_local", "rotate_euler_deg",
     "set_rotation_euler_deg", "set_scale",
     "apply_force", "apply_impulse", "set_velocity", "set_motor_velocity", "teleport",
+    "nav_go", "nav_reachable",
 }) do setter(n) end
 
 for _, n in ipairs({

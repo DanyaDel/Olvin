@@ -4063,6 +4063,7 @@ dependencies = [
  "olvin_core",
  "olvin_ecs",
  "olvin_input",
+ "olvin_nav",
  "olvin_net",
  "olvin_physics",
  "olvin_scene",

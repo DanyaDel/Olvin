@@ -26,7 +26,9 @@ The geometry is the **static colliders** of the scene: boxes and mesh colliders 
 
 `NavAgent` is a component: `go_to(target)` sets the target, `speed`, `stop_distance`. `status` is `Idle`, `Moving`, `Arrived` or `NoPath`. With `drive: true` the plugin moves the object's `Transform`; with `drive: false` it only writes `desired_velocity`, for a character controller or a rigidbody to follow. A moving target is followed by re-planning twice a second, and at most 8 paths are planned per frame.
 
-Not done yet: Lua functions for agents, avoiding other agents, off-mesh links (jumps, ladders), baking from visual meshes and a preview in the editor.
+Scripts steer agents with `ctx:nav_go`, `nav_stop`, `nav_status` and `nav_reachable` (feature `nav` of `olvin_script`, see the [Lua reference](../reference/lua-api.md)).
+
+Not done yet: avoiding other agents, off-mesh links (jumps, ladders), baking from visual meshes and a preview in the editor.
 
 ## See also
 

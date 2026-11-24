@@ -825,3 +825,57 @@ fn timers_of_a_destroyed_object_are_dropped_and_the_count_is_limited() {
         "timers of a dead object are cancelled when they run out"
     );
 }
+
+#[cfg(feature = "nav")]
+#[test]
+fn lua_sends_an_object_along_baked_ground() {
+    use olvin_nav::{NavConfig, NavPlugin, NavStatus, Navigation};
+    use olvin_scene::file::{ColliderDesc, ColliderShape};
+
+    let (mut app, _lua) = app_with(
+        "Walker",
+        r#"
+        return {
+            start = function(self, ctx)
+                assert(ctx:nav_reachable(vec3(5, 0, 0)))
+                assert(not ctx:nav_reachable(vec3(900, 0, 0)))
+                ctx:nav_go(vec3(5, 0, 0))
+            end,
+            update = function(self, ctx)
+                if ctx:nav_status() == "arrived" then ctx:set_var("arrived", true) end
+            end,
+        }
+        "#,
+    );
+    app.add_plugin(NavPlugin::new());
+    app.resources
+        .fetch_mut::<olvin_core::Time>()
+        .set_fixed_delta(Some(0.1));
+    {
+        let mut world = app.resources.fetch_mut::<World>();
+        world.spawn((
+            Transform::from_translation(Vec3::new(2.0, -0.5, 0.0)),
+            ColliderDesc::new(ColliderShape::Box {
+                size: Vec3::new(12.0, 1.0, 6.0),
+            }),
+        ));
+    }
+    {
+        let world = app.resources.fetch::<World>();
+        app.resources
+            .fetch_mut::<Navigation>()
+            .bake(&world, NavConfig::default())
+            .unwrap();
+    }
+    let e = spawn(&app, "Walker", &[]);
+    for _ in 0..120 {
+        app.update();
+    }
+    assert!(app.resources.fetch::<ScriptVars>().flag("arrived"));
+    assert!((x(&app, e) - 5.0).abs() < 0.5);
+    let world = app.resources.fetch::<World>();
+    assert_eq!(
+        world.get::<&olvin_nav::NavAgent>(e).unwrap().status,
+        NavStatus::Arrived
+    );
+}

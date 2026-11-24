@@ -460,6 +460,8 @@ impl UserData for CtxHandle {
 
         #[cfg(feature = "physics")]
         add_physics(m);
+        #[cfg(feature = "nav")]
+        add_nav(m);
         #[cfg(feature = "input")]
         add_input(m);
         #[cfg(feature = "audio")]
@@ -474,6 +476,37 @@ impl CtxHandle {
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut ScriptCtx<'_>) -> R) -> mlua::Result<R> {
         self.slot.with(f)
     }
+}
+
+#[cfg(feature = "nav")]
+fn add_nav<M: UserDataMethods<CtxHandle>>(m: &mut M) {
+    m.add_method("nav_go_xyz", |_, h, (x, y, z): V3| {
+        h.slot.with(|c| c.nav_go(Vec3::new(x, y, z), None))
+    });
+    m.add_method("nav_set_speed", |_, h, speed: f32| {
+        if !speed.is_finite() || speed < 0.0 {
+            return Err(mlua::Error::runtime(
+                "nav_set_speed: speed must be 0 or more",
+            ));
+        }
+        h.slot.with(|c| {
+            if let Some(mut a) = c.component_mut::<olvin_nav::NavAgent>() {
+                a.speed = speed;
+            }
+        })
+    });
+    m.add_method("nav_stop", |_, h, ()| h.slot.with(|c| c.nav_stop()));
+    m.add_method("nav_status", |_, h, ()| {
+        h.slot.with(|c| match c.nav_status() {
+            olvin_nav::NavStatus::Idle => "idle",
+            olvin_nav::NavStatus::Moving => "moving",
+            olvin_nav::NavStatus::Arrived => "arrived",
+            olvin_nav::NavStatus::NoPath => "nopath",
+        })
+    });
+    m.add_method("nav_reachable_xyz", |_, h, (x, y, z): V3| {
+        h.slot.with(|c| c.nav_reachable(Vec3::new(x, y, z)))
+    });
 }
 
 #[cfg(feature = "physics")]

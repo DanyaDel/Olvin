@@ -147,6 +147,18 @@ Feature `physics`; for a Dynamic body only (otherwise the functions do nothing).
 | `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | put a body (any kind, a character too) at a position now and stop it; `false` when there is no such object. For respawns: a plain `set_position` also works but keeps the velocity |
 | `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | a ray: `nil` or `{ entity, point, normal, distance }`; the fast path returns `entity, px, py, pz, nx, ny, nz, distance` |
 
+## Navigation
+
+Feature `nav` and `NavPlugin` with a baked level (see [Navigation](../engine/navigation.md)).
+
+| Function | Fast path | What |
+|---|---|---|
+| `ctx:nav_go(v)` | `ctx:nav_go_xyz(x, y, z)` | walk this object to the point along baked ground; adds the agent on first use |
+| `ctx:nav_set_speed(speed)` | | metres per second |
+| `ctx:nav_stop()` | | stop |
+| `ctx:nav_status()` | | `"idle"`, `"moving"`, `"arrived"` or `"nopath"` |
+| `ctx:nav_reachable(v)` | `ctx:nav_reachable_xyz(x, y, z)` | whether baked ground connects this object to the point |
+
 ## Input
 
 Feature `input`. `action` is an action name from `InputMap` ([Input](../engine/input.md)).

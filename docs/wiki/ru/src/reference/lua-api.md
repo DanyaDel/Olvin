@@ -147,6 +147,18 @@ Id получают из поиска, из `other` колбэков и из `ct
 | `ctx:teleport(v)` / `ctx:teleport_of(id, v)` | `ctx:teleport_xyz(x, y, z)` / `ctx:teleport_of_xyz(id, x, y, z)` | поставить тело (любого вида, в том числе персонажа) в точку сразу и остановить; `false`, если объекта нет. Для респауна: обычный `set_position` тоже работает, но сохраняет скорость |
 | `ctx:raycast(origin, direction, max)` | `ctx:raycast_xyz(ox, oy, oz, dx, dy, dz, max)` | луч: `nil` или `{ entity, point, normal, distance }`; быстрый путь возвращает `entity, px, py, pz, nx, ny, nz, distance` |
 
+## Навигация
+
+Фича `nav` и `NavPlugin` с запечённым уровнем (см. [Навигация](../engine/navigation.md)).
+
+| Функция | Быстрый путь | Что |
+|---|---|---|
+| `ctx:nav_go(v)` | `ctx:nav_go_xyz(x, y, z)` | вести этот объект в точку по запечённой земле; при первом вызове добавляет агента |
+| `ctx:nav_set_speed(speed)` | | метров в секунду |
+| `ctx:nav_stop()` | | остановить |
+| `ctx:nav_status()` | | `"idle"`, `"moving"`, `"arrived"` или `"nopath"` |
+| `ctx:nav_reachable(v)` | `ctx:nav_reachable_xyz(x, y, z)` | связана ли запечённая земля между этим объектом и точкой |
+
 ## Ввод
 
 Фича `input`. `action` это имя действия из `InputMap` ([Ввод](../engine/input.md)).

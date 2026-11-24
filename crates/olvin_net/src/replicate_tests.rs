@@ -525,3 +525,26 @@ fn custom_options_and_quantisation() {
     assert!(tb.run_until(2.0, |tb| copies(tb, c)[0].2 == Some(Health(40))));
     let _ = Vec3::ZERO;
 }
+
+#[test]
+fn stats_report_loss_rtt_and_bandwidth() {
+    let c = NetConditions::lag_ms(40.0).with_loss_percent(25.0);
+    let mut tb = trio(c);
+    let e = spawn_at(&tb, 0.0, 0);
+    assert!(tb.run_until(5.0, |tb| both_connected(tb) && copies(tb, 1).len() == 1));
+    for step in 0..400u32 {
+        world(&tb, 0).insert_one(e, Health(step)).unwrap();
+        tb.step();
+    }
+    let s = tb.apps[1].resources.fetch::<NetStats>();
+    assert!((0.1..0.45).contains(&s.loss), "loss {}", s.loss);
+    assert!((0.07..0.2).contains(&s.rtt), "rtt {}", s.rtt);
+    assert!(
+        s.bytes_in_per_sec > 100.0 && s.bytes_out_per_sec > 10.0,
+        "{s:?}"
+    );
+    assert_eq!(s.replicated, 1);
+    let server = tb.apps[0].resources.fetch::<NetStats>();
+    assert_eq!(server.clients, 2);
+    assert!(server.bytes_out_per_sec > s.bytes_in_per_sec);
+}

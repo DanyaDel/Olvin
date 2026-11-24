@@ -56,7 +56,7 @@
 - [Скрипты](engine/scripting.md)
 - [Состояния и сохранения](engine/game-states-saves.md)
 - [Время и события](engine/time-events.md)
-- [Сеть (в работе)](engine/networking.md)
+- [Сеть](engine/networking.md)
 - [Профилировщик](engine/profiler.md)
 
 # Справочник

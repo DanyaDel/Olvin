@@ -91,6 +91,7 @@ Category Gameplay: Lua scripts and prefabs that work together. Every pack has a 
 | `spawners` | `Spawner` (interval, message, waves), `Crate`, `lifetime.lua` |
 | `camera-effects` | `camera_shake`, `smooth_follow`, `look_at_target`, `trigger_zone` (+ prefabs) |
 | `gameplay-demo` | an arena using all of them |
+| `multiplayer-starter` | a networked `Player` prefab (a `Replicated` marker), a small arena and a Lua example for `olvin_net`; needs the `net` feature in the game |
 
 Messages (`ctx:send(name, value[, target])`; "to X" means send it to that entity, "broadcast" means no target):
 

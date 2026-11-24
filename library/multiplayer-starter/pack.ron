@@ -1,0 +1,18 @@
+(
+  id: "multiplayer-starter",
+  name: "Multiplayer Starter",
+  version: "1.0.0",
+  category: Gameplay,
+  description: "A networked player prefab (a Replicated marker, no code), a small arena scene and a Lua script that sends a message to the server and counts shots in a replicated variable. Needs the olvin_net crate in the game; plays offline without it.",
+  tags: ["multiplayer", "network", "replication", "lua", "arena"],
+  author: "NLPA Collab",
+  license: "MIT OR Apache-2.0",
+  requires: [],
+  provides: [
+    "prefabs/multiplayer-starter/Player.prefab.ron",
+    "scripts/multiplayer-starter/player.lua",
+    "scenes/multiplayer-starter/demo.scene.ron",
+    "multiplayer-starter/README.md",
+  ],
+  notes: "Read multiplayer-starter/README.md first: it has the ten lines of Rust that host or join a game. The Player prefab carries a Replicated entry, so the server's PlayerSpawner makes one per client and every client gets a copy; player.lua counts each owner's shots in the replicated variable shots_<client id>. Open scenes/multiplayer-starter/demo.scene.ron for the arena (it runs offline too: the script does nothing without a network).",
+)

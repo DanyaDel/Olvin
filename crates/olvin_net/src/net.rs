@@ -92,6 +92,7 @@ pub struct Net {
     pub(crate) prediction_inbox: Vec<(olvin_ecs::Entity, Vec<u8>, u32)>,
     pub(crate) client_accum: f32,
     pub(crate) owner_local: Vec<usize>,
+    pub(crate) rates: crate::stats::RateWindow,
 }
 
 #[derive(Default)]
@@ -128,6 +129,7 @@ impl Net {
             prediction_inbox: Vec::new(),
             client_accum: 0.0,
             owner_local: Vec::new(),
+            rates: Default::default(),
         };
         // The owner of an entity travels like any component; it is always id 0.
         net.replicate_with_named::<Owner>("Owner", ReplicateOptions::default());
@@ -494,6 +496,7 @@ impl Net {
     pub(crate) fn update(&mut self, now: f64) {
         self.now = now;
         self.registry.frozen = true;
+        self.update_stats();
         let _ = Replicated::default;
         let hash = self.registry.signature();
         let mut inbox = Vec::new();

@@ -1,0 +1,12 @@
+// A networked player. The `Replicated` entry is what makes it one: the server gives every client
+// its own, owned by that client, and every client sees all of them. Add the same entry to any
+// object in the Inspector (Components) to replicate it.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Player", position: (0.0, 0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.9, 0.5, 0.2, 1.0))),
+            scripts: [(name: "multiplayer-starter/player")],
+            components: {"Replicated": "()"}),
+    ],
+)

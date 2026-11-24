@@ -55,6 +55,8 @@ impl Plugin for NetPlugin {
         let net = Net::new(self.cfg.clone(), transports, auth);
         app.insert_resource(net).add_event::<NetEvent>();
         app.add_event::<crate::message::NetCommandRejected>();
+        // Tools (the profiler panel) read the statistics from this resource.
+        app.init_resource::<crate::NetStats>();
         // Receive before gameplay (PreUpdate), send after it (PostUpdate).
         app.add_system(Stage::PreUpdate, |res| {
             let now = clock(res);
@@ -76,6 +78,7 @@ impl Plugin for NetPlugin {
             let mut rejected =
                 res.fetch_mut::<olvin_core::Events<crate::message::NetCommandRejected>>();
             rejected.send_batch(net.messages.rejected.drain(..));
+            *res.fetch_mut::<crate::NetStats>() = net.stats();
         });
         // After gameplay: predict, then step the server's fixed ticks and replicate.
         app.add_system(Stage::PostUpdate, |res| {

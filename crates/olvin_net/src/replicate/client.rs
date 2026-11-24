@@ -35,6 +35,9 @@ pub(crate) struct ReplClient {
     /// Estimated `server_time - local_time`.
     offset: Option<f64>,
     pub needs_clear: bool,
+    snaps_expected: u64,
+    snaps_received: u64,
+    newest_tick: u32,
 }
 
 impl ReplClient {
@@ -42,11 +45,30 @@ impl ReplClient {
         self.entities.get(&id.0).copied()
     }
 
+    /// Share of snapshots (by their numbers) that never arrived.
+    pub fn loss(&self) -> f32 {
+        if self.snaps_expected == 0 {
+            return 0.0;
+        }
+        1.0 - (self.snaps_received as f32 / self.snaps_expected as f32).min(1.0)
+    }
+
+    /// Newest server tick whose snapshot arrived.
+    pub fn newest_tick(&self) -> u32 {
+        self.newest_tick
+    }
+
     pub fn len(&self) -> usize {
         self.entities.len()
     }
 
     fn note_seq(&mut self, seq: u32) {
+        self.snaps_received += 1;
+        if !self.have_seq {
+            self.snaps_expected += 1;
+        } else if seq > self.recv_highest {
+            self.snaps_expected += (seq - self.recv_highest) as u64;
+        }
         if !self.have_seq {
             self.have_seq = true;
             self.recv_highest = seq;
@@ -269,6 +291,7 @@ impl Net {
         let now = self.now;
         if msg.seq != u32::MAX {
             self.repl.client.note_seq(msg.seq);
+            self.repl.client.newest_tick = self.repl.client.newest_tick.max(msg.tick);
             // Clock estimate for interpolation: the least-delayed snapshot is the truest.
             let est = tick_time(msg.tick, self.cfg.tick_rate) - now;
             let c = &mut self.repl.client;

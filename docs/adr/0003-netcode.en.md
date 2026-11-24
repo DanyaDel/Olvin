@@ -2,7 +2,7 @@
 
 <p align="center"><a href="0003-netcode.md">Русский</a></p>
 
-**Status:** Accepted — 2026-11-23 (crate `olvin_net`, branch `feat-net`)
+**Status:** Accepted — 2026-11-23 (crate `olvin_net`, branch `feat-net`). Implemented; see ARCHITECTURE.en.md, section olvin_net.
 
 ## Context
 
@@ -35,7 +35,7 @@ Typical game, in the order the author meets the layers: mark a prefab `Replicate
 
 ### Offline is a session mode
 
-`Offline` is not "no network". It is a server and one local client on a `Loopback` without conditions, inside one `App`. Single-player code calls `net.send(Target::Server, cmd)` and handles the command, just as in multiplayer. The price is a few serialisations per tick; the gain is that every game is tested as a networked one from day one.
+`Offline` is not "no network". It is a server with one local client (`ClientId::HOST`) inside one `App`. There is no socket: local sends skip the wire, but they are serialised and go through the same size checks, rate limits and validators as a remote message. Single-player code calls `net.send(Target::Server, cmd)` and handles the validated command, just as in multiplayer, and the player's input goes through the same queue. The price is a few serialisations; the gain is that every game is tested as a networked one from day one. (An earlier draft ran the local client over a `Loopback`; that would need two worlds in one `App`, so the local client is virtual.)
 
 ### Wire format: `postcard`
 
@@ -56,7 +56,7 @@ Every packet is `postcard`-serialised serde types. Why not `bincode 2`: postcard
 - **N2. TLS** is QUIC's. On top of that the session has a per-session key (below), so the same code is safe on any other transport.
 - **N3. Replay.** The handshake carries a client nonce and a unix timestamp; the server rejects a timestamp outside a window (default 60 s) and remembers recent nonces (bounded set). Inside the session every packet carries a strictly increasing sequence number and a truncated HMAC-SHA256 tag keyed by the session key; the receiver keeps a sliding window and drops duplicates and old numbers. A recorded packet replayed later is dropped.
 - **Session key.** `HMAC(secret, "olvin-net v1" || client_nonce || server_nonce)`. On QUIC `secret` is the TLS exporter output (bound to this connection, never on the wire). On `Loopback` it is empty: the transport is in-process and trusted, so the tag guards against bugs (and exercises the code path), not against an attacker. This is stated, not hidden.
-- **N4. No server secrets in the client.** The server certificate private key, the authenticator's secrets and any server-only configuration live in types that exist only in the `server` half of the crate API (`ServerSecrets`, `Authenticator` impls). The client build never constructs them. The rule: a secret marker is named `server_*`; a CI check that scans a client binary for such markers is possible later, it is not part of this work.
+- **N4. No server secrets in the client.** The server certificate private key, the authenticator's secrets and any server-only configuration live in types that only a server creates (`QuicIdentity`, `Authenticator` impls). The client build never constructs them. The rule: a secret marker is named `server_*`; a CI check that scans a client binary for such markers is possible later, it is not part of this work.
 - **Bounded everything.** Packet size, number of clients, pending handshakes, messages per second per client and per type, message size, entities per snapshot, buffered early updates, nesting. Peer input never reaches `unwrap`, indexing without a check or an unbounded allocation. Tests feed garbage bytes to every decoder.
 - **Authentication** is a trait (`Authenticator`): it gets the token the client sent and the peer address and returns an identity or a refusal. The default accepts everybody (fine for a LAN game); the crate ships a shared-password one. Real services (accounts, Steam tickets) implement the trait.
 - **Reconnect.** The server gives a reconnect token; a client that lost the connection within a grace period gets its `ClientId` and its `Owner` entities back.

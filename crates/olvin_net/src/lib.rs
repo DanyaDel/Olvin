@@ -33,6 +33,7 @@ mod room;
 mod secure;
 mod server;
 pub mod sim;
+mod stats;
 pub mod testing;
 mod transport;
 pub mod wire;
@@ -58,6 +59,7 @@ pub use replicate::{
 };
 pub use room::{JoinTarget, RoomCode, RoomCodeError};
 pub use sim::NetConditions;
+pub use stats::NetStats;
 pub use transport::{Channel, ConnId, Transport, TransportEvent};
 
 #[cfg(all(test, feature = "physics"))]

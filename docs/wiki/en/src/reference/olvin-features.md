@@ -16,6 +16,8 @@ The `olvin` crate (`crates/olvin`) re-exports the subsystems; each is enabled by
 | `audio` | sound on kira | | `audio` |
 | `game` | states, `SceneLoader`, saves | | `game` |
 | `gui` | game UI and text (`olvin::gui`, `olvin::text`) | `input` | none |
+| `net` | netcode (`olvin::net`): sessions, replication, messages, prediction; Lua bindings with `lua` | | nothing |
+| `net-quic` | QUIC sockets for `net` (TLS 1.3, room codes) | `net` | nothing |
 | `profile` | puffin marks for systems, rendering, physics, scripts | | none |
 | `profile-http` | a server for `puffin_viewer` (`OLVIN_PROFILE_HTTP`) | | none |
 

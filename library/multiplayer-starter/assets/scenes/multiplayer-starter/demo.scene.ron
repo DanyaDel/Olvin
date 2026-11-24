@@ -1,0 +1,26 @@
+// A small arena: floor, four walls, a sun and one player. In a networked game the server
+// makes the players (PlayerSpawner) and this one is just the offline preview.
+(
+    version: 4,
+    entities: [
+        (id: 1, name: "Sun", position: (0.0, 10.0, 0.0), rotation: (-50.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0),
+            light: Some((kind: Directional, color: (1.0, 0.95, 0.88), intensity: 1.0, range: 10.0, spot_angle: 30.0, shadows: true))),
+        (id: 10, name: "Floor", position: (0.0, -0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (24.0, 1.0, 24.0),
+            mesh: Some((shape: Cube, color: (0.34, 0.36, 0.38, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.8, restitution: 0.0))),
+        (id: 11, name: "Wall North", position: (0.0, 1.0, -12.0), rotation: (0.0, 0.0, 0.0), scale: (24.0, 2.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.5, 0.55, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0))),
+        (id: 12, name: "Wall South", position: (0.0, 1.0, 12.0), rotation: (0.0, 0.0, 0.0), scale: (24.0, 2.0, 1.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.5, 0.55, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0))),
+        (id: 13, name: "Wall East", position: (12.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 2.0, 24.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.5, 0.55, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0))),
+        (id: 14, name: "Wall West", position: (-12.0, 1.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 2.0, 24.0),
+            mesh: Some((shape: Cube, color: (0.5, 0.5, 0.55, 1.0))),
+            collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), center: (0.0, 0.0, 0.0), is_trigger: false, friction: 0.5, restitution: 0.0))),
+        (id: 100, name: "Player", position: (0.0, 0.5, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0),
+            prefab: Some((asset: "prefabs/multiplayer-starter/Player.prefab.ron"))),
+    ],
+)

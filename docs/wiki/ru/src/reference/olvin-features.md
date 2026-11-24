@@ -16,6 +16,8 @@
 | `audio` | звук на kira | | `audio` |
 | `game` | состояния, `SceneLoader`, сохранения | | `game` |
 | `gui` | игровой UI и текст (`olvin::gui`, `olvin::text`) | `input` | нет |
+| `net` | сеть (`olvin::net`): сессии, репликация, сообщения, предсказание; Lua-привязки вместе с `lua` | | нет |
+| `net-quic` | сокеты QUIC для `net` (TLS 1.3, коды комнат) | `net` | нет |
 | `profile` | puffin-метки систем, рендера, физики, скриптов | | нет |
 | `profile-http` | сервер для `puffin_viewer` (`OLVIN_PROFILE_HTTP`) | | нет |
 

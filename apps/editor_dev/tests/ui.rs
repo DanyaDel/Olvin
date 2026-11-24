@@ -35,6 +35,9 @@ fn isolate_config() {
             std::env::temp_dir().join(format!("olvin-editor-ui-config-{}", std::process::id()));
         // SAFETY: set once, before any test thread creates an editor.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir) };
+        // Test projects live in temp folders nobody trusted: `OLVIN_TRUST=1`
+        // keeps the "Trust this project?" modal from covering the UI.
+        unsafe { std::env::set_var("OLVIN_TRUST", "1") };
     });
 }
 

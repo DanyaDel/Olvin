@@ -300,7 +300,8 @@ impl EditorState {
         let Some(project) = &self.project else {
             return;
         };
-        self.project_trusted = store.is_trusted(project);
+        // `OLVIN_TRUST=1` trusts everything for this run, like the CLI.
+        self.project_trusted = olvin_trust::env_trusts() || store.is_trusted(project);
         self.trust_pending = !self.project_trusted && !read_only;
         if !self.project_trusted {
             self.warn(

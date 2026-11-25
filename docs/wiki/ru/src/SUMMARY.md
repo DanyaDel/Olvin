@@ -56,6 +56,7 @@
 - [Скрипты](engine/scripting.md)
 - [Состояния и сохранения](engine/game-states-saves.md)
 - [Время и события](engine/time-events.md)
+- [Устойчивость к сбоям](engine/faults.md)
 - [Локализация](engine/localization.md)
 - [Навигация](engine/navigation.md)
 - [Катсцены](engine/cutscenes.md)

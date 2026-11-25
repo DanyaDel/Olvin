@@ -2178,3 +2178,67 @@ fn settings_rebinds_a_command_by_pressing_the_new_key() {
         "M"
     );
 }
+
+/// Replaces the Hierarchy with a panel that panics while `BROKEN` is set.
+static BROKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+struct Fragile;
+impl olvin_editor::Panel for Fragile {
+    fn ui(&mut self, ui: &mut egui::Ui, _: &mut olvin_editor::EditorState) {
+        if BROKEN.load(std::sync::atomic::Ordering::Relaxed) {
+            panic!("fragile panel broke on purpose");
+        }
+        ui.label("fragile panel is fine");
+    }
+}
+
+struct FragilePlugin;
+impl EditorPlugin for FragilePlugin {
+    fn name(&self) -> &'static str {
+        "fragile"
+    }
+    fn build(&self, registry: &mut olvin_editor::Registry) {
+        registry.add_panel(olvin_editor::PanelKind {
+            id: olvin_editor::panels::HIERARCHY,
+            title: "Fragile",
+            factory: || Box::new(Fragile),
+        });
+    }
+}
+
+#[test]
+fn a_crashing_panel_shows_a_card_and_restarts_without_taking_the_editor_down() {
+    isolate_config();
+    let p = project("crash");
+    let project = p.clone();
+    let mut h = Harness::builder()
+        .with_size(SIZE)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(move |cc| {
+            olvin_editor::theme::apply(&cc.egui_ctx);
+            let mut all = plugins();
+            all.push(Box::new(FragilePlugin));
+            let registry = olvin_editor::registry(&all);
+            let mut app = EditorApp::new(registry, Some(project), None);
+            // CI runs with OLVIN_FAULTS=abort; this test is about isolation.
+            app.set_fault_policy(olvin_editor::olvin::core::FaultPolicy::Isolate);
+            app.reset_layout();
+            assert!(app.show_workspace("Layout"));
+            app
+        });
+    h.run_steps(5);
+    // The editor is alive and still edits.
+    assert_eq!(state(&mut h).scene.entities.len(), 3);
+    h.get_by_label("⚠ Fragile crashed");
+    assert!(
+        state(&mut h)
+            .log
+            .iter()
+            .any(|l| l.text.contains("fragile panel broke on purpose")),
+        "the crash is in the console log"
+    );
+    BROKEN.store(false, std::sync::atomic::Ordering::Relaxed);
+    h.get_by_label("⟲ Restart panel").click();
+    h.run_steps(3);
+    h.get_by_label("fragile panel is fine");
+}

@@ -6,6 +6,7 @@
 | `__EGL_VENDOR_LIBRARY_FILENAMES` | glvnd | `/usr/share/glvnd/egl_vendor.d/50_mesa.json`: use Mesa (llvmpipe) for GL |
 | `OLVIN_LOG`, `RUST_LOG` | `olvin_core::logging` | log filter: `debug`, `info,olvin_render=trace` (the longest module prefix wins); `OLVIN_LOG` takes precedence |
 | `OLVIN_LANG` | `olvin_locale::system_language` | the language of the game's text (`ru`, `pt-BR`); otherwise `LC_ALL`, `LC_MESSAGES`, `LANG` |
+| `OLVIN_FAULTS` | `olvin_core::faults` | `abort`: a panic in a system takes the process down (CI, tests); otherwise the crashed subsystem stops and the rest runs |
 | `OLVIN_PROJECT_DIR` | `ProjectPaths::detect` | the project root |
 | `OLVIN_ASSETS_DIR` | `ProjectPaths::detect` | the assets folder (changes only `assets`) |
 | `OLVIN_PROFILE` | `olvin_core::profile` | `1`: record the profile (needs the `profile` feature) |

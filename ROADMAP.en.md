@@ -15,6 +15,8 @@ Size: **S** up to a week, **M** several weeks, **L** a month or more.
 
 The engine should grow from a game, not from a list of features. First we need a **vertical slice**: one small game (for example, first-person with physics, triggers, sound, one character with an animation and saving) that builds and runs without manual code edits. Each item below is checked against whether this game needs it. Everything the vertical slice does not need goes to P2–P3.
 
+**Fault tolerance** (owner's decision, 2026-11-25): as in Linux, where PipeWire or the WM crashing does not take the kernel down. The loop, the ECS, the resources and the editor always live; a crashed subsystem stops, writes a large log and waits for a restart. New subsystems are designed so they can be stopped and brought back.
+
 Not to do now: rewriting the ECS (hecs is fine), supporting WebGPU and Android before the first stable desktop build, writing our own scripting language.
 
 ---
@@ -43,6 +45,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [x] **Scene and state management**: loading a scene in the background, transitions between scenes (menu, game, pause), states with enter and exit. (M) — `olvin_game`: `State<S>` with enter/exit, background `SceneLoader`.
 - [x] **Time**: fixed step for physics, time scale, pause, a deterministic step for tests. `Time` exists, but without a fixed step. (S) — `olvin_core::time`: scale, pause, `step`, fixed delta.
 - [x] **Events between systems**: a typed event queue (currently, it seems, done manually through resources). (S) — `Events<T>` + `EventCursor`, `App::add_event`.
+- [~] **Isolating subsystem crashes** (see "The main principle"). (M) [P1] — done: a panic in a system stops every system of its plugin, a `Faults` resource with restart, a `SUBSYSTEM CRASHED` report in the log, `OLVIN_FAULTS=abort` for CI; in the editor the game in Play is isolated (crashes go to the console) and a crashed panel shows a card with Restart; a wiki page "Fault tolerance". Left: losing the GPU device (recreate it or show a clear error), reconnecting audio when the device disappears, a scene autosave before Play, a "Subsystems" panel in the editor (what is down, a restart button for the game in Play), isolating viewport extensions and frame hooks per element (today their panic takes down the whole viewport panel).
 - [ ] **Parallel scheduler** (item 4 of the old plan, rayon) for systems with no resource overlap. Do it once real systems exist and profiling shows the bottleneck. (M)
 - [x] **Profiler**: integration with tracy or puffin, a frame panel in the editor (system times, draw calls, triangles). (M) — puffin behind the `profile` feature (scopes on systems, stages, render, physics, scripts), `OLVIN_PROFILE_HTTP` for `puffin_viewer`; the panel is in the editor (see below).
 - [x] **Saving and loading the game** (a layer separate from scenes): component serialisation through a type registry, save slots. (M) — `olvin_game::save`: `SaveRegistry`, `SaveSlots`. Since 2026-11-21 engine state registers itself (`register_engine`: `Transform`, velocities, the controller, `Behaviour::save_state`), keyed by `SceneId` by default; Lua state is not saved.

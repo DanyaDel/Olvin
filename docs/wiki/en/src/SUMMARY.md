@@ -56,6 +56,7 @@
 - [Scripting](engine/scripting.md)
 - [States and saves](engine/game-states-saves.md)
 - [Time and events](engine/time-events.md)
+- [Fault tolerance](engine/faults.md)
 - [Localization](engine/localization.md)
 - [Navigation](engine/navigation.md)
 - [Cutscenes](engine/cutscenes.md)

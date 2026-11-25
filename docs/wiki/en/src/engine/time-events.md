@@ -4,7 +4,7 @@ The base of `olvin_core`: the application, the schedule, time and typed events.
 
 ## App and the schedule
 
-`App` holds `Resources`, a `Schedule`, plugins and a runner. `add_plugin` skips repeats of the same type. Stages: `Startup, First, PreUpdate, Update, PostUpdate, Render, Last`; a system is `FnMut(&mut Resources)`, everything is single-threaded for now (a rayon scheduler is planned). Without a runner a headless loop runs: `startup()` and `update()`.
+`App` holds `Resources`, a `Schedule`, plugins and a runner. `add_plugin` skips repeats of the same type. Stages: `Startup, First, PreUpdate, Update, PostUpdate, Render, Last`; a system is `FnMut(&mut Resources)`, everything is single-threaded for now (a rayon scheduler is planned). A panic in a system stops only its plugin's subsystem, see [Fault tolerance](faults.md). Without a runner a headless loop runs: `startup()` and `update()`.
 
 ## Resources
 

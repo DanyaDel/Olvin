@@ -881,6 +881,8 @@ pub struct PlaySession {
     step: bool,
     pub(crate) saved: SceneFile,
     pub(crate) undo_len: usize,
+    /// Faults of the game already shown in the console.
+    faults_seen: usize,
 }
 
 impl PlaySession {
@@ -892,6 +894,10 @@ impl PlaySession {
         let mut app = App::new();
         // The editor cuts profiler frames itself, once per editor frame.
         app.set_profile_frames(false);
+        // A crash in the game stops that subsystem, never the editor.
+        app.resources
+            .fetch_mut::<olvin::core::Faults>()
+            .set_policy(olvin::core::FaultPolicy::Isolate);
         app.add_plugin(EcsPlugin)
             .add_plugin(TransformPlugin)
             .add_plugin(PhysicsPlugin::default());
@@ -936,7 +942,16 @@ impl PlaySession {
             step: false,
             saved: scene.clone(),
             undo_len,
+            faults_seen: 0,
         }
+    }
+
+    /// Subsystems of the game that crashed since the last call.
+    pub fn new_faults(&mut self) -> Vec<olvin::core::Fault> {
+        let faults = self.app.resources.fetch::<olvin::core::Faults>();
+        let new = faults.list()[self.faults_seen.min(faults.list().len())..].to_vec();
+        self.faults_seen = faults.list().len();
+        new
     }
 
     pub fn step_once(&mut self) {

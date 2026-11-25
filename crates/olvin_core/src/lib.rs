@@ -3,6 +3,7 @@
 
 mod app;
 mod events;
+pub mod faults;
 #[cfg(feature = "integrity")]
 pub mod integrity;
 pub mod logging;
@@ -18,6 +19,7 @@ mod timers;
 
 pub use app::{App, AppExit};
 pub use events::{EventCursor, Events};
+pub use faults::{Fault, FaultPolicy, Faults};
 pub use logging::Logging;
 pub use paths::{ASSETS_DIR_ENV, PROJECT_DIR_ENV, PathsSource, ProjectPaths};
 pub use plugin::Plugin;

@@ -78,6 +78,11 @@ pub struct EditorApp {
     registry: Registry,
     layout: Layout,
     panels: HashMap<u32, Box<dyn Panel>>,
+    /// Tabs whose panel panicked (tab id → panic message): they show a crash
+    /// card with Restart instead of taking the editor down.
+    crashed: HashMap<u32, String>,
+    /// `Abort` (from `OLVIN_FAULTS=abort`, CI) lets a panel's panic through.
+    fault_policy: olvin::core::FaultPolicy,
     state: EditorState,
     renaming: Option<(usize, String)>,
     save_as: Option<String>,
@@ -118,6 +123,8 @@ impl EditorApp {
             registry,
             layout,
             panels: HashMap::new(),
+            crashed: HashMap::new(),
+            fault_policy: olvin::core::FaultPolicy::from_env(),
             state,
             renaming: None,
             save_as: None,
@@ -133,6 +140,12 @@ impl EditorApp {
 
     /// The scene, selection and preferences, for tools that drive the editor
     /// without a window (headless screenshots).
+    /// What a panicking panel does: `Isolate` shows a crash card, `Abort`
+    /// lets the panic through. Defaults to `OLVIN_FAULTS`.
+    pub fn set_fault_policy(&mut self, policy: olvin::core::FaultPolicy) {
+        self.fault_policy = policy;
+    }
+
     pub fn state_mut(&mut self) -> &mut EditorState {
         &mut self.state
     }
@@ -810,11 +823,30 @@ impl EditorApp {
 struct Viewer<'a> {
     registry: &'a Registry,
     panels: &'a mut HashMap<u32, Box<dyn Panel>>,
+    crashed: &'a mut HashMap<u32, String>,
+    fault_policy: olvin::core::FaultPolicy,
     state: &'a mut EditorState,
     added: Vec<(NodePath, &'static str)>,
     ctx: egui::Context,
     /// Tab id → (front tab of its leaf, front tab of the focused leaf).
     tab_states: HashMap<u32, (bool, bool)>,
+}
+
+/// What a crashed panel shows instead of itself; `true` when Restart is pressed.
+fn crash_card(ui: &mut egui::Ui, title: &str, message: &str) -> bool {
+    let mut restart = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space(24.0);
+        ui.heading(
+            RichText::new(format!("⚠ {title} crashed")).color(theme::palette(ui.ctx()).error),
+        );
+        ui.add_space(6.0);
+        ui.label(message);
+        ui.weak("The rest of the editor works. Details are in the Console.");
+        ui.add_space(10.0);
+        restart = ui.button("⟲ Restart panel").clicked();
+    });
+    restart
 }
 
 /// Which tabs are in front, and which one is focused, for the tab easing.
@@ -842,11 +874,32 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match self.registry.panel(&tab.kind) {
-            Some(kind) => self
-                .panels
-                .entry(tab.id)
-                .or_insert_with(kind.factory)
-                .ui(ui, self.state),
+            Some(kind) if self.crashed.contains_key(&tab.id) => {
+                let message = self.crashed[&tab.id].clone();
+                if crash_card(ui, kind.title, &message) {
+                    self.crashed.remove(&tab.id);
+                    self.state.warn(format!("{}: restarted", kind.title));
+                }
+            }
+            Some(kind) => {
+                let panel = self.panels.entry(tab.id).or_insert_with(kind.factory);
+                let state = &mut *self.state;
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| panel.ui(ui, state)));
+                if let Err(payload) = result {
+                    if self.fault_policy == olvin::core::FaultPolicy::Abort {
+                        std::panic::resume_unwind(payload);
+                    }
+                    let message = olvin::core::faults::panic_message(payload.as_ref());
+                    // A fresh instance on restart: the old one may be half-updated.
+                    self.panels.remove(&tab.id);
+                    self.state.error(format!(
+                        "panel {} ({}) crashed: {message}. The editor keeps running; the panel waits for Restart",
+                        kind.title, tab.kind
+                    ));
+                    self.crashed.insert(tab.id, message);
+                }
+            }
             None => {
                 ui.centered_and_justified(|ui| {
                     ui.label(format!(
@@ -938,6 +991,12 @@ impl EditorApp {
         if let Some(play) = &mut self.state.play {
             play.tick();
             ctx.request_repaint();
+            for fault in play.new_faults() {
+                self.state.error(format!(
+                    "game: subsystem {} crashed in {} ({:?}, frame {}): {}. It is stopped, the rest of the game runs; fix it and press Play again",
+                    fault.owner, fault.system, fault.stage, fault.frame, fault.message
+                ));
+            }
         } else if self
             .state
             .tick_particle_previews(ctx.input(|i| i.stable_dt))
@@ -1041,6 +1100,8 @@ impl EditorApp {
                 let mut viewer = Viewer {
                     registry: &self.registry,
                     panels: &mut self.panels,
+                    crashed: &mut self.crashed,
+                    fault_policy: self.fault_policy,
                     state: &mut self.state,
                     added: Vec::new(),
                     ctx: ui.ctx().clone(),

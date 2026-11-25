@@ -4,7 +4,7 @@
 
 ## App и расписание
 
-`App` хранит `Resources`, `Schedule`, плагины и runner. `add_plugin` пропускает повторы того же типа. Стадии: `Startup, First, PreUpdate, Update, PostUpdate, Render, Last`; система это `FnMut(&mut Resources)`, пока всё однопоточное (планировщик на rayon в плане). Без runner'а крутится headless-цикл: `startup()` и `update()`.
+`App` хранит `Resources`, `Schedule`, плагины и runner. `add_plugin` пропускает повторы того же типа. Стадии: `Startup, First, PreUpdate, Update, PostUpdate, Render, Last`; система это `FnMut(&mut Resources)`, пока всё однопоточное (планировщик на rayon в плане). Паника в системе гасит только подсистему её плагина, см. [Устойчивость к сбоям](faults.md). Без runner'а крутится headless-цикл: `startup()` и `update()`.
 
 ## Resources
 

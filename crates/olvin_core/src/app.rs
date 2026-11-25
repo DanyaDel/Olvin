@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::collections::HashSet;
 
-use crate::{Events, Plugin, ProjectPaths, Resources, Schedule, Stage, Time, events, time};
+use crate::{Events, Faults, Plugin, ProjectPaths, Resources, Schedule, Stage, Time, events, time};
 
 /// Set `requested` to stop the main loop after the current frame.
 #[derive(Debug, Default)]
@@ -17,6 +17,8 @@ pub struct App {
     pub resources: Resources,
     schedule: Schedule,
     plugins: HashSet<TypeId>,
+    /// Plugins being built, innermost last: their systems belong to the last one.
+    building: Vec<&'static str>,
     events: HashSet<TypeId>,
     runner: Option<Runner>,
     started: bool,
@@ -36,6 +38,7 @@ impl App {
             resources: Resources::default(),
             schedule: Schedule::default(),
             plugins: HashSet::new(),
+            building: Vec::new(),
             events: HashSet::new(),
             runner: None,
             started: false,
@@ -45,6 +48,7 @@ impl App {
         app.insert_resource(Time::default());
         app.insert_resource(AppExit::default());
         app.insert_resource(ProjectPaths::detect().clone());
+        app.insert_resource(Faults::default());
         app.add_system(Stage::First, time::update_time);
         app
     }
@@ -54,7 +58,9 @@ impl App {
     pub fn add_plugin<P: Plugin>(&mut self, plugin: P) -> &mut Self {
         if self.plugins.insert(TypeId::of::<P>()) {
             log::debug!("plugin: {}", plugin.name());
+            self.building.push(short_name(plugin.name()));
             plugin.build(self);
+            self.building.pop();
         }
         self
     }
@@ -68,7 +74,8 @@ impl App {
         stage: Stage,
         system: impl FnMut(&mut Resources) + 'static,
     ) -> &mut Self {
-        self.schedule.add(stage, system);
+        let owner = self.building.last().copied().unwrap_or("core");
+        self.schedule.add_owned(stage, owner, system);
         self
     }
 
@@ -145,6 +152,15 @@ impl App {
     }
 }
 
+/// `olvin_physics::PhysicsPlugin` → `PhysicsPlugin`, generics included.
+fn short_name(name: &'static str) -> &'static str {
+    let head = name.split('<').next().unwrap_or(name);
+    match head.rfind("::") {
+        Some(i) => &name[i + 2..],
+        None => name,
+    }
+}
+
 fn run_headless(mut app: App) {
     while !app.exit_requested() {
         app.update();
@@ -154,6 +170,7 @@ fn run_headless(mut app: App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FaultPolicy;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -204,5 +221,80 @@ mod tests {
         // Plugin added twice still counts once per frame; startup ran once.
         assert_eq!(result.get(), 3);
         assert_eq!(startups.get(), 1);
+    }
+
+    /// Panics on its third frame; its other system counts frames.
+    struct Crashy;
+    struct CrashyTicks(u32);
+    struct Alive(u32);
+    impl Plugin for Crashy {
+        fn build(&self, app: &mut App) {
+            app.insert_resource(CrashyTicks(0))
+                .add_system(Stage::Update, |res| {
+                    let frame = res.fetch::<crate::Time>().frame();
+                    if frame == 2 && !res.contains::<bool>() {
+                        panic!("crashy broke on purpose");
+                    }
+                })
+                .add_system(Stage::PostUpdate, |res| {
+                    res.fetch_mut::<CrashyTicks>().0 += 1;
+                });
+        }
+    }
+
+    fn crashy_app(policy: FaultPolicy) -> App {
+        let mut app = App::new();
+        app.resources.fetch_mut::<Faults>().set_policy(policy);
+        app.insert_resource(Alive(0));
+        app.add_plugin(Crashy);
+        app.add_system(Stage::Update, |res| res.fetch_mut::<Alive>().0 += 1);
+        app
+    }
+
+    #[test]
+    fn a_crashed_plugin_stops_and_the_rest_keeps_running() {
+        let mut app = crashy_app(FaultPolicy::Isolate);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(app.resources.fetch::<Alive>().0, 5, "core systems go on");
+        assert_eq!(
+            app.resources.fetch::<CrashyTicks>().0,
+            2,
+            "the whole subsystem stopped, not only the system that panicked"
+        );
+        {
+            let faults = app.resources.fetch::<Faults>();
+            assert_eq!(faults.down(), ["Crashy"]);
+            let fault = &faults.list()[0];
+            assert_eq!(fault.owner, "Crashy");
+            assert_eq!(fault.stage, Stage::Update);
+            assert_eq!(fault.message, "crashy broke on purpose");
+            assert_eq!(fault.frame, 2);
+        }
+        // "Fixed": restart brings it back.
+        app.insert_resource(true);
+        app.resources.fetch_mut::<Faults>().restart("Crashy");
+        app.update();
+        assert!(app.resources.fetch::<Faults>().down().is_empty());
+        assert_eq!(app.resources.fetch::<CrashyTicks>().0, 3);
+    }
+
+    #[test]
+    fn abort_policy_lets_the_panic_through() {
+        let mut app = crashy_app(FaultPolicy::Abort);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for _ in 0..5 {
+                app.update();
+            }
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn plugin_names_are_short() {
+        assert_eq!(short_name("olvin_physics::PhysicsPlugin"), "PhysicsPlugin");
+        assert_eq!(short_name("a::Gen<b::C>"), "Gen<b::C>");
+        assert_eq!(short_name("Plain"), "Plain");
     }
 }

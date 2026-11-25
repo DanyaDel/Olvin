@@ -104,6 +104,8 @@ echo "quick_test: крейты (${#CRATES[@]}): ${CRATES[*]}"
 
 # Ускорители из memory-политики: общий sccache и без инкрементальной сборки.
 export CARGO_INCREMENTAL=0
+# Тесты строгие: паника в системе роняет тест, а не только гасит подсистему.
+export OLVIN_FAULTS="${OLVIN_FAULTS:-abort}"
 if command -v sccache >/dev/null; then
     export RUSTC_WRAPPER=sccache
     export SCCACHE_DIR="$PWD/target/sccache"

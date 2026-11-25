@@ -20,6 +20,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
+  # Паника в системе роняет тест, а не только гасит подсистему (olvin_core::faults).
+  OLVIN_FAULTS: abort
   # Безголовый GL: wgpu берёт EGL от Mesa (llvmpipe), а не от проприетарного драйвера.
   WGPU_BACKEND: gl
   __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json

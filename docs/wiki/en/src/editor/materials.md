@@ -31,7 +31,11 @@ The inspector has presets. Material edits are in the undo history: each step car
 
 A surface shader implements the contract `fn surface(in: SurfaceInput) -> SurfaceOutput` (`SURFACE_SHADER_CONTRACT`); error line numbers match the file. Editing a shader in the IDE is picked up on the fly.
 
-> **Status:** a material editor with a preview is not done, there is only the inspector section, see [#41](https://github.com/DanyaDel/Olvin/issues/41). There is no shader graph, see [#22](https://github.com/DanyaDel/Olvin/issues/22).
+## Preview
+
+Under the material picker the Material section shows a sphere wearing the material. The engine's renderer draws it, the same one as the scene view, with a studio light and the scene's sky and exposure. The preview follows edits at once, before the file is written. Animated shaders show a single frame.
+
+> **Status:** no shader graph yet, see [#22](https://github.com/DanyaDel/Olvin/issues/22).
 
 ## See also
 

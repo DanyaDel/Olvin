@@ -827,3 +827,81 @@ fn skin_ui() {
     }
     let _ = fs::remove_dir_all(project.parent().unwrap());
 }
+
+/// The inspector's material preview: the engine draws the selected object's
+/// material on a sphere (a teal metal here: nothing else in the demo scene is teal), and the inspector shows it.
+/// Writes `$OLVIN_EDITOR_SHOTS/material-preview.png` (default: `target/`).
+#[test]
+#[ignore = "renders with wgpu; run with --ignored"]
+fn material_preview_shows_the_material_on_a_sphere() {
+    let root = std::env::temp_dir().join(format!("olvin-matpreview-{}", std::process::id()));
+    demo_project(&root);
+    let assets = root.join("assets");
+    olvin_editor::olvin_scene::material::MaterialDesc {
+        base_color: [0.1, 0.75, 0.8, 1.0],
+        metallic: 1.0,
+        roughness: 0.3,
+        ..Default::default()
+    }
+    .save(assets.join("materials/teal.mat.ron"))
+    .unwrap();
+    let scene_path = assets.join("scenes/main.scene.ron");
+    let mut scene = SceneFile::load(&scene_path).unwrap();
+    let selected = scene
+        .entities
+        .iter_mut()
+        .find(|e| e.id == SELECTED)
+        .unwrap();
+    assert!(
+        selected.mesh.is_some(),
+        "the selected demo object has a mesh"
+    );
+    selected.material = Some("materials/teal.mat.ron".into());
+    scene.save(&scene_path).unwrap();
+
+    let dir = std::env::var_os("OLVIN_EDITOR_SHOTS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+    fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("material-preview.png");
+    shot_with(&root, &out, ThemeKind::Dark, None, |_| {});
+    let image = image::open(&out).unwrap().to_rgb8();
+    // Teal pixels in the inspector (the right side of the window), well
+    // above the colour swatch's few hundred.
+    let teal = image
+        .enumerate_pixels()
+        .filter(|(x, _, p)| {
+            *x > image.width() * 3 / 4
+                && p[2] > 60
+                && p[1] as i32 - p[0] as i32 > 30
+                && p[2] as i32 - p[0] as i32 > 30
+        })
+        .count();
+    assert!(teal > 3000, "no teal sphere in the inspector ({teal} px)");
+
+    // An unsaved edit (in memory only, the file still says teal) shows at once.
+    let edited = dir.join("material-preview-edited.png");
+    shot_with(&root, &edited, ThemeKind::Dark, None, |h| {
+        let state = h.state_mut().state_mut();
+        state
+            .materials
+            .get("materials/teal.mat.ron")
+            .unwrap()
+            .base_color = [0.9, 0.1, 0.8, 1.0];
+        h.run_steps(3);
+    });
+    let image = image::open(&edited).unwrap().to_rgb8();
+    let magenta = image
+        .enumerate_pixels()
+        .filter(|(x, _, p)| {
+            *x > image.width() * 3 / 4
+                && p[0] as i32 - p[1] as i32 > 40
+                && p[2] as i32 - p[1] as i32 > 40
+        })
+        .count();
+    assert!(
+        magenta > 3000,
+        "the preview did not follow the edit ({magenta} px)"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

@@ -300,6 +300,17 @@ impl Panel for Inspector {
                     .collect()
             })
             .unwrap_or_default();
+        // Drawn before the scene is borrowed apart; a change made this frame
+        // shows on the next one (the section asks for it).
+        let material_preview = state
+            .scene
+            .get(id)
+            .filter(|e| e.mesh.is_some() || e.poly.is_some() || e.brush.is_some())
+            .and_then(|e| e.material.clone())
+            .and_then(|rel| {
+                let desc = state.materials.get(&rel)?.clone();
+                crate::material_preview::render(state, &rel, &desc)
+            });
         let fx = &mut state.engine_scene.fx;
         let olvin_scene::file::SceneFile {
             entities,
@@ -364,7 +375,7 @@ impl Panel for Inspector {
                     });
                 }
                 if e.mesh.is_some() || e.poly.is_some() || e.brush.is_some() {
-                    log = material_section(ui, e, &mut state.materials);
+                    log = material_section(ui, e, &mut state.materials, material_preview);
                 }
                 if let Some(model) = &mut e.model {
                     let preview = state.model_previews.entry(id).or_default();
@@ -731,6 +742,7 @@ fn material_section(
     ui: &mut egui::Ui,
     e: &mut EntityDesc,
     lib: &mut crate::materials::MaterialLibrary,
+    preview: Option<egui::TextureId>,
 ) -> Option<Result<String, String>> {
     use crate::materials::{material_ui, presets_ui, short_name};
     let mut log = None;
@@ -788,8 +800,23 @@ fn material_section(
             );
             return;
         };
+        if let Some(texture) = preview {
+            let side = crate::material_preview::PREVIEW_PIXELS as f32 / 2.0;
+            ui.vertical_centered(|ui| {
+                ui.add(
+                    egui::Image::new((texture, egui::vec2(side, side)))
+                        .corner_radius(6.0)
+                        .sense(egui::Sense::hover()),
+                )
+                .on_hover_text("Preview: this material on a sphere, lit by a studio light with the scene's sky and exposure");
+            });
+        }
         let mut changed = presets_ui(ui, m);
         changed |= material_ui(ui, m, &textures, &shaders);
+        if changed {
+            // The preview is drawn before this section: one more frame shows the edit.
+            ui.ctx().request_repaint();
+        }
         // Stacked: the path and the button do not both fit a narrow panel.
         ui.vertical(|ui| {
             ui.add(

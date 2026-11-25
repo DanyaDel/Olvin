@@ -41,7 +41,22 @@ pub struct EngineGpu {
     device: eframe::wgpu::Device,
     queue: eframe::wgpu::Queue,
     format: eframe::wgpu::TextureFormat,
+    /// Offscreen target of the material preview (made on first use).
+    preview: Option<PreviewTarget>,
 }
+
+/// Where a material preview is drawn: MSAA colour and depth like the scene
+/// view, resolved into a texture egui shows as an image.
+pub(crate) struct PreviewTarget {
+    msaa: eframe::wgpu::TextureView,
+    depth: eframe::wgpu::TextureView,
+    pub resolved: eframe::wgpu::TextureView,
+    /// Set once the texture is registered with egui.
+    pub egui_id: Option<egui::TextureId>,
+}
+
+/// Engine view id of the material preview (scene views use small ids).
+const PREVIEW_VIEW: u64 = u64::MAX;
 
 impl EngineGpu {
     pub fn new(state: &egui_wgpu::RenderState) -> Self {
@@ -61,6 +76,94 @@ impl EngineGpu {
             device: state.device.clone(),
             queue: state.queue.clone(),
             format: state.target_format,
+            preview: None,
+        }
+    }
+
+    /// Draws `world` from `view_proj` into the preview target (`size`
+    /// pixels square) and submits it; returns the target.
+    pub(crate) fn render_preview(
+        &mut self,
+        world: &World,
+        meshes: &mut Meshes,
+        assets: Registries,
+        view_proj: Mat4,
+        settings: &RenderSettings,
+        size: u32,
+    ) -> &mut PreviewTarget {
+        use eframe::wgpu;
+        let gpu = &mut self.edit;
+        self.core.upload(gpu, meshes);
+        self.core
+            .upload_assets(gpu, assets.textures, assets.materials, assets.shaders);
+        let view = self
+            .views
+            .entry(PREVIEW_VIEW)
+            .or_insert_with(|| self.core.create_view());
+        self.core.prepare(view, gpu, world, view_proj, settings);
+        let device = &self.device;
+        let format = self.format;
+        let target = self.preview.get_or_insert_with(|| {
+            let make = |format, samples, usage| {
+                device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some("material preview"),
+                        size: wgpu::Extent3d {
+                            width: size,
+                            height: size,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: samples,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage,
+                        view_formats: &[],
+                    })
+                    .create_view(&Default::default())
+            };
+            let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
+            PreviewTarget {
+                msaa: make(format, MSAA, rt),
+                depth: make(DEPTH_FORMAT, MSAA, rt),
+                resolved: make(format, 1, rt | wgpu::TextureUsages::TEXTURE_BINDING),
+                egui_id: None,
+            }
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        self.core.render_shadows(view, &self.edit, &mut encoder);
+        {
+            let [r, g, b, a] = settings.clear_color.0.map(f64::from);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("material preview"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.msaa,
+                    depth_slice: None,
+                    resolve_target: Some(&target.resolved),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            self.core.draw(view, &self.edit, &mut pass);
+        }
+        self.queue.submit([encoder.finish()]);
+        target
+    }
+
+    pub(crate) fn set_preview_egui_id(&mut self, id: egui::TextureId) {
+        if let Some(t) = &mut self.preview {
+            t.egui_id = Some(id);
         }
     }
 
@@ -354,6 +457,40 @@ impl ScenePreview {
                 shaders: &mut self.shaders,
             },
         )
+    }
+
+    /// A lone sphere wearing `desc` (kept under `key`, rebuilt when `desc`
+    /// changes, so unsaved edits show at once), for the material preview.
+    pub(crate) fn material_preview_world(
+        &mut self,
+        key: &str,
+        desc: &olvin::scene::material::MaterialDesc,
+    ) -> World {
+        let meshes = &mut self.meshes;
+        let sphere = *self
+            .shapes
+            .entry(Shape::Sphere)
+            .or_insert_with(|| meshes.add(MeshData::primitive(Shape::Sphere)));
+        let material = self.assets.inline_material(
+            key,
+            desc,
+            &mut Registries {
+                textures: &mut self.textures,
+                materials: &mut self.materials,
+                shaders: &mut self.shaders,
+            },
+        );
+        let mut world = World::new();
+        world.spawn((
+            Transform::IDENTITY,
+            GlobalTransform(Mat4::IDENTITY),
+            MeshRenderer {
+                mesh: sphere,
+                color: Color([1.0; 4]),
+                material: Some(material),
+            },
+        ));
+        world
     }
 
     /// A model (imported on first use; `None`: it failed).

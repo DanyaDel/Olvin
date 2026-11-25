@@ -138,13 +138,12 @@ impl TerrainData {
         Ok(Self {
             resolution,
             heights: h
-                .chunks_exact(2)
-                .map(|b| u16::from_le_bytes([b[0], b[1]]) as f32 / 65535.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_le_bytes(*b) as f32 / 65535.0)
                 .collect(),
-            splat: s
-                .chunks_exact(4)
-                .map(|b| [b[0], b[1], b[2], b[3]])
-                .collect(),
+            splat: s.as_chunks::<4>().0.to_vec(),
         })
     }
 

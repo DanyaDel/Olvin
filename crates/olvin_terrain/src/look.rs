@@ -36,7 +36,7 @@ pub fn atlas(
 ) -> TextureData {
     let side = TILE * 2;
     let mut pixels = vec![0u8; (side * side * 4) as usize];
-    for slot in 0..MAX_LAYERS {
+    for (slot, fallback) in FALLBACK.iter().enumerate() {
         let source = layers
             .get(slot)
             .filter(|l| !l.texture.is_empty())
@@ -58,7 +58,7 @@ pub fn atlas(
                 let v = ((y as f32 - GUTTER as f32 + 0.5) / inner).rem_euclid(1.0);
                 let rgba = match &source {
                     Some(t) => bilinear_wrap(t, u, v),
-                    None => FALLBACK[slot],
+                    None => *fallback,
                 };
                 let at = (((oy + y) * side + ox + x) * 4) as usize;
                 pixels[at..at + 4].copy_from_slice(&rgba);

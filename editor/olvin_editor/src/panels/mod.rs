@@ -6,6 +6,7 @@ pub(crate) mod hierarchy;
 pub(crate) mod inspector;
 pub(crate) mod lighting;
 pub(crate) mod particles;
+mod subsystems;
 mod viewport;
 
 use egui_dock::{DockState, NodeIndex};
@@ -18,6 +19,7 @@ pub const INSPECTOR: &str = "olvin.inspector";
 pub const ASSETS: &str = "olvin.assets";
 pub const GAME: &str = "olvin.game";
 pub const LIGHTING: &str = "olvin.lighting";
+pub const SUBSYSTEMS: &str = "olvin.subsystems";
 
 pub(crate) fn register(registry: &mut Registry) {
     registry
@@ -50,6 +52,11 @@ pub(crate) fn register(registry: &mut Registry) {
             id: LIGHTING,
             title: "☀ Lighting",
             factory: || Box::<lighting::Lighting>::default(),
+        })
+        .add_panel(PanelKind {
+            id: SUBSYSTEMS,
+            title: "🛡 Subsystems",
+            factory: || Box::<subsystems::Subsystems>::default(),
         })
         // The first template is the workspace a fresh editor opens in.
         .add_workspace_template(WorkspaceTemplate {

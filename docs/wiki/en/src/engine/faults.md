@@ -29,6 +29,8 @@ faults.restart("PhysicsPlugin"); // or faults.restart_all()
 
 - **Play**: the game is always isolated. A crashed game subsystem shows up as an error in the editor console; the game and the editor go on. Fix the code and press Play again.
 - **Panels and elements**: a panel that panics is replaced by a "⚠ … crashed" card with the error and a **⟲ Restart panel** button (creates the panel anew). The rest of the editor works; the error is in the console.
+- **The Subsystems panel** (Window → Add Panel → 🛡 Subsystems), the editor's `systemctl status`: which game subsystems are down in Play (with a **⟲ Restart** button), the crash history (frame, subsystem, system, panic text) and crashed editor panels with a restart.
+- **Autosave before Play**: when the scene has unsaved edits, pressing Play writes a copy to `<project>/.olvin/autosave/<scene path>`. The scene file is not touched. If the process still goes down (an abort, a driver reset), opening the scene next time asks "Recover Unsaved Changes?": Recover loads the copy as one undo step (undo returns the file's version), Discard deletes the copy, Later keeps it under File → Recover Autosave. The copy is deleted when the scene is saved and on "Don't Save".
 
 ## Strict mode
 
@@ -38,4 +40,4 @@ faults.restart("PhysicsPlugin"); // or faults.restart_all()
 
 - Losing the GPU device (a driver reset) is not handled.
 - Audio does not reconnect when the output device disappears during the game.
-- No scene autosave before Play, and no "Subsystems" panel with restart buttons for the game in Play.
+- Viewport extensions and frame hooks of elements still go down together with the whole viewport panel.

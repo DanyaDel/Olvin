@@ -2242,3 +2242,44 @@ fn a_crashing_panel_shows_a_card_and_restarts_without_taking_the_editor_down() {
     h.run_steps(3);
     h.get_by_label("fragile panel is fine");
 }
+
+#[test]
+fn a_crash_in_play_reaches_the_console_and_the_subsystems_panel_restarts_it() {
+    use olvin_editor::olvin::core::{Resources, Stage};
+    struct Healthy;
+    let p = project("play-crash");
+    let mut h = editor(&p);
+    state(&mut h).start_play();
+    let play = state(&mut h).play.as_mut().unwrap();
+    play.app.add_system(Stage::Update, |res: &mut Resources| {
+        if !res.contains::<Healthy>() {
+            panic!("game system broke on purpose");
+        }
+    });
+    h.run_steps(3);
+    assert!(state(&mut h).play.is_some(), "the game still runs");
+    assert!(
+        state(&mut h)
+            .log
+            .iter()
+            .any(|l| l.text.contains("game system broke on purpose")),
+        "the crash is in the console"
+    );
+
+    h.get_by_label("WINDOW").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Add Panel").click();
+    h.run_steps(3);
+    h.get_by_label("🛡 Subsystems").click();
+    h.run_steps(4);
+    h.get_by_label("● core");
+    state(&mut h)
+        .play
+        .as_mut()
+        .unwrap()
+        .app
+        .insert_resource(Healthy);
+    h.get_by_label("⟲ Restart").click();
+    h.run_steps(3);
+    h.get_by_label("✔ All subsystems are running");
+}

@@ -78,11 +78,10 @@ pub struct EditorApp {
     registry: Registry,
     layout: Layout,
     panels: HashMap<u32, Box<dyn Panel>>,
-    /// Tabs whose panel panicked (tab id → panic message): they show a crash
-    /// card with Restart instead of taking the editor down.
-    crashed: HashMap<u32, String>,
     /// `Abort` (from `OLVIN_FAULTS=abort`, CI) lets a panel's panic through.
     fault_policy: olvin::core::FaultPolicy,
+    /// The autosave the user chose to recover "Later" (File menu still has it).
+    recovery_later: Option<PathBuf>,
     state: EditorState,
     renaming: Option<(usize, String)>,
     save_as: Option<String>,
@@ -123,8 +122,8 @@ impl EditorApp {
             registry,
             layout,
             panels: HashMap::new(),
-            crashed: HashMap::new(),
             fault_policy: olvin::core::FaultPolicy::from_env(),
+            recovery_later: None,
             state,
             renaming: None,
             save_as: None,
@@ -255,6 +254,9 @@ impl EditorApp {
             }
             if ui.button("Save As…").clicked() {
                 self.save_as = Some(String::from("scenes/new.scene.ron"));
+            }
+            if self.state.recovery.is_some() && ui.button("Recover Autosave").clicked() {
+                self.state.recover_autosave();
             }
             ui.weak("Open: double-click a scene in Assets");
             ui.separator();
@@ -754,6 +756,35 @@ impl EditorApp {
             }
         }
 
+        if self.state.recovery.is_some() && self.state.recovery != self.recovery_later {
+            let mut choice = None;
+            egui::Modal::new(Id::new("recover-autosave")).show(ctx, |ui| {
+                ui.heading("Recover Unsaved Changes?");
+                ui.label(
+                    "This scene has changes from an earlier session that were never saved \
+                     (kept when Play started). Load them?",
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Recover").clicked() {
+                        choice = Some(1);
+                    }
+                    if ui.button("Discard").clicked() {
+                        choice = Some(2);
+                    }
+                    if ui.button("Later").clicked() {
+                        choice = Some(0);
+                    }
+                });
+            });
+            match choice {
+                Some(1) => self.state.recover_autosave(),
+                Some(2) => self.state.drop_autosave(),
+                Some(_) => self.recovery_later = self.state.recovery.clone(),
+                None => {}
+            }
+        }
+
         if let Some(confirm) = &self.confirm {
             let what = match confirm {
                 Confirm::Open(_) => "opening another scene",
@@ -782,7 +813,10 @@ impl EditorApp {
             {
                 let proceed = match choice {
                     1 => self.state.save(),
-                    2 => true,
+                    2 => {
+                        self.state.drop_autosave();
+                        true
+                    }
                     _ => false,
                 };
                 if proceed {
@@ -823,7 +857,6 @@ impl EditorApp {
 struct Viewer<'a> {
     registry: &'a Registry,
     panels: &'a mut HashMap<u32, Box<dyn Panel>>,
-    crashed: &'a mut HashMap<u32, String>,
     fault_policy: olvin::core::FaultPolicy,
     state: &'a mut EditorState,
     added: Vec<(NodePath, &'static str)>,
@@ -874,10 +907,10 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match self.registry.panel(&tab.kind) {
-            Some(kind) if self.crashed.contains_key(&tab.id) => {
-                let message = self.crashed[&tab.id].clone();
+            Some(kind) if self.state.crashed_panels.contains_key(&tab.id) => {
+                let message = self.state.crashed_panels[&tab.id].1.clone();
                 if crash_card(ui, kind.title, &message) {
-                    self.crashed.remove(&tab.id);
+                    self.state.crashed_panels.remove(&tab.id);
                     self.state.warn(format!("{}: restarted", kind.title));
                 }
             }
@@ -897,7 +930,9 @@ impl TabViewer for Viewer<'_> {
                         "panel {} ({}) crashed: {message}. The editor keeps running; the panel waits for Restart",
                         kind.title, tab.kind
                     ));
-                    self.crashed.insert(tab.id, message);
+                    self.state
+                        .crashed_panels
+                        .insert(tab.id, (kind.title.to_owned(), message));
                 }
             }
             None => {
@@ -1100,7 +1135,6 @@ impl EditorApp {
                 let mut viewer = Viewer {
                     registry: &self.registry,
                     panels: &mut self.panels,
-                    crashed: &mut self.crashed,
                     fault_policy: self.fault_policy,
                     state: &mut self.state,
                     added: Vec::new(),

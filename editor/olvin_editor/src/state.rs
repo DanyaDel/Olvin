@@ -14,6 +14,7 @@ use crate::ext::Extensions;
 use crate::materials::MaterialEdits;
 use crate::prefabs::{PrefabEdits, PrefabLibrary};
 
+mod autosave;
 mod files;
 mod prefab;
 pub(crate) use files::{is_prefab, is_scene};
@@ -148,6 +149,13 @@ pub struct EditorState {
     pub trust_pending: bool,
     /// The active object (gizmo, inspector).
     pub selection: Option<u64>,
+    /// An autosave of the open scene from an earlier session, newer than the
+    /// file: `recover_autosave` loads it, `drop_autosave` throws it away.
+    pub recovery: Option<PathBuf>,
+    /// Tabs whose panel panicked: tab id → (panel title, panic message). They
+    /// show a crash card with Restart instead of taking the editor down;
+    /// removing an entry restarts the panel.
+    pub crashed_panels: HashMap<u32, (String, String)>,
     /// All selected objects when several are (always includes `selection`).
     pub multi: Vec<u64>,
     /// Local-pose overrides for previews (animation scrubbing). Never saved.
@@ -226,6 +234,8 @@ impl EditorState {
             project,
             project_trusted: true,
             trust_pending: false,
+            crashed_panels: HashMap::new(),
+            recovery: None,
             selection: None,
             multi: Vec::new(),
             preview: HashMap::new(),
@@ -354,6 +364,7 @@ impl EditorState {
                 self.prefabs.set_root(self.assets_dir());
                 self.expand_prefabs(&mut scene);
                 self.replace_scene(scene, Some(path.to_path_buf()), true);
+                self.check_autosave();
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -392,6 +403,7 @@ impl EditorState {
         match self.file_form(&scene).save(path) {
             Ok(()) => {
                 self.saved = scene;
+                self.drop_autosave();
                 self.scene_path = Some(path.to_path_buf());
                 self.info(format!("saved {}", path.display()));
                 true
@@ -421,6 +433,7 @@ impl EditorState {
         self.model_previews.clear();
         self.undo.clear();
         self.redo.clear();
+        self.recovery = None;
         self.scene_generation += 1;
     }
 
@@ -543,6 +556,8 @@ impl EditorState {
     pub fn start_play(&mut self) {
         if self.play.is_none() {
             self.commit();
+            // Whatever takes the process down during Play, the edits survive.
+            self.autosave();
             let assets = self.assets_dir();
             self.play = Some(PlaySession::start(&self.scene, self.undo.len(), assets));
             self.info("play");

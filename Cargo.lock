@@ -3706,6 +3706,7 @@ dependencies = [
  "olvin_render",
  "olvin_scene",
  "olvin_script",
+ "olvin_terrain",
  "olvin_text",
  "olvin_transform",
  "olvin_window",

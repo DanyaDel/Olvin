@@ -30,6 +30,7 @@ olvin_trust = { path = "crates/olvin_trust" }
 olvin_locale = { path = "crates/olvin_locale" }
 olvin_nav = { path = "crates/olvin_nav" }
 olvin_cutscene = { path = "crates/olvin_cutscene" }
+olvin_terrain = { path = "crates/olvin_terrain" }
 
 glam = { version = "0.34", features = ["bytemuck", "serde"] }
 hecs = "0.11"

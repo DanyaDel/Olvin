@@ -390,7 +390,36 @@ fn spawn_entities(res: &Resources, scene: &SceneFile) -> HashMap<u64, Entity> {
         if let Some(p) = &e.prefab {
             b.add(PrefabInstanceOf(p.asset.clone()));
         }
-        entities.insert(e.id, world.spawn(b.build()));
+        #[cfg(feature = "terrain")]
+        let terrain = e.terrain.as_ref().and_then(|t| {
+            let collide = e
+                .collider
+                .as_ref()
+                .is_some_and(|c| c.shape == ColliderShape::Mesh);
+            crate::terrain::spawn_parts(res, &mut meshes, t, collide)
+        });
+        #[cfg(feature = "terrain")]
+        if let Some((_, Some(geometry))) = &terrain {
+            b.add(geometry.clone());
+        }
+        let entity = world.spawn(b.build());
+        // One child per chunk; their levels of detail are the renderer's.
+        #[cfg(feature = "terrain")]
+        if let Some((parts, _)) = terrain {
+            for chunk in &parts.chunks {
+                world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(matrix),
+                    Parent(entity),
+                    MeshRenderer {
+                        mesh: chunk.mesh,
+                        color: Color([1.0; 4]),
+                        material: parts.material,
+                    },
+                ));
+            }
+        }
+        entities.insert(e.id, entity);
     }
     entities
 }

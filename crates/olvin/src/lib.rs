@@ -27,6 +27,8 @@ pub use olvin_locale as locale;
 pub use olvin_nav as nav;
 #[cfg(feature = "net")]
 pub mod net;
+#[cfg(feature = "terrain")]
+pub mod terrain;
 #[cfg(feature = "input")]
 pub use olvin_input as input;
 #[cfg(feature = "physics")]

@@ -140,6 +140,13 @@ impl RenderAssets {
         Some(handle)
     }
 
+    /// The decoded image at `rel` (not registered, not cached): for assets
+    /// that build their own textures from images, like terrain layers.
+    pub fn image(&mut self, rel: &str, srgb: bool) -> Option<TextureData> {
+        let path = self.path(rel)?;
+        self.decode(rel, &path, srgb)
+    }
+
     fn decode(&mut self, rel: &str, path: &Path, srgb: bool) -> Option<TextureData> {
         match olvin_assets::load_image(path, srgb) {
             Ok(img) => {

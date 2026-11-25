@@ -1278,6 +1278,9 @@ impl EditorApp {
         let live: HashSet<u32> = self.layout.all_tab_ids().collect();
         self.panels.retain(|id, _| live.contains(id));
 
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            self.state.terrain_stroke_end();
+        }
         let interacting = ctx.input(|i| i.pointer.any_down())
             || ctx.egui_wants_keyboard_input()
             || self.state.busy;

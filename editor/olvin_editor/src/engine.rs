@@ -611,6 +611,7 @@ impl ScenePreview {
         self.terrain_frame = Some(frame);
         let worlds = scene.world_matrices();
         let mut seen = Vec::new();
+        let mut changes = HashMap::new();
         for e in scene
             .entities
             .iter()
@@ -621,6 +622,10 @@ impl ScenePreview {
             };
             seen.push(e.id);
             let root = self.assets.root().map(|p| p.to_path_buf());
+            // Multiple objects can share the same terrain asset.
+            let (heights, weights) = *changes
+                .entry(&desc.data)
+                .or_insert_with(|| store.take_dirty(&desc.data));
             let data = &store.entry(root.as_deref(), &desc.data).data;
             let mut r = Registries {
                 textures: &mut self.textures,
@@ -640,20 +645,18 @@ impl ScenePreview {
                     &mut r,
                 );
                 self.terrains.insert(e.id, (desc.data.clone(), parts));
-                // Built from the current data: nothing is pending for it.
-                store.take_dirty(&desc.data);
             }
-            let (heights, weights) = store.take_dirty(&desc.data);
-            let data = &store.entry(root.as_deref(), &desc.data).data;
             let Some((_, parts)) = self.terrains.get_mut(&e.id) else {
                 continue;
             };
-            parts.sync_desc(data, desc, &mut self.meshes, &mut self.assets, &mut r);
-            if let Some(rect) = heights {
-                parts.update_heights(&mut self.meshes, data, rect);
-            }
-            if weights {
-                parts.update_weights(r.textures, data);
+            if !rebuild {
+                parts.sync_desc(data, desc, &mut self.meshes, &mut self.assets, &mut r);
+                if let Some(rect) = heights {
+                    parts.update_heights(&mut self.meshes, data, rect);
+                }
+                if weights {
+                    parts.update_weights(r.textures, data);
+                }
             }
             for chunk in &parts.chunks {
                 self.world.spawn((

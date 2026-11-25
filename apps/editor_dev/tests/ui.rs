@@ -20,6 +20,7 @@ fn plugins() -> Vec<Box<dyn EditorPlugin>> {
         Box::new(olvin_editor_profiler::ProfilerPlugin),
         Box::new(olvin_editor_animator::AnimatorPlugin),
         Box::new(olvin_editor_csg::CsgPlugin),
+        Box::new(olvin_editor_terrain::TerrainPlugin),
         Box::new(olvin_editor_modeling::ModelingPlugin),
         Box::new(olvin_editor_uv::UvPlugin),
         Box::new(olvin_editor_ide::IdePlugin),
@@ -2399,4 +2400,91 @@ fn a_crashing_viewport_extension_and_frame_hook_switch_off_only_their_element() 
     }
     h.get_by_label("✔ All viewport tools and frame hooks are running");
     h.get_by_label("Shaky");
+}
+
+/// A Raise stroke held over the terrain builds a hill, writes the file and
+/// is one undo step; Shift lowers.
+#[test]
+fn terrain_brush_raises_with_undo_and_writes_the_file() {
+    use olvin_editor::NewEntity;
+    let p = project("terrain-brush");
+    let mut h = editor(&p);
+    let assets = p.join("assets");
+    state(&mut h).scene.entities.clear();
+    let id = state(&mut h).create(NewEntity::Terrain, None);
+    let rel = state(&mut h)
+        .scene
+        .get(id)
+        .unwrap()
+        .terrain
+        .clone()
+        .unwrap()
+        .data;
+    state(&mut h).select(None);
+    h.run_steps(2);
+    click_at(&mut h, SCENE_VIEW);
+    assert_eq!(state(&mut h).selection, Some(id), "pick the heightfield");
+    state(&mut h).tool = "terrain.raise".into();
+    h.run_steps(3);
+    let peak = |h: &mut Ed| {
+        let state = state(h);
+        let data = &state.terrains.entry(Some(&assets), &rel).data;
+        data.heights().iter().copied().fold(0.0f32, f32::max)
+    };
+    assert_eq!(peak(&mut h), 0.0);
+
+    // Hold the button over the view's middle for a while.
+    mouse_move(&h, SCENE_VIEW);
+    h.run_steps(2);
+    mouse_button(&h, SCENE_VIEW, true);
+    h.run_steps(30);
+    mouse_button(&h, SCENE_VIEW, false);
+    h.run_steps(3);
+    let raised = peak(&mut h);
+    assert!(raised > 0.02, "the stroke raised the ground ({raised})");
+    assert!(
+        state(&mut h).selection == Some(id),
+        "the stroke did not change the selection"
+    );
+    let on_disk = olvin_editor::olvin::terrain::TerrainData::load(assets.join(&rel)).unwrap();
+    let disk_peak = on_disk.heights().iter().copied().fold(0.0f32, f32::max);
+    assert!(
+        (disk_peak - raised).abs() < 1e-3,
+        "the file was written at the stroke's end"
+    );
+
+    undo(&mut h);
+    assert_eq!(
+        peak(&mut h),
+        0.0,
+        "one undo step takes the whole stroke back"
+    );
+    let on_disk = olvin_editor::olvin::terrain::TerrainData::load(assets.join(&rel)).unwrap();
+    assert!(
+        on_disk.heights().iter().all(|&v| v == 0.0),
+        "and the file too"
+    );
+    redo(&mut h);
+    assert!((peak(&mut h) - raised).abs() < 1e-5);
+
+    // Shift + stroke lowers.
+    set_modifiers(&h, egui::Modifiers::SHIFT);
+    mouse_button(&h, SCENE_VIEW, true);
+    h.run_steps(30);
+    state(&mut h).tool = olvin_editor::tools::VIEW.into();
+    h.run_steps(2);
+    assert!(!state(&mut h).terrain_stroking());
+    mouse_button(&h, SCENE_VIEW, false);
+    set_modifiers(&h, egui::Modifiers::NONE);
+    h.run_steps(3);
+    let lowered = peak(&mut h);
+    assert!(lowered < raised, "Shift lowers");
+    let on_disk = olvin_editor::olvin::terrain::TerrainData::load(assets.join(&rel)).unwrap();
+    let disk_peak = on_disk.heights().iter().copied().fold(0.0f32, f32::max);
+    assert!(
+        (disk_peak - lowered).abs() < 1e-3,
+        "switching tools saves the stroke"
+    );
+    undo(&mut h);
+    assert!((peak(&mut h) - raised).abs() < 1e-5);
 }

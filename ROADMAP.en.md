@@ -66,7 +66,7 @@ Goal: what has been written is reliable, and the documentation does not lie.
 - [ ] **Reflections and environment**: IBL from HDR (HDR/EXR loading already exists, a convolution into a cubemap is needed), reflection probes. (L) [P2]
 - [~] **Particles**: CPU particles first, GPU particles later. Emitters with parameters that are edited in the editor. (L) [P1] — partial: CPU `ParticleEmitter`; not in the scene format or editor, no GPU particles.
 - [ ] **Decals** and **surfaces with several material layers**. (M) [P3]
-- [ ] **Terrain**: a height map, texture layers, chunk LOD, brushes in the editor. (L) [P2]
+- [x] **Terrain**: a height map, texture layers, chunk LOD, brushes in the editor. (L) [P2]
 - [~] **2D pipeline**: sprites, atlases, tilemaps, text. Needed both for the in-game UI and for 2D games (item 7 of the old plan). (L) [P1 for UI] — partial: sprites, atlases, tilemaps, `Camera2d`, text (`olvin_text`: Inter with Cyrillic, a glyph atlas); no wrapping or clipping.
 - [~] **In-game UI at runtime**: currently egui works only in the editor. Needed: buttons, text, layout, gamepad focus. Separate from egui, so that a game does not pull in editor dependencies. (L) [P1] — partial: `olvin_gui` is drawn over the frame (`GuiRenderPlugin`, an overlay in `olvin_render`, works on Compat), buttons and text, gamepad focus, re-exported by `olvin`; no image nodes, text fields, sliders or scrolling, and the UI doesn't swallow input (a button click reaches the game as `Fire`).
 - [~] **Shader graph**, or at least shader editing with hot reload (the IDE already has it; connect it to rendering). (L) [P3] — partial: shader hot reload is wired (`Shaders::set`); no graph.
@@ -202,7 +202,7 @@ Owner's decision (2026-11-23): first **finish the 3D editor**, then take on 2D. 
 
 What exists: sprites, atlases, tilemaps, `Camera2d`, text (`olvin_render::sprite`, `olvin_text`). What does not: 2D components in the scene format and the inspector, 2D physics, 2D editors, 2D animation, library packs.
 
-- [ ] **Finish the 3D editor (prerequisite)**: material previews (#41, done), several scenes at once (#44, done), configurable hotkeys (#45), skinned animation in the editor (#8, done), picking the prefab root in the viewport (done), undo for asset file operations (done), post-processing effects in the editor viewport (done), a shader graph editor (#22), terrain (#21). (L) [P1]
+- [ ] **Finish the 3D editor (prerequisite)**: material previews (#41, done), several scenes at once (#44, done), configurable hotkeys (#45), skinned animation in the editor (#8, done), picking the prefab root in the viewport (done), undo for asset file operations (done), post-processing effects in the editor viewport (done), a shader graph editor (#22), terrain (#21, done). (L) [P1]
 - [ ] **2D core**: `Sprite`, `Tilemap`, `SpriteAnimator` components in the scene format (serde defaults), `Camera2d` with pixel-perfect mode, layers and sorting, Lua bindings (`ctx:` for sprites and animation). (M) [P1]
 - [ ] **2D physics** on `rapier2d`: `Rigidbody2D`, `Collider2D` (circle, box, capsule, polygon, tilemap colliders), triggers and events, a character controller for platformers and top-down; shares the event machinery with 3D (`CollisionEvents`). (M) [P1]
 - [ ] **The 2D editor as a separate element**: an orthographic scene with a pixel grid, snapping and guides; a layer hierarchy; an inspector for 2D components; a symbol library (reusable clips and prefabs, like Flash symbols). (L) [P1]

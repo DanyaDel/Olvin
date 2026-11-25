@@ -21,7 +21,7 @@ pub fn load_data(root: Option<&Path>, rel: &str) -> TerrainData {
     let Some(root) = root else {
         return TerrainData::flat(DEFAULT_RESOLUTION);
     };
-    match TerrainData::load(root.join(rel)) {
+    match TerrainData::load(olvin_assets::AssetRoot::new(root).resolve(rel)) {
         Ok(d) => d,
         Err(e) => {
             log::warn!("terrain: {e}; using a flat one");

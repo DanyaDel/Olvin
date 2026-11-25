@@ -125,7 +125,7 @@ impl Viewport {
         &self,
         pointer: Pos2,
         camera: &ViewCamera,
-        state: &EditorState,
+        state: &mut EditorState,
         worlds: &std::collections::HashMap<u64, Mat4>,
     ) -> Option<u64> {
         // Cameras, lights and sounds have no surface: pick them by their icon.
@@ -147,9 +147,38 @@ impl Viewport {
         if let Some((id, _)) = icon {
             return Some(id);
         }
-        self.geometry
-            .raycast(&camera.ray(pointer))
-            .and_then(|h| h.entity)
+        let ray = camera.ray(pointer);
+        let hit = self
+            .geometry
+            .raycast(&ray)
+            .and_then(|h| Some((h.distance, h.entity?)));
+        // Terrains are drawn by the engine and use their heightfield for picking.
+        let root = state.assets_dir();
+        let scene = &state.scene;
+        let store = &mut state.terrains;
+        let terrain = scene
+            .entities
+            .iter()
+            .filter(|e| scene.active_in_hierarchy(e.id))
+            .filter_map(|e| {
+                let desc = e.terrain.as_ref()?;
+                let world = *worlds.get(&e.id)?;
+                let data = &store.entry(root.as_deref(), &desc.data).data;
+                let inv = world.inverse();
+                let local = olvin::terrain::mesh::raycast(
+                    data,
+                    desc.size,
+                    inv.transform_point3(ray.origin),
+                    inv.transform_vector3(ray.dir),
+                )?;
+                Some((world.transform_point3(local).distance(ray.origin), e.id))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        [hit, terrain]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id)
     }
 }
 

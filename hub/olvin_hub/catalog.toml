@@ -170,6 +170,15 @@ plugin = "olvin_editor_csg::CsgPlugin"
 default = true
 
 [[editor_module]]
+id = "terrain"
+name = "Terrain brushes"
+description = "Sculpt and paint heightmap terrains in the scene view: raise and lower, smooth, flatten, paint up to four texture layers"
+crate = "olvin_editor_terrain"
+path = "editor/olvin_editor_terrain"
+plugin = "olvin_editor_terrain::TerrainPlugin"
+default = true
+
+[[editor_module]]
 id = "modeling"
 name = "Modeling"
 description = "Blender-style mesh editing: vertices, edges and faces, extrude, inset, loop cut, knife, fill, merge, subdivide"

@@ -285,14 +285,22 @@ mod tests {
 
         assert_eq!(
             install.initial_selection(&catalog),
-            ["console", "csg", "modeling", "uv", "library"]
+            ["console", "csg", "terrain", "modeling", "uv", "library"]
         );
         install
-            .write(&engine, &catalog, &["animator".into(), "console".into()])
+            .write(
+                &engine,
+                &catalog,
+                &["animator".into(), "terrain".into(), "console".into()],
+            )
             .unwrap();
-        assert_eq!(install.installed(&catalog), ["console", "animator"]);
+        assert_eq!(
+            install.installed(&catalog),
+            ["console", "animator", "terrain"]
+        );
         let main = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         assert!(main.find("ConsolePlugin").unwrap() < main.find("AnimatorPlugin").unwrap());
+        assert!(main.contains("olvin_editor_terrain::TerrainPlugin"));
 
         install.write(&engine, &catalog, &[]).unwrap();
         assert!(install.installed(&catalog).is_empty());

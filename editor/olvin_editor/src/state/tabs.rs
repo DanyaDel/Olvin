@@ -130,6 +130,7 @@ impl EditorState {
         if i == self.active_tab || i >= self.tabs.len() || self.play.is_some() {
             return;
         }
+        self.terrain_stroke_end();
         self.commit();
         self.swap_active();
         self.active_tab = i;
@@ -163,6 +164,7 @@ impl EditorState {
 
     /// Opens a new, empty tab and makes it active; the caller fills it.
     fn push_tab(&mut self) {
+        self.terrain_stroke_end();
         self.commit();
         self.swap_active();
         self.tabs.push(SceneDoc::default());

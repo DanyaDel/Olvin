@@ -18,6 +18,7 @@ mod autosave;
 mod files;
 mod prefab;
 mod tabs;
+mod terrain_edit;
 pub(crate) use files::{is_prefab, is_scene};
 pub use prefab::PrefabReport;
 pub use tabs::TabInfo;
@@ -39,6 +40,8 @@ struct AssetEdits {
 enum Step {
     Edit(SceneFile, AssetEdits),
     File(files::FileOp),
+    /// A terrain's data before a brush stroke (its file, relative to `assets/`).
+    Terrain(String, Box<olvin::terrain::TerrainData>),
 }
 
 /// Built-in viewport tools; elements add their own ids (e.g. `"csg.draw"`).
@@ -211,6 +214,8 @@ pub struct EditorState {
     pub asset_focus: Option<PathBuf>,
     /// Terrain data by file, shared by the scene view and the brushes.
     pub terrains: crate::terrain::TerrainStore,
+    /// The terrain a brush stroke is changing and its data before it.
+    terrain_stroke: Option<(String, olvin::terrain::TerrainData)>,
     /// Mesh Edit Mode selection (entity, selected vertices), published by the
     /// editing element for others (the UV editor's "only selected in 3D").
     pub mesh_selection: Option<(u64, Vec<u32>)>,
@@ -272,6 +277,7 @@ impl EditorState {
             materials: Default::default(),
             prefabs: Default::default(),
             asset_focus: None,
+            terrain_stroke: None,
             terrains: Default::default(),
             mesh_selection: None,
             busy: false,
@@ -414,6 +420,7 @@ impl EditorState {
     }
 
     pub fn save_as(&mut self, path: &Path) -> bool {
+        self.terrain_stroke_end();
         // While playing, `scene` is the running game: save what Stop restores.
         let scene = match &self.play {
             Some(session) => session.saved.clone(),
@@ -438,6 +445,7 @@ impl EditorState {
     }
 
     fn replace_scene(&mut self, scene: SceneFile, path: Option<PathBuf>, saved: bool) {
+        self.terrain_stroke_end();
         self.saved = if saved {
             scene.clone()
         } else {
@@ -479,7 +487,7 @@ impl EditorState {
         fn edits(steps: &mut [Step]) -> impl Iterator<Item = &mut SceneFile> {
             steps.iter_mut().filter_map(|s| match s {
                 Step::Edit(scene, _) => Some(scene),
-                Step::File(_) => None,
+                Step::File(_) | Step::Terrain(..) => None,
             })
         }
         let active = self.active_tab;
@@ -606,6 +614,7 @@ impl EditorState {
     /// Runs the scene as a game inside the editor.
     pub fn start_play(&mut self) {
         if self.play.is_none() {
+            self.terrain_stroke_end();
             self.commit();
             // Whatever takes the process down during Play, the edits survive.
             self.autosave();
@@ -667,7 +676,10 @@ impl EditorState {
     /// History is frozen while playing: everything done then is discarded by Stop.
     pub fn can_undo(&self) -> bool {
         self.play.is_none()
-            && (!self.undo.is_empty() || self.scene != self.committed || self.edits_changed())
+            && (self.terrain_stroking()
+                || !self.undo.is_empty()
+                || self.scene != self.committed
+                || self.edits_changed())
     }
 
     pub fn can_redo(&self) -> bool {
@@ -678,6 +690,7 @@ impl EditorState {
         if self.play.is_some() {
             return;
         }
+        self.terrain_stroke_end();
         self.commit();
         match self.undo.pop() {
             Some(Step::Edit(scene, edits)) => {
@@ -687,6 +700,10 @@ impl EditorState {
                 ));
                 self.scene = self.committed.clone();
                 self.after_history_jump();
+            }
+            Some(Step::Terrain(rel, data)) => {
+                let now = self.swap_terrain(&rel, *data);
+                self.redo.push(Step::Terrain(rel, Box::new(now)));
             }
             Some(Step::File(op)) => match self.undo_file(op) {
                 Ok(op) => self.redo.push(Step::File(op)),
@@ -700,6 +717,7 @@ impl EditorState {
         if self.play.is_some() {
             return;
         }
+        self.terrain_stroke_end();
         match self.redo.pop() {
             Some(Step::Edit(scene, edits)) => {
                 self.undo.push(Step::Edit(
@@ -708,6 +726,10 @@ impl EditorState {
                 ));
                 self.scene = self.committed.clone();
                 self.after_history_jump();
+            }
+            Some(Step::Terrain(rel, data)) => {
+                let now = self.swap_terrain(&rel, *data);
+                self.undo.push(Step::Terrain(rel, Box::new(now)));
             }
             Some(Step::File(op)) => match self.redo_file(op) {
                 Ok(op) => self.undo.push(Step::File(op)),

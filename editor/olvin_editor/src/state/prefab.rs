@@ -68,6 +68,31 @@ impl EditorState {
             .is_some_and(|n| !n.path.is_empty())
     }
 
+    /// The outermost prefab instance root that `id` belongs to (`id` itself
+    /// when it is not a prefab member).
+    pub fn prefab_outer_root(&self, id: u64) -> u64 {
+        let mut id = id;
+        // Bounded: a broken file must not loop the viewport forever.
+        for _ in 0..64 {
+            match self.scene.get(id).and_then(|e| e.prefab_node.as_ref()) {
+                Some(n) if !n.path.is_empty() && n.root != id => id = n.root,
+                _ => break,
+            }
+        }
+        id
+    }
+
+    /// What a viewport click on `hit` selects. The first click on a prefab
+    /// instance takes its root, so the whole instance moves; a click on an
+    /// instance whose root or member is already selected takes the node itself.
+    pub fn click_target(&self, hit: u64) -> u64 {
+        let root = self.prefab_outer_root(hit);
+        let inside = self
+            .selection
+            .is_some_and(|s| s == root || self.prefab_outer_root(s) == root);
+        if inside { hit } else { root }
+    }
+
     /// Expands the prefab instances of a freshly read scene, logging problems.
     pub(super) fn expand_prefabs(&mut self, scene: &mut SceneFile) {
         let warnings = scene.expand_prefabs(&mut self.prefabs.loader());
@@ -394,6 +419,25 @@ mod tests {
 
     fn lid_of(_: &EditorState, root: u64) -> u64 {
         olvin_scene::prefab::member_id(root, 2)
+    }
+
+    #[test]
+    fn viewport_click_takes_the_root_first_then_the_node() {
+        let (root_dir, mut s) = project("click");
+        let (root, rel) = crate_instance(&mut s);
+        let lid = lid_of(&s, root);
+        assert!(s.is_prefab_member(lid), "{rel}");
+        assert_eq!(s.prefab_outer_root(lid), root);
+        s.select(None);
+        assert_eq!(s.click_target(lid), root);
+        s.select(Some(root));
+        assert_eq!(s.click_target(lid), lid);
+        s.select(Some(lid));
+        assert_eq!(s.click_target(root), root);
+        // A plain object is its own target.
+        let other = s.create(NewEntity::Primitive(Shape::Cube), None);
+        assert_eq!(s.click_target(other), other);
+        let _ = std::fs::remove_dir_all(root_dir);
     }
 
     #[test]

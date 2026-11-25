@@ -194,7 +194,9 @@ impl Panel for Viewport {
             && !ui.input(|i| i.modifiers.alt)
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            let hit = self.pick(pointer, &camera, state, &worlds);
+            let hit = self
+                .pick(pointer, &camera, state, &worlds)
+                .map(|id| state.click_target(id));
             match (hit, ui.input(|i| i.modifiers.command)) {
                 (Some(id), true) => state.toggle_selected(id),
                 (hit, _) => state.select(hit),

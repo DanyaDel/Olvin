@@ -457,7 +457,67 @@ pub struct CreateItem {
 
 #[derive(Default)]
 pub(crate) struct Extensions {
-    pub viewport: Vec<Box<dyn ViewportExtension>>,
+    pub viewport: Vec<ExtSlot>,
+    pub hooks: Vec<HookSlot>,
     pub components: Vec<ComponentEditor>,
     pub create: Vec<CreateItem>,
+}
+
+/// Makes a viewport extension (one per editor, shared by every view).
+pub type ExtFactory = fn() -> Box<dyn ViewportExtension>;
+
+/// A viewport extension with the element that added it. A crashed one is
+/// skipped until restarted (a fresh instance from `factory`).
+pub(crate) struct ExtSlot {
+    pub owner: &'static str,
+    pub factory: ExtFactory,
+    pub ext: Box<dyn ViewportExtension>,
+    pub crashed: Option<String>,
+}
+
+impl ExtSlot {
+    pub fn new(owner: &'static str, factory: ExtFactory) -> Self {
+        Self {
+            owner,
+            factory,
+            ext: factory(),
+            crashed: None,
+        }
+    }
+
+    pub fn restart(&mut self) {
+        self.ext = (self.factory)();
+        self.crashed = None;
+    }
+
+    /// Tools of the running extension; none while it is crashed.
+    pub fn tools(&self) -> &[ToolDesc] {
+        if self.crashed.is_some() {
+            &[]
+        } else {
+            self.ext.tools()
+        }
+    }
+}
+
+/// A frame hook with the element that added it; a crashed one is skipped.
+pub(crate) struct HookSlot {
+    pub owner: &'static str,
+    pub hook: crate::FrameHook,
+    pub crashed: Option<String>,
+}
+
+/// Runs element code: a panic comes back as its message (and the editor goes
+/// on), or propagates under [`FaultPolicy::Abort`](olvin::core::FaultPolicy).
+pub(crate) fn guarded<R>(
+    policy: olvin::core::FaultPolicy,
+    f: impl FnOnce() -> R,
+) -> Result<R, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => Ok(r),
+        Err(payload) if policy == olvin::core::FaultPolicy::Abort => {
+            std::panic::resume_unwind(payload)
+        }
+        Err(payload) => Err(olvin::core::faults::panic_message(payload.as_ref())),
+    }
 }

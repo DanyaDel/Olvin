@@ -47,10 +47,10 @@ pub struct Registry {
     pub(crate) panels: Vec<PanelKind>,
     pub(crate) templates: Vec<WorkspaceTemplate>,
     pub(crate) plugins: Vec<&'static str>,
-    viewport_extensions: Vec<fn() -> Box<dyn ViewportExtension>>,
+    viewport_extensions: Vec<(&'static str, crate::ext::ExtFactory)>,
     components: Vec<ComponentEditor>,
     create_items: Vec<CreateItem>,
-    frame_hooks: Vec<FrameHook>,
+    frame_hooks: Vec<(&'static str, FrameHook)>,
 }
 
 /// Runs once per editor frame before the panels (global shortcuts, playback).
@@ -73,7 +73,7 @@ impl Registry {
         &mut self,
         factory: fn() -> Box<dyn ViewportExtension>,
     ) -> &mut Self {
-        self.viewport_extensions.push(factory);
+        self.viewport_extensions.push((self.owner(), factory));
         self
     }
 
@@ -84,12 +84,13 @@ impl Registry {
 
     /// `hook` runs every frame before the panels are drawn.
     pub fn add_frame_hook(&mut self, hook: FrameHook) -> &mut Self {
-        self.frame_hooks.push(hook);
+        self.frame_hooks.push((self.owner(), hook));
         self
     }
 
-    pub(crate) fn frame_hooks(&self) -> &[FrameHook] {
-        &self.frame_hooks
+    /// The element being built (`registry()` pushes its name first), or the base.
+    fn owner(&self) -> &'static str {
+        self.plugins.last().copied().unwrap_or("core")
     }
 
     pub fn add_create_item(&mut self, item: CreateItem) -> &mut Self {
@@ -99,7 +100,20 @@ impl Registry {
 
     pub(crate) fn instantiate_extensions(&self) -> Extensions {
         Extensions {
-            viewport: self.viewport_extensions.iter().map(|f| f()).collect(),
+            viewport: self
+                .viewport_extensions
+                .iter()
+                .map(|(owner, f)| crate::ext::ExtSlot::new(owner, *f))
+                .collect(),
+            hooks: self
+                .frame_hooks
+                .iter()
+                .map(|(owner, hook)| crate::ext::HookSlot {
+                    owner,
+                    hook: *hook,
+                    crashed: None,
+                })
+                .collect(),
             components: self.components.clone(),
             create: self.create_items.clone(),
         }

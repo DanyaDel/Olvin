@@ -134,7 +134,7 @@ impl Viewport {
                         .ext
                         .viewport
                         .iter()
-                        .flat_map(|e| e.tools().iter().copied())
+                        .flat_map(|s| s.tools().iter().copied())
                         .collect();
                     if !ext_tools.is_empty() {
                         ui.separator();

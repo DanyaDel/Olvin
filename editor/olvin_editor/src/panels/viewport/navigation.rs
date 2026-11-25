@@ -97,8 +97,8 @@ impl Viewport {
                 state.tool = tool.to_owned();
             }
         }
-        for ext in &state.ext.viewport {
-            for t in ext.tools() {
+        for slot in &state.ext.viewport {
+            for t in slot.tools() {
                 if t.key.is_some_and(pressed) {
                     state.tool = t.id.to_owned();
                 }

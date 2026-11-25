@@ -79,7 +79,6 @@ pub struct EditorApp {
     layout: Layout,
     panels: HashMap<u32, Box<dyn Panel>>,
     /// `Abort` (from `OLVIN_FAULTS=abort`, CI) lets a panel's panic through.
-    fault_policy: olvin::core::FaultPolicy,
     /// The autosave the user chose to recover "Later" (File menu still has it).
     recovery_later: Option<PathBuf>,
     state: EditorState,
@@ -122,7 +121,6 @@ impl EditorApp {
             registry,
             layout,
             panels: HashMap::new(),
-            fault_policy: olvin::core::FaultPolicy::from_env(),
             recovery_later: None,
             state,
             renaming: None,
@@ -142,7 +140,7 @@ impl EditorApp {
     /// What a panicking panel does: `Isolate` shows a crash card, `Abort`
     /// lets the panic through. Defaults to `OLVIN_FAULTS`.
     pub fn set_fault_policy(&mut self, policy: olvin::core::FaultPolicy) {
-        self.fault_policy = policy;
+        self.state.fault_policy = policy;
     }
 
     pub fn state_mut(&mut self) -> &mut EditorState {
@@ -830,6 +828,30 @@ impl EditorApp {
         }
     }
 
+    /// Element frame hooks, each guarded: a crashed one is skipped until
+    /// restarted from the Subsystems panel.
+    fn run_frame_hooks(&mut self, ctx: &egui::Context) {
+        let hooks: Vec<_> = self
+            .state
+            .ext
+            .hooks
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.crashed.is_none())
+            .map(|(i, h)| (i, h.hook, h.owner))
+            .collect();
+        for (i, hook, owner) in hooks {
+            let state = &mut self.state;
+            let policy = state.fault_policy;
+            if let Err(message) = crate::ext::guarded(policy, || hook(ctx, state)) {
+                self.state.error(format!(
+                    "element {owner}: frame hook crashed: {message}. It is off until restarted (Subsystems panel)"
+                ));
+                self.state.ext.hooks[i].crashed = Some(message);
+            }
+        }
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let scene = self
             .state
@@ -857,7 +879,6 @@ impl EditorApp {
 struct Viewer<'a> {
     registry: &'a Registry,
     panels: &'a mut HashMap<u32, Box<dyn Panel>>,
-    fault_policy: olvin::core::FaultPolicy,
     state: &'a mut EditorState,
     added: Vec<(NodePath, &'static str)>,
     ctx: egui::Context,
@@ -917,13 +938,8 @@ impl TabViewer for Viewer<'_> {
             Some(kind) => {
                 let panel = self.panels.entry(tab.id).or_insert_with(kind.factory);
                 let state = &mut *self.state;
-                let result =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| panel.ui(ui, state)));
-                if let Err(payload) = result {
-                    if self.fault_policy == olvin::core::FaultPolicy::Abort {
-                        std::panic::resume_unwind(payload);
-                    }
-                    let message = olvin::core::faults::panic_message(payload.as_ref());
+                let policy = state.fault_policy;
+                if let Err(message) = crate::ext::guarded(policy, || panel.ui(ui, state)) {
                     // A fresh instance on restart: the old one may be half-updated.
                     self.panels.remove(&tab.id);
                     self.state.error(format!(
@@ -1006,9 +1022,7 @@ impl EditorApp {
             self.request(Confirm::Open(path));
         }
         self.shortcuts(&ctx);
-        for hook in self.registry.frame_hooks() {
-            hook(&ctx, &mut self.state);
-        }
+        self.run_frame_hooks(&ctx);
         let keys = self.state.prefs.keymap.clone();
         let capturing = self.state.capturing_key;
         if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Play)) {
@@ -1135,7 +1149,6 @@ impl EditorApp {
                 let mut viewer = Viewer {
                     registry: &self.registry,
                     panels: &mut self.panels,
-                    fault_policy: self.fault_policy,
                     state: &mut self.state,
                     added: Vec::new(),
                     ctx: ui.ctx().clone(),

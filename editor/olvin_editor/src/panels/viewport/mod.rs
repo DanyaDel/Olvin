@@ -159,10 +159,12 @@ impl Panel for Viewport {
         };
 
         // Element tools see the pointer first, then the gizmo, then selection.
+        // Each extension is guarded: a crash turns that element off, not the view.
         let mut extensions = std::mem::take(&mut state.ext.viewport);
         let tool = state.tool.clone();
         let mut consumed = false;
-        for ext in &mut extensions {
+        let policy = state.fault_policy;
+        for slot in extensions.iter_mut().filter(|s| s.crashed.is_none()) {
             let mut ctx = ViewportCtx {
                 ui,
                 response: &response,
@@ -174,8 +176,13 @@ impl Panel for Viewport {
                 geometry: &self.geometry,
                 overlay_top: self.toolbar_bottom.max(rect.top() + 40.0),
             };
-            consumed |= ext.interact(&mut ctx);
+            let ext = &mut slot.ext;
+            match crate::ext::guarded(policy, || ext.interact(&mut ctx)) {
+                Ok(c) => consumed |= c,
+                Err(message) => extension_crashed(state, slot, "interact", message),
+            }
         }
+        state.ext.viewport = extensions;
         let transform_tool = [tools::MOVE, tools::ROTATE, tools::SCALE].contains(&tool.as_str());
         let mut gizmo_hot = false;
         if !consumed && transform_tool {
@@ -244,11 +251,19 @@ impl Panel for Viewport {
         self.scene_geometry(state, &worlds, engine.is_some());
         if !state.is_playing() {
             // While playing, element geometry (e.g. CSG) is part of the game world.
-            for ext in &mut extensions {
-                ext.geometry(state, &mut self.geometry);
+            let mut extensions = std::mem::take(&mut state.ext.viewport);
+            for slot in extensions.iter_mut().filter(|s| s.crashed.is_none()) {
+                let geometry = &mut self.geometry;
+                let ext = &mut slot.ext;
+                let state_ref = &*state;
+                if let Err(message) =
+                    crate::ext::guarded(policy, || ext.geometry(state_ref, geometry))
+                {
+                    extension_crashed(state, slot, "geometry", message);
+                }
             }
+            state.ext.viewport = extensions;
         }
-        state.ext.viewport = extensions;
         self.selection_outline(&painter, &camera, state, &worlds);
 
         let inv = camera.view_proj.inverse();
@@ -281,6 +296,23 @@ impl Panel for Viewport {
 
         self.overlay(ui, rect, &camera, state, grid_step);
     }
+}
+
+/// Turns a crashed extension off until restarted; its active tool falls back to View.
+fn extension_crashed(
+    state: &mut EditorState,
+    slot: &mut crate::ext::ExtSlot,
+    during: &str,
+    message: String,
+) {
+    if slot.ext.tools().iter().any(|t| t.id == state.tool) {
+        state.tool = crate::tools::VIEW.to_owned();
+    }
+    state.error(format!(
+        "element {}: viewport extension crashed in {during}: {message}. It is off until restarted (Subsystems panel); the rest of the view works",
+        slot.owner
+    ));
+    slot.crashed = Some(message);
 }
 
 #[cfg(test)]

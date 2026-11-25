@@ -74,6 +74,44 @@ impl Panel for Subsystems {
                 {
                     state.warn(format!("{title}: restarted"));
                 }
+
+                ui.add_space(10.0);
+                ui.heading("Editor elements");
+                let crashed = state.ext.viewport.iter().any(|s| s.crashed.is_some())
+                    || state.ext.hooks.iter().any(|h| h.crashed.is_some());
+                if !crashed {
+                    ui.colored_label(palette.accent, "✔ All viewport tools and frame hooks are running");
+                }
+                let mut restarted = Vec::new();
+                for slot in &mut state.ext.viewport {
+                    let Some(message) = slot.crashed.clone() else {
+                        continue;
+                    };
+                    ui.horizontal(|ui| {
+                        ui.colored_label(palette.error, format!("● {} · viewport", slot.owner));
+                        if ui.button("⟲ Restart").clicked() {
+                            slot.restart();
+                            restarted.push(slot.owner);
+                        }
+                    });
+                    ui.weak(message);
+                }
+                for hook in &mut state.ext.hooks {
+                    let Some(message) = hook.crashed.clone() else {
+                        continue;
+                    };
+                    ui.horizontal(|ui| {
+                        ui.colored_label(palette.error, format!("● {} · frame hook", hook.owner));
+                        if ui.button("⟲ Restart").clicked() {
+                            hook.crashed = None;
+                            restarted.push(hook.owner);
+                        }
+                    });
+                    ui.weak(message);
+                }
+                for owner in restarted {
+                    state.warn(format!("element {owner}: restarted"));
+                }
             });
     }
 }

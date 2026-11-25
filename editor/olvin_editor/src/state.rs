@@ -156,6 +156,8 @@ pub struct EditorState {
     /// show a crash card with Restart instead of taking the editor down;
     /// removing an entry restarts the panel.
     pub crashed_panels: HashMap<u32, (String, String)>,
+    /// What a panic in editor or element code does (`OLVIN_FAULTS`).
+    pub(crate) fault_policy: olvin::core::FaultPolicy,
     /// All selected objects when several are (always includes `selection`).
     pub multi: Vec<u64>,
     /// Local-pose overrides for previews (animation scrubbing). Never saved.
@@ -234,6 +236,7 @@ impl EditorState {
             project,
             project_trusted: true,
             trust_pending: false,
+            fault_policy: olvin::core::FaultPolicy::from_env(),
             crashed_panels: HashMap::new(),
             recovery: None,
             selection: None,

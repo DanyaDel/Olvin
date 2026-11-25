@@ -2283,3 +2283,93 @@ fn a_crash_in_play_reaches_the_console_and_the_subsystems_panel_restarts_it() {
     h.run_steps(3);
     h.get_by_label("✔ All subsystems are running");
 }
+
+/// An element whose viewport extension and frame hook panic while `SHAKY` is set.
+static SHAKY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+struct ShakyExt;
+impl olvin_editor::ext::ViewportExtension for ShakyExt {
+    fn geometry(&mut self, _: &olvin_editor::EditorState, _: &mut olvin_editor::ext::Geometry) {
+        if SHAKY.load(std::sync::atomic::Ordering::Relaxed) {
+            panic!("shaky geometry broke on purpose");
+        }
+    }
+    fn tools(&self) -> &[olvin_editor::ext::ToolDesc] {
+        &[olvin_editor::ext::ToolDesc {
+            id: "shaky.tool",
+            label: "Shaky",
+            tooltip: "",
+            key: None,
+        }]
+    }
+}
+
+struct ShakyPlugin;
+impl EditorPlugin for ShakyPlugin {
+    fn name(&self) -> &'static str {
+        "Shaky"
+    }
+    fn build(&self, registry: &mut olvin_editor::Registry) {
+        registry
+            .add_viewport_extension(|| Box::new(ShakyExt))
+            .add_frame_hook(|_, _| {
+                if SHAKY.load(std::sync::atomic::Ordering::Relaxed) {
+                    panic!("shaky hook broke on purpose");
+                }
+            });
+    }
+}
+
+#[test]
+fn a_crashing_viewport_extension_and_frame_hook_switch_off_only_their_element() {
+    isolate_config();
+    let p = project("shaky");
+    let project = p.clone();
+    let mut h = Harness::builder()
+        .with_size(SIZE)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(move |cc| {
+            olvin_editor::theme::apply(&cc.egui_ctx);
+            let mut all = plugins();
+            all.push(Box::new(ShakyPlugin));
+            let registry = olvin_editor::registry(&all);
+            let mut app = EditorApp::new(registry, Some(project), None);
+            app.set_fault_policy(olvin_editor::olvin::core::FaultPolicy::Isolate);
+            app.reset_layout();
+            app.state_mut().tool = "shaky.tool".into();
+            assert!(app.show_workspace("Layout"));
+            app
+        });
+    h.run_steps(5);
+    let log = |h: &mut Ed, what: &str| state(h).log.iter().any(|l| l.text.contains(what));
+    assert!(log(&mut h, "shaky geometry broke on purpose"));
+    assert!(log(&mut h, "shaky hook broke on purpose"));
+    assert!(
+        !log(&mut h, "panel 🎥 Scene"),
+        "the Scene view itself did not crash"
+    );
+    assert_eq!(
+        state(&mut h).tool,
+        "view",
+        "the crashed element's tool is dropped"
+    );
+    // Other elements' tools are still there, the crashed one's are gone.
+    h.get_by_label("Draw Brush");
+    assert!(h.query_by_label("Shaky").is_none());
+
+    SHAKY.store(false, std::sync::atomic::Ordering::Relaxed);
+    h.get_by_label("WINDOW").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Add Panel").click();
+    h.run_steps(3);
+    h.get_by_label("🛡 Subsystems").click();
+    h.run_steps(4);
+    h.get_by_label("● Shaky · viewport");
+    h.get_by_label("● Shaky · frame hook");
+    for _ in 0..2 {
+        h.get_all_by_label("⟲ Restart").next().unwrap().click();
+        h.run_steps(3);
+    }
+    h.get_by_label("✔ All viewport tools and frame hooks are running");
+    h.get_by_label("Shaky");
+}

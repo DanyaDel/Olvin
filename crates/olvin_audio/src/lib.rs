@@ -30,6 +30,7 @@
 //! and every call becomes a no-op; the bookkeeping (ids, which sources started)
 //! still works so gameplay code doesn't have to care.
 
+mod device;
 mod frame;
 mod mixer;
 mod mixing;
@@ -53,7 +54,7 @@ use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::sound::streaming::StreamingSoundHandle;
 use kira::sound::{FromFileError, PlaybackState, SoundData};
 use kira::track::TrackHandle;
-use kira::{AudioManager, AudioManagerSettings, Capacities, Decibels, Tween};
+use kira::{AudioManager, Decibels, Tween};
 use olvin_core::{App, Plugin, ProjectPaths, Resources, Stage, Time};
 use olvin_ecs::{EcsPlugin, Entity, World};
 use olvin_scene::Transform;
@@ -324,6 +325,8 @@ pub struct Audio {
     /// Game pause (see [`Audio::set_paused`]).
     paused: bool,
     follow_time: bool,
+    /// Watching and reconnecting the output device.
+    device: device::Device,
 }
 
 fn amplitude_to_db(amplitude: f32) -> Decibels {
@@ -351,26 +354,19 @@ fn fade(duration: Duration) -> Tween {
 const OCCLUSION_RATE: f32 = 8.0;
 
 impl Audio {
-    /// Opens the default output device; without one, logs once and stays silent.
+    /// Opens the default output device. Without one it stays silent and keeps
+    /// looking; a device lost later is reconnected the same way (see `device.rs`).
     pub fn open(assets: impl Into<PathBuf>) -> Self {
         let mut audio = Self::disabled(assets);
-        let settings = AudioManagerSettings::<Backend> {
-            capacities: Capacities {
-                sub_track_capacity: 1024,
-                ..Default::default()
-            },
-            backend_settings: backend_settings(),
-            ..Default::default()
-        };
-        match AudioManager::<Backend>::new(settings) {
-            Ok(mut manager) => {
-                audio.reverb = Reverb::open(&mut manager, audio.reverb_settings);
-                for bus in &mut audio.buses {
-                    bus.open(&mut manager, audio.reverb.as_ref());
-                }
-                audio.manager = Some(manager);
-            }
-            Err(err) => log::warn!("audio disabled, no output device: {err:?}"),
+        audio.device.wanted = true;
+        let now = Instant::now();
+        if let Err(err) = audio.connect(now) {
+            log::warn!(
+                "audio: no output device yet ({err}); silent until one appears (checked every {} s)",
+                device::RETRY.as_secs()
+            );
+            audio.device.lost_at = Some(now);
+            audio.device.retry_at = Some(now + device::RETRY);
         }
         audio
     }
@@ -398,6 +394,7 @@ impl Audio {
             fade_in: Duration::ZERO,
             paused: false,
             follow_time: true,
+            device: device::Device::default(),
         }
     }
 

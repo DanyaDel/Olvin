@@ -94,6 +94,10 @@ impl Audio {
 
     /// Gives `id` a voice: starts it on the mixer.
     pub(super) fn activate(&mut self, id: SoundId) {
+        // No mixer (the device is gone): it keeps waiting for one.
+        if self.manager.is_none() && self.device.wanted {
+            return;
+        }
         let Some(p) = self.playing.get(&id) else {
             return;
         };

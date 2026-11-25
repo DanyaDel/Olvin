@@ -14,6 +14,7 @@ impl Audio {
     /// voices, 3D mix, cleanup. Measures the frame time itself.
     pub fn update(&mut self, world: &mut World) {
         let now = Instant::now();
+        self.supervise(now);
         let dt = self
             .last_update
             .replace(now)

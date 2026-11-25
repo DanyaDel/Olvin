@@ -685,3 +685,78 @@ fn non_finite_inputs_stay_silent_not_nan() {
     assert_eq!(pan(Vec3::ZERO, Quat::IDENTITY, Vec3::INFINITY), 0.0);
     assert_eq!(amplitude_to_db(f32::NAN), Decibels::SILENCE);
 }
+
+/// The audio server goes down (the heartbeat stops) and comes back: loops and
+/// music wait and restart, one-shots are dropped, buses and master volume survive.
+#[test]
+fn a_lost_output_is_noticed_and_reconnected() {
+    let dir = std::env::temp_dir().join(format!("olvin_audio_lost_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tone.wav"), wav(0.2)).unwrap();
+    std::fs::write(dir.join("long.wav"), wav(1.0)).unwrap();
+
+    let mut audio = Audio::open(&dir);
+    audio.set_bus_volume(BusId::SFX, 0.3);
+    audio.set_master_volume(0.6);
+    let looped = audio.play_with("tone.wav", looping(5));
+    let shot = audio.play("long.wav");
+    let music = audio.play_music("long.wav", 1.0, false);
+    let mut world = World::new();
+    // The stream renders: the heartbeat moves, nothing happens.
+    let render = |audio: &mut Audio, world: &mut World, frames: usize| {
+        for _ in 0..frames {
+            let backend = audio.manager.as_mut().unwrap().backend_mut();
+            backend.on_start_processing();
+            backend.process();
+            audio.update_with(world, 0.016);
+        }
+    };
+    let t0 = Instant::now();
+    render(&mut audio, &mut world, 20);
+    audio.supervise(t0);
+    assert!(
+        audio.device.probe.as_ref().unwrap().ticks > 0,
+        "the heartbeat ticks while the stream renders"
+    );
+    audio.supervise(t0 + Duration::from_secs(1));
+    assert!(audio.is_available(), "a beating heart is alive");
+    assert!(audio.is_playing(looped) && audio.is_playing(shot) && audio.is_playing(music));
+
+    // The server dies: no more rendering, the heartbeat stands still.
+    audio.supervise(t0 + device::STALL + Duration::from_secs(2));
+    assert!(!audio.is_available(), "a stalled output counts as lost");
+    assert!(audio.is_virtual(looped) && audio.is_virtual(music));
+    audio.update_with(&mut world, 0.016);
+    assert!(
+        !audio.is_playing(shot) && !audio.is_virtual(shot),
+        "one-shots are dropped"
+    );
+    // While it is down, frames go on and the loop keeps waiting.
+    for _ in 0..5 {
+        audio.update_with(&mut world, 0.016);
+    }
+    assert!(audio.is_virtual(looped));
+    // Too early to retry.
+    audio.supervise(t0 + device::STALL + Duration::from_secs(3));
+    assert!(!audio.is_available());
+
+    // It is back.
+    audio.supervise(t0 + device::STALL + device::RETRY + Duration::from_secs(3));
+    assert!(audio.is_available());
+    assert_eq!(audio.reconnect_count(), 1);
+    assert!(audio.reverb.is_some() && audio.buses.iter().all(|b| b.hw.is_some()));
+    assert_eq!(audio.bus_volume(BusId::SFX), 0.3);
+    assert_eq!(audio.master_volume(), 0.6);
+    render(&mut audio, &mut world, 4);
+    assert!(audio.is_playing(looped), "the loop restarted");
+    assert!(audio.is_playing(music), "the music restarted");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn disabled_audio_never_looks_for_a_device() {
+    let mut audio = Audio::disabled(".");
+    audio.supervise(Instant::now() + Duration::from_secs(60));
+    assert!(!audio.is_available());
+    assert_eq!(audio.reconnect_count(), 0);
+}

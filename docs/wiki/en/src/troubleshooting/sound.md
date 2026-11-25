@@ -2,7 +2,7 @@
 
 ## Check in order
 
-1. **Module and device.** The `audio` module is required (`olvin-hub add audio`). Without a sound device kira opens without an error but all calls quietly do nothing. In `DefaultPlugins { audio: AudioPlugin { enabled: true, .. } }` sound is on by default, in `HeadlessPlugins` it is off.
+1. **Module and device.** The `audio` module is required (`olvin-hub add audio`). Without a sound device all calls quietly do nothing, and the engine looks for a device again every 2 s: sound appears by itself once there is one (likewise after a PipeWire restart). In `DefaultPlugins { audio: AudioPlugin { enabled: true, .. } }` sound is on by default, in `HeadlessPlugins` it is off.
 2. **Path.** Files are looked up in `assets/` (`ProjectPaths::assets`). A path in code and in Lua is relative to it: `"sfx/door.wav"`, without `..` and absolute paths (Lua will refuse with an error).
 3. **Log.** Decoder errors and missing files go to the log. Looping sounds whose file failed to load are forgotten.
 4. **Listener.** 3D sound is heard from `AudioListener` (it is created with a camera in the scene). Without a listener panning and attenuation are wrong.

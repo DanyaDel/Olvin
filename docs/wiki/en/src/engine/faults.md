@@ -33,6 +33,10 @@ faults.restart("PhysicsPlugin"); // or faults.restart_all()
 - **The Subsystems panel** (Window → Add Panel → 🛡 Subsystems), the editor's `systemctl status`: which game subsystems are down in Play (with a **⟲ Restart** button), the crash history (frame, subsystem, system, panic text) crashed editor panels, viewport extensions and element frame hooks, each with its own restart.
 - **Autosave before Play**: when the scene has unsaved edits, pressing Play writes a copy to `<project>/.olvin/autosave/<scene path>`. The scene file is not touched. If the process still goes down (an abort, a driver reset), opening the scene next time asks "Recover Unsaved Changes?": Recover loads the copy as one undo step (undo returns the file's version), Discard deletes the copy, Later keeps it under File → Recover Autosave. The copy is deleted when the scene is saved and on "Don't Save".
 
+## Audio
+
+Losing the output device (headphones, PipeWire crashed or restarted) neither crashes the game nor silences it for good: `olvin_audio` notices the stopped stream through a heartbeat clock and reconnects by itself, see [Audio](audio.md).
+
 ## Strict mode
 
 `OLVIN_FAULTS=abort` turns isolation off: the panic propagates and takes the process down as before. CI and `tools/quick_test.sh` use it, so an `assert!` inside a system fails the test instead of quietly stopping a subsystem. From code: `faults.set_policy(FaultPolicy::Abort)`, for the editor `EditorApp::set_fault_policy`.
@@ -40,4 +44,3 @@ faults.restart("PhysicsPlugin"); // or faults.restart_all()
 ## Not there yet
 
 - Losing the GPU device (a driver reset) is not handled.
-- Audio does not reconnect when the output device disappears during the game.

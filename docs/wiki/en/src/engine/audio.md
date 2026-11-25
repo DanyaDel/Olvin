@@ -15,6 +15,8 @@ audio.play_music("music/theme.wav", 0.4, true);    // stream, the single music t
 
 `play_with(path, PlayParams { volume, pitch, looping, position, min_distance, max_distance, bus, priority, stream, occludable })`. An `AudioSourceDesc` from a scene plays on appearance and follows the position. 3D: attenuation and panning from `AudioListener` (on the camera). Without a device all calls are no-ops.
 
+**Losing the device.** A heartbeat clock ticks inside the mixer; when it stands still for more than 2 s (headphones unplugged, PipeWire crashed or restarted), or there was no device at start, `Audio` tries the default device again every 2 s. While there is no sound, loops and music wait virtualized and one-shots are dropped; when the device is back, buses, EQ, reverb and master volume are restored and the waiting sounds start from the beginning. The log gets an error on loss and a warning on return; `audio.reconnect_count()` counts returns. Manual check: `cargo run -p olvin_audio --example reconnect` and `systemctl --user restart pipewire pipewire-pulse wireplumber` while the tone plays.
+
 ## Buses and effects
 
 `BusId::{SFX, MUSIC, AMBIENT, VOICE}` and `add_bus(name)`: volume, mute, a 3-band EQ (shelf 250 Hz, bell 1 kHz, shelf 4 kHz) and a send level into the shared reverb.

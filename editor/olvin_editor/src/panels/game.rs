@@ -57,6 +57,7 @@ impl Panel for GameView {
                     overlay: Vec::new(),
                     grid: false,
                     engine: Some(source),
+                    size_px: crate::panels::viewport::size_px(ui, rect),
                 };
                 painter.add(eframe::egui_wgpu::Callback::new_paint_callback(rect, frame));
             }

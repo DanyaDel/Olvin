@@ -43,7 +43,8 @@ pub use particles::{
 };
 pub use particles_gpu::{GpuParticle, device_limits as full_tier_limits};
 pub use post::{
-    AmbientOcclusion, ColorGrade, HDR_FORMAT, PostProcess, PostSettings, identity_lut, lut_strip,
+    AmbientOcclusion, ColorGrade, DEPTH_FORMAT as POST_DEPTH_FORMAT, HDR_FORMAT, PostProcess,
+    PostSettings, identity_lut, lut_strip,
 };
 pub use quad::{QuadBlend, QuadFilter};
 pub use renderer::{

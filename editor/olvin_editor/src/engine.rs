@@ -13,7 +13,9 @@ use olvin::render::{
     Color, GpuMeshes, MeshData, MeshHandle, MeshRenderer, Meshes, ParticleRenderer, RenderCore,
     RenderSettings, ViewData,
 };
-use olvin::render::{Materials, Shaders, Textures};
+use olvin::render::{
+    HDR_FORMAT, Materials, POST_DEPTH_FORMAT, PostProcess, Shaders, Textures, begin_scene_pass,
+};
 use olvin::render_assets::{Registries, RenderAssets};
 use olvin::scene::file::{SceneFile, Shape};
 use olvin::scene::{Camera, Transform};
@@ -31,6 +33,13 @@ pub enum Source {
 }
 
 /// GPU half, stored in egui's callback resources.
+///
+/// Two ways to draw, by tier. Compat (GL): the core draws straight into
+/// egui's MSAA pass, tonemapping in the mesh shader. Full: like the game, the
+/// core draws an HDR frame offscreen and the game's post chain (bloom, AO,
+/// FXAA, colour grading, tonemapping) turns it into an image that the
+/// viewport composites into egui's pass together with the scene's depth, so
+/// editor geometry is still hidden behind objects.
 pub struct EngineGpu {
     pub core: RenderCore,
     edit: GpuMeshes,
@@ -40,16 +49,37 @@ pub struct EngineGpu {
     particles: HashMap<(u64, Source), ParticleRenderer>,
     device: eframe::wgpu::Device,
     queue: eframe::wgpu::Queue,
+    /// egui's target format: what the viewport and the preview end up in.
     format: eframe::wgpu::TextureFormat,
+    /// What the core draws into: (colour, samples, depth).
+    scene_target: (
+        eframe::wgpu::TextureFormat,
+        u32,
+        eframe::wgpu::TextureFormat,
+    ),
+    /// Full tier: HDR scene + post chain per view (see the type's docs).
+    hdr: bool,
+    posts: HashMap<u64, ViewPost>,
     /// Offscreen target of the material preview (made on first use).
     preview: Option<PreviewTarget>,
 }
 
-/// Where a material preview is drawn: MSAA colour and depth like the scene
-/// view, resolved into a texture egui shows as an image.
+/// One view's post chain and what it needs at render time.
+struct ViewPost {
+    post: PostProcess,
+    /// The post chain's output (egui's format), at the view's pixel size.
+    out: Option<(eframe::wgpu::TextureView, (u32, u32))>,
+    settings: RenderSettings,
+    view_proj: Mat4,
+}
+
+/// Where a material preview is drawn, resolved into a texture egui shows
+/// as an image: through MSAA (Compat) or through a post chain (Full).
 pub(crate) struct PreviewTarget {
-    msaa: eframe::wgpu::TextureView,
-    depth: eframe::wgpu::TextureView,
+    /// Compat: MSAA colour and depth.
+    direct: Option<(eframe::wgpu::TextureView, eframe::wgpu::TextureView)>,
+    /// Full: the post chain.
+    post: Option<PostProcess>,
     pub resolved: eframe::wgpu::TextureView,
     /// Set once the texture is registered with egui.
     pub egui_id: Option<egui::TextureId>,
@@ -58,15 +88,52 @@ pub(crate) struct PreviewTarget {
 /// Engine view id of the material preview (scene views use small ids).
 const PREVIEW_VIEW: u64 = u64::MAX;
 
+fn color_target(
+    device: &eframe::wgpu::Device,
+    format: eframe::wgpu::TextureFormat,
+    samples: u32,
+    (w, h): (u32, u32),
+    sampled: bool,
+) -> eframe::wgpu::TextureView {
+    use eframe::wgpu;
+    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+    if sampled {
+        usage |= wgpu::TextureUsages::TEXTURE_BINDING;
+    }
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("olvin editor view"),
+            size: wgpu::Extent3d {
+                width: w.max(1),
+                height: h.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
+}
+
 impl EngineGpu {
     pub fn new(state: &egui_wgpu::RenderState) -> Self {
-        let core = RenderCore::new(
+        let hdr = olvin::render::tier_of(&state.adapter) == olvin::render::RenderTier::Full;
+        let scene_target = if hdr {
+            (HDR_FORMAT, 1, POST_DEPTH_FORMAT)
+        } else {
+            (state.target_format, MSAA, DEPTH_FORMAT)
+        };
+        let mut core = RenderCore::new(
             state.device.clone(),
             state.queue.clone(),
-            state.target_format,
-            MSAA,
-            DEPTH_FORMAT,
+            scene_target.0,
+            scene_target.1,
+            scene_target.2,
         );
+        core.set_hdr_output(hdr);
         Self {
             core,
             edit: GpuMeshes::default(),
@@ -76,8 +143,16 @@ impl EngineGpu {
             device: state.device.clone(),
             queue: state.queue.clone(),
             format: state.target_format,
+            scene_target,
+            hdr,
+            posts: HashMap::new(),
             preview: None,
         }
+    }
+
+    /// Full tier: views go through the post chain and are composited.
+    pub fn is_hdr(&self) -> bool {
+        self.hdr
     }
 
     /// Draws `world` from `view_proj` into the preview target (`size`
@@ -102,42 +177,41 @@ impl EngineGpu {
             .or_insert_with(|| self.core.create_view());
         self.core.prepare(view, gpu, world, view_proj, settings);
         let device = &self.device;
-        let format = self.format;
-        let target = self.preview.get_or_insert_with(|| {
-            let make = |format, samples, usage| {
-                device
-                    .create_texture(&wgpu::TextureDescriptor {
-                        label: Some("material preview"),
-                        size: wgpu::Extent3d {
-                            width: size,
-                            height: size,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: samples,
-                        dimension: wgpu::TextureDimension::D2,
-                        format,
-                        usage,
-                        view_formats: &[],
-                    })
-                    .create_view(&Default::default())
-            };
-            let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
-            PreviewTarget {
-                msaa: make(format, MSAA, rt),
-                depth: make(DEPTH_FORMAT, MSAA, rt),
-                resolved: make(format, 1, rt | wgpu::TextureUsages::TEXTURE_BINDING),
-                egui_id: None,
-            }
+        let (format, hdr, scene) = (self.format, self.hdr, self.scene_target);
+        let target = self.preview.get_or_insert_with(|| PreviewTarget {
+            direct: (!hdr).then(|| {
+                (
+                    color_target(device, scene.0, scene.1, (size, size), false),
+                    color_target(device, scene.2, scene.1, (size, size), false),
+                )
+            }),
+            post: hdr.then(|| PostProcess::new(device, format)),
+            resolved: color_target(device, format, 1, (size, size), true),
+            egui_id: None,
         });
         let mut encoder = device.create_command_encoder(&Default::default());
         self.core.render_shadows(view, &self.edit, &mut encoder);
-        {
+        if let Some(post) = &mut target.post {
+            post.resize(device, (size, size));
+            post.sync_lut(device, &self.edit, settings);
+            if let (Some(hdr_view), Some(depth)) = (post.hdr_view(), post.depth_view()) {
+                let ao = settings.post.ao.is_some();
+                let mut pass = begin_scene_pass(&mut encoder, hdr_view, depth, settings, ao);
+                self.core.draw(view, &self.edit, &mut pass);
+            }
+            post.run(
+                &self.queue,
+                &mut encoder,
+                &target.resolved,
+                settings,
+                view_proj,
+            );
+        } else if let Some((msaa, depth)) = &target.direct {
             let [r, g, b, a] = settings.clear_color.0.map(f64::from);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("material preview"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.msaa,
+                    view: msaa,
                     depth_slice: None,
                     resolve_target: Some(&target.resolved),
                     ops: wgpu::Operations {
@@ -146,7 +220,7 @@ impl EngineGpu {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &target.depth,
+                    view: depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Discard,
@@ -172,7 +246,8 @@ impl EngineGpu {
         self.particles.retain(|(_, s), _| *s != Source::Play);
     }
 
-    /// Uploads new meshes and prepares view `id`; draw it later with [`Self::draw`].
+    /// Uploads new meshes and prepares view `id`; render it later with
+    /// [`Self::render_offscreen`] and [`Self::draw`] (or the composite).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -197,31 +272,89 @@ impl EngineGpu {
             .entry(id)
             .or_insert_with(|| self.core.create_view());
         let stats = self.core.prepare(view, gpu, world, view_proj, settings);
-        let (device, queue, format) = (&self.device, &self.queue, self.format);
+        let (device, queue, scene, hdr) = (&self.device, &self.queue, self.scene_target, self.hdr);
         self.particles
             .entry((id, source))
-            .or_insert_with(|| ParticleRenderer::new(device, queue, format, MSAA, DEPTH_FORMAT))
+            .or_insert_with(|| {
+                let mut p = ParticleRenderer::new(device, queue, scene.0, scene.1, scene.2);
+                p.set_hdr_output(hdr);
+                p
+            })
             .prepare(device, queue, gpu, particles, view_proj);
+        if hdr {
+            let format = self.format;
+            let post = self.posts.entry(id).or_insert_with(|| ViewPost {
+                post: PostProcess::new(device, format),
+                out: None,
+                settings: RenderSettings::default(),
+                view_proj: Mat4::IDENTITY,
+            });
+            post.settings = settings.clone();
+            post.view_proj = view_proj;
+        }
         stats
     }
 
-    /// Shadow pass for view `id`; record it before the pass `draw` goes into.
-    pub fn render_shadows(
-        &self,
+    /// Before egui's pass: the shadow maps of view `id`, and on the Full tier
+    /// its HDR frame and post chain into an image of `size` pixels.
+    pub fn render_offscreen(
+        &mut self,
         id: u64,
         source: Source,
         encoder: &mut eframe::wgpu::CommandEncoder,
+        size: (u32, u32),
     ) {
         let gpu = match source {
             Source::Edit => &self.edit,
             Source::Play => &self.play,
         };
-        if let Some(view) = self.views.get(&id) {
-            self.core.render_shadows(view, gpu, encoder);
+        let Some(view) = self.views.get(&id) else {
+            return;
+        };
+        self.core.render_shadows(view, gpu, encoder);
+        let Some(vp) = self.posts.get_mut(&id).filter(|_| self.hdr) else {
+            return;
+        };
+        let size = (size.0.max(1), size.1.max(1));
+        // Retro low internal resolution is scaled up by the chain, as in the game.
+        let scene_size = vp.settings.retro.scene_size(size).unwrap_or(size);
+        vp.post.resize(&self.device, scene_size);
+        vp.post.sync_lut(&self.device, gpu, &vp.settings);
+        if vp.out.as_ref().is_none_or(|(_, s)| *s != size) {
+            vp.out = Some((color_target(&self.device, self.format, 1, size, true), size));
         }
+        let (Some(hdr), Some(depth), Some((out, _))) =
+            (vp.post.hdr_view(), vp.post.depth_view(), &vp.out)
+        else {
+            return;
+        };
+        {
+            let ao = vp.settings.post.ao.is_some();
+            let mut pass = begin_scene_pass(encoder, hdr, depth, &vp.settings, ao);
+            self.core.draw(view, gpu, &mut pass);
+            if let Some(particles) = self.particles.get(&(id, source)) {
+                particles.draw(&mut pass);
+            }
+        }
+        vp.post
+            .run(&self.queue, encoder, out, &vp.settings, vp.view_proj);
     }
 
+    /// Full tier: the finished image of view `id` and its scene depth, for
+    /// the composite into egui's pass.
+    pub fn composite_views(
+        &self,
+        id: u64,
+    ) -> Option<(&eframe::wgpu::TextureView, &eframe::wgpu::TextureView)> {
+        let vp = self.posts.get(&id).filter(|_| self.hdr)?;
+        Some((&vp.out.as_ref()?.0, vp.post.depth_view()?))
+    }
+
+    /// Compat tier: draws view `id` straight into egui's pass.
     pub fn draw(&self, id: u64, source: Source, pass: &mut eframe::wgpu::RenderPass<'static>) {
+        if self.hdr {
+            return;
+        }
         let gpu = match source {
             Source::Edit => &self.edit,
             Source::Play => &self.play,
@@ -910,6 +1043,11 @@ fn editor_quality(
     }
     if !prefs.viewport_fog {
         settings.fog = None;
+    }
+    if !prefs.viewport_post {
+        settings.bloom = None;
+        settings.post.ao = None;
+        settings.post.grade = Default::default();
     }
     settings
 }

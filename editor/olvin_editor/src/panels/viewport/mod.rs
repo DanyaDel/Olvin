@@ -288,6 +288,7 @@ impl Panel for Viewport {
             overlay: self.geometry.overlay_lines.clone(),
             grid: self.show_grid,
             engine,
+            size_px: size_px(ui, rect),
         };
         painter.set(
             scene_slot,
@@ -296,6 +297,12 @@ impl Panel for Viewport {
 
         self.overlay(ui, rect, &camera, state, grid_step);
     }
+}
+
+/// `rect` in physical pixels: the size of the engine image drawn into it.
+pub(crate) fn size_px(ui: &egui::Ui, rect: egui::Rect) -> [u32; 2] {
+    let px = rect.size() * ui.ctx().pixels_per_point();
+    [px.x.round().max(1.0) as u32, px.y.round().max(1.0) as u32]
 }
 
 /// Turns a crashed extension off until restarted; its active tool falls back to View.

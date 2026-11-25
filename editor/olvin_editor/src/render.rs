@@ -1,6 +1,7 @@
 //! GPU side of the viewport: draws into egui's own render pass through a paint
 //! callback, using egui's depth buffer. Buffers are kept per viewport and grow
-//! as needed.
+//! as needed. On the Full tier the engine's image (post-processed offscreen,
+//! see `EngineGpu`) is composited first, with the scene's depth.
 
 use std::collections::HashMap;
 
@@ -30,6 +31,8 @@ struct Target {
     buffers: [(wgpu::Buffer, u64); 3],
     counts: [u32; 3],
     grid: bool,
+    /// Full tier: the engine image and depth to composite this frame.
+    composite: Option<wgpu::BindGroup>,
 }
 
 pub struct Resources {
@@ -38,6 +41,9 @@ pub struct Resources {
     grid: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     overlay: wgpu::RenderPipeline,
+    /// Full tier only: GLSL (Compat) cannot load from a depth texture, and
+    /// there is nothing to composite there anyway.
+    composite: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     targets: HashMap<u64, Target>,
     pub engine: EngineGpu,
 }
@@ -131,6 +137,8 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &line_attrs,
     };
+    let engine = EngineGpu::new(render_state);
+    let composite = engine.is_hdr().then(|| composite_pipeline(device, format));
     use wgpu::CompareFunction::{Always, Less, LessEqual};
     use wgpu::PrimitiveTopology::{LineList, TriangleList};
     let resources = Resources {
@@ -175,8 +183,9 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
             premultiplied,
         ),
         layout,
+        composite,
         targets: HashMap::new(),
-        engine: EngineGpu::new(render_state),
+        engine,
     };
     render_state
         .renderer
@@ -195,6 +204,8 @@ pub struct Frame {
     pub grid: bool,
     /// Engine-rendered world prepared for this viewport id, drawn first.
     pub engine: Option<Source>,
+    /// The viewport's size in physical pixels (the engine image's size).
+    pub size_px: [u32; 2],
 }
 
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut (wgpu::Buffer, u64), data: &[u8]) {
@@ -229,8 +240,30 @@ impl egui_wgpu::CallbackTrait for Frame {
         // The engine view was prepared during UI; its shadow map renders here,
         // before egui's pass samples it.
         if let Some(source) = self.engine {
-            res.engine.render_shadows(self.viewport, source, encoder);
+            let [w, h] = self.size_px;
+            res.engine
+                .render_offscreen(self.viewport, source, encoder, (w, h));
         }
+        let composite = self
+            .engine
+            .and_then(|_| res.engine.composite_views(self.viewport))
+            .zip(res.composite.as_ref())
+            .map(|((color, depth), (layout, _))| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("olvin viewport composite"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(color),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(depth),
+                        },
+                    ],
+                })
+            });
         let layout = &res.layout;
         let target = res.targets.entry(self.viewport).or_insert_with(|| {
             let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -262,6 +295,7 @@ impl egui_wgpu::CallbackTrait for Frame {
                 buffers: [empty(), empty(), empty()],
                 counts: [0; 3],
                 grid: false,
+                composite: None,
             }
         });
         queue.write_buffer(&target.uniforms, 0, bytemuck::bytes_of(&self.uniforms));
@@ -289,6 +323,7 @@ impl egui_wgpu::CallbackTrait for Frame {
             self.overlay.len() as u32,
         ];
         target.grid = self.grid;
+        target.composite = composite;
         Vec::new()
     }
 
@@ -307,6 +342,11 @@ impl egui_wgpu::CallbackTrait for Frame {
         let Some(t) = res.targets.get(&self.viewport) else {
             return;
         };
+        if let (Some(bind), Some((_, composite))) = (&t.composite, &res.composite) {
+            pass.set_pipeline(composite);
+            pass.set_bind_group(0, bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
         pass.set_bind_group(0, &t.bind, &[]);
         if t.counts[0] > 0 {
             pass.set_pipeline(&res.mesh);
@@ -328,4 +368,73 @@ impl egui_wgpu::CallbackTrait for Frame {
             pass.draw(0..t.counts[2], 0..1);
         }
     }
+}
+
+/// The composite of the engine image into egui's pass: colour, plus the
+/// scene depth written as fragment depth.
+fn composite_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("olvin viewport composite"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
+    });
+    let texture = |binding, sample_type| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("olvin viewport composite"),
+        entries: &[
+            texture(0, wgpu::TextureSampleType::Float { filterable: false }),
+            texture(1, wgpu::TextureSampleType::Depth),
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("olvin viewport composite"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("olvin viewport composite"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: MSAA,
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (layout, pipeline)
 }

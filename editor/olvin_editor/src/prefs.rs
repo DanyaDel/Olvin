@@ -22,6 +22,9 @@ pub struct Preferences {
     /// Shadows and fog in editor views (the game is unaffected).
     pub viewport_shadows: bool,
     pub viewport_fog: bool,
+    /// Bloom, ambient occlusion and colour grading in editor views (Full
+    /// tier; exposure and tonemapping stay, they are the game's look).
+    pub viewport_post: bool,
     /// Draw calls, objects and frame time in the scene view corner.
     pub show_stats: bool,
     /// Interface palette (STYLE.md "Themes"). Scene views keep their colours.
@@ -44,6 +47,7 @@ impl Default for Preferences {
             solid_by_default: false,
             viewport_shadows: true,
             viewport_fog: true,
+            viewport_post: true,
             show_stats: false,
             theme: olvin_ui::ThemeKind::default(),
             reduce_motion: false,

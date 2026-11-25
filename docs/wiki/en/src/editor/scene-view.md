@@ -28,7 +28,7 @@ Component gizmos of the selected object: colliders (green), lights (rays, sphere
 
 ## Shading
 
-`Shift+Z` or the toolbar: **Solid** (studio light from behind the camera, no scene lights, fog or tonemapping) or **Rendered** (as in the game: lights, sky, fog, shadows, materials). Post-processing (AO, LUT, FXAA) is not visible in the viewport: the editor draws into egui's own pass.
+`Shift+Z` or the toolbar: **Solid** (studio light from behind the camera, no scene lights, fog or tonemapping) or **Rendered** (as in the game: lights, sky, fog, shadows, materials). On Vulkan, Metal and DX12 (the Full tier) the scene view and the Game view go through the same post chain as the game: bloom, AO, FXAA, colour grading and LUT, tonemapping, retro resolution. The scene is drawn into an HDR texture and the finished image is composited into the view with its depth, so the grid and gizmos still hide behind objects. Settings → Viewport quality → Post-processing turns bloom, AO and grading off (exposure and tonemapping stay). On GL (the Compat tier) there is no post chain, as in the game.
 
 > **Status:** particles and sprites are not drawn in the viewport, animated models stand in their default pose.
 

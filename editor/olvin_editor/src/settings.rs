@@ -108,6 +108,11 @@ fn rendering(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.checkbox(&mut p.viewport_shadows, "Shadows");
         ui.checkbox(&mut p.viewport_fog, "Fog");
         ui.checkbox(
+            &mut p.viewport_post,
+            "Post-processing (bloom, AO, colour grading)",
+        )
+        .on_hover_text("Native GPU APIs only (Vulkan, Metal, DX12), like in the game");
+        ui.checkbox(
             &mut p.show_stats,
             "Render stats overlay (draw calls, objects, frame time)",
         );

@@ -933,3 +933,71 @@ fn scene_tabs_screenshot() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Share of strongly coloured pixels in the scene view's middle.
+fn colourful_share(path: &Path) -> f32 {
+    let image = image::open(path).unwrap().to_rgb8();
+    let (mut n, mut coloured) = (0, 0);
+    for y in 200..600 {
+        for x in 400..1100 {
+            let p = image.get_pixel(x, y);
+            let (hi, lo) = (p.0.iter().max().unwrap(), p.0.iter().min().unwrap());
+            n += 1;
+            coloured += usize::from(hi - lo > 40);
+        }
+    }
+    coloured as f32 / n as f32
+}
+
+/// The scene's colour grading reaches the scene view (Full tier, through the
+/// game's post chain): saturation 0 turns the view grey; the Settings switch
+/// turns it off. On Compat (GL) there is no post chain, as in the game.
+/// Writes `viewport-post{,-off}.png` to `$OLVIN_EDITOR_SHOTS` (default: `target/`).
+#[test]
+#[ignore = "renders with wgpu; run with --ignored"]
+fn viewport_shows_post_processing() {
+    let root = std::env::temp_dir().join(format!("olvin-viewpost-{}", std::process::id()));
+    demo_project(&root);
+    let scene_path = root.join("assets/scenes/main.scene.ron");
+    let mut scene = SceneFile::load(&scene_path).unwrap();
+    scene.environment.post.saturation = 0.0;
+    scene.save(&scene_path).unwrap();
+    let dir = std::env::var_os("OLVIN_EDITOR_SHOTS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+    fs::create_dir_all(&dir).unwrap();
+    let shot_post = |out: &Path, post: bool| {
+        shot_with(&root, out, ThemeKind::Dark, None, |h| {
+            let state = h.state_mut().state_mut();
+            state.select(None);
+            state.prefs.viewport_post = post;
+            h.run_steps(3);
+        });
+    };
+    let (on, off) = (
+        dir.join("viewport-post.png"),
+        dir.join("viewport-post-off.png"),
+    );
+    shot_post(&on, true);
+    shot_post(&off, false);
+    let (on, off) = (colourful_share(&on), colourful_share(&off));
+    // The courtyard is mostly grey; the coloured props are a few percent.
+    assert!(
+        off > 0.01,
+        "the demo scene has colour without grading ({off})"
+    );
+    let gl = std::env::var("WGPU_BACKEND").is_ok_and(|b| b.eq_ignore_ascii_case("gl"));
+    if gl {
+        assert!(
+            on > off * 0.8,
+            "Compat has no post chain, like the game ({on} vs {off})"
+        );
+    } else {
+        // What colour is left belongs to editor overlays (light icons).
+        assert!(
+            on < off * 0.25,
+            "saturation 0 must grey the scene view ({on} vs {off})"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}

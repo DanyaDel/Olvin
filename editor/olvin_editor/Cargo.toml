@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 olvin_scene = { workspace = true, features = ["serde"] }
 olvin_assets = { path = "../../crates/olvin_assets" }
-olvin = { workspace = true, default-features = false, features = ["render", "scene", "physics", "window", "script", "lua", "input"] }
+olvin = { workspace = true, default-features = false, features = ["render", "scene", "physics", "window", "script", "lua", "input", "terrain"] }
 olvin_ui.workspace = true
 olvin_trust.workspace = true
 eframe.workspace = true

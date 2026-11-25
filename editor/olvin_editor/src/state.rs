@@ -89,6 +89,7 @@ pub enum NewEntity {
     Camera,
     Light(LightKind),
     AudioSource,
+    Terrain,
 }
 
 impl NewEntity {
@@ -104,6 +105,7 @@ impl NewEntity {
                 NewEntity::Primitive(Shape::Cylinder),
                 NewEntity::Primitive(Shape::Plane),
                 NewEntity::Primitive(Shape::Quad),
+                NewEntity::Terrain,
             ],
         ),
         (
@@ -127,6 +129,7 @@ impl NewEntity {
             Self::Light(LightKind::Point) => "Point Light",
             Self::Light(LightKind::Spot) => "Spot Light",
             Self::AudioSource => "Audio Source",
+            Self::Terrain => "Terrain",
         }
     }
 
@@ -206,6 +209,8 @@ pub struct EditorState {
     pub prefabs: PrefabLibrary,
     /// The Assets panel shows this file next time (set by "Select Prefab Asset").
     pub asset_focus: Option<PathBuf>,
+    /// Terrain data by file, shared by the scene view and the brushes.
+    pub terrains: crate::terrain::TerrainStore,
     /// Mesh Edit Mode selection (entity, selected vertices), published by the
     /// editing element for others (the UV editor's "only selected in 3D").
     pub mesh_selection: Option<(u64, Vec<u32>)>,
@@ -267,6 +272,7 @@ impl EditorState {
             materials: Default::default(),
             prefabs: Default::default(),
             asset_focus: None,
+            terrains: Default::default(),
             mesh_selection: None,
             busy: false,
             ext: Extensions::default(),
@@ -827,6 +833,25 @@ impl EditorState {
                 }
             }
             NewEntity::AudioSource => e.audio_source = Some(AudioSourceDesc::default()),
+            NewEntity::Terrain => {
+                // The heights go to a file of their own; without a project
+                // (no assets folder) the terrain stays flat and unsaved.
+                let data = match self.assets_dir() {
+                    Some(root) => match crate::terrain::create_file(&root, "Terrain") {
+                        Ok(rel) => rel,
+                        Err(err) => {
+                            self.error(format!("terrain: {err}"));
+                            String::new()
+                        }
+                    },
+                    None => String::new(),
+                };
+                e.terrain = Some(olvin::scene::file::TerrainDesc {
+                    data,
+                    ..Default::default()
+                });
+                e.collider = Some(ColliderDesc::new(olvin::scene::file::ColliderShape::Mesh));
+            }
         }
         self.scene.entities.push(e);
         self.selection = Some(id);

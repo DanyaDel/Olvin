@@ -210,7 +210,7 @@ fn walk(root: &Path, dir: &Path, found: &mut impl FnMut(String)) {
 }
 
 /// Picker for an optional asset path from `options`.
-fn asset_combo(
+pub(crate) fn asset_combo(
     ui: &mut egui::Ui,
     id: &str,
     value: &mut Option<String>,

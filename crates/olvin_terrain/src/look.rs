@@ -4,8 +4,9 @@
 //! A material has four texture slots and no texture arrays (WebGL2-class
 //! hardware is a target), so the layers share one 2×2 atlas in the base
 //! colour slot and the weight map takes the ORM slot. Each atlas tile has a
-//! wrapped border (`GUTTER`) and is sampled with the gradients of the
-//! unwrapped coordinates, so tiling shows no seams and mip levels stay right.
+//! wrapped border (`GUTTER`); the mip level is computed from the unwrapped
+//! coordinates (no seam where they wrap) and capped so a texel never reaches
+//! past the border into the next layer (`MAX_MIP`).
 
 use olvin_render::{Material, TextureData, TextureFormat};
 use olvin_scene::file::TerrainLayer;
@@ -18,6 +19,9 @@ pub const TILE: u32 = 512;
 pub const GUTTER: u32 = 16;
 /// Layers a terrain can blend.
 pub const MAX_LAYERS: usize = 4;
+/// Coarsest mip level sampled: a texel of level n covers 2ⁿ pixels, and the
+/// border is `GUTTER` = 2⁴ pixels wide.
+const MAX_MIP: f32 = 4.0;
 
 /// Colours of layers without an image (or whose image failed): grass, rock,
 /// sand, snow, so a fresh terrain is readable before any texture is set.
@@ -137,7 +141,14 @@ fn terrain_layer(i: u32, uv: vec2<f32>, tiling: f32) -> vec4<f32> {{\n\
     let inner = 0.5 - 2.0 * {gutter:.6};\n\
     let t = uv * tiling;\n\
     let at = tile + vec2<f32>({gutter:.6}) + fract(t) * inner;\n\
-    return textureSampleGrad(base_texture, material_sampler, at, dpdx(t) * inner, dpdy(t) * inner);\n\
+    // The mip level from the unwrapped coordinates, in atlas pixels: `fract`\n\
+    // jumps where the tiling wraps and implicit derivatives would pick the\n\
+    // smallest level there (a seam of all layers averaged).\n\
+    let px = vec2<f32>(textureDimensions(base_texture)) * inner;\n\
+    let dx = dpdx(t) * px;\n\
+    let dy = dpdy(t) * px;\n\
+    let level = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, {max_mip:.1});\n\
+    return textureSampleLevel(base_texture, material_sampler, at, level);\n\
 }}\n\
 \n\
 fn surface(in: SurfaceInput) -> SurfaceOutput {{\n\
@@ -157,6 +168,7 @@ fn surface(in: SurfaceInput) -> SurfaceOutput {{\n\
     return out;\n\
 }}\n",
         res = resolution as f32,
+        max_mip = MAX_MIP,
         // Unused channels must not take weight from the used ones.
         mask = ["", "", "", ""]
             .iter()

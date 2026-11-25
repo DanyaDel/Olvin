@@ -17,6 +17,7 @@ mod registry;
 mod render;
 pub mod settings;
 mod state;
+pub mod terrain;
 pub mod theme;
 pub mod widgets;
 mod workspace;

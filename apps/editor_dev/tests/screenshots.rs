@@ -934,19 +934,20 @@ fn scene_tabs_screenshot() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// Share of strongly coloured pixels in the scene view's middle.
+/// Mean saturation (max - min channel) in the scene view's middle: thin
+/// editor lines (grid axes, wireframes) barely move it, the scene does.
 fn colourful_share(path: &Path) -> f32 {
     let image = image::open(path).unwrap().to_rgb8();
-    let (mut n, mut coloured) = (0, 0);
-    for y in 200..600 {
-        for x in 400..1100 {
+    let (mut n, mut sum) = (0u32, 0u32);
+    for y in (200..600).step_by(2) {
+        for x in (400..1100).step_by(2) {
             let p = image.get_pixel(x, y);
             let (hi, lo) = (p.0.iter().max().unwrap(), p.0.iter().min().unwrap());
             n += 1;
-            coloured += usize::from(hi - lo > 40);
+            sum += u32::from(hi - lo);
         }
     }
-    coloured as f32 / n as f32
+    sum as f32 / n as f32
 }
 
 /// The scene's colour grading reaches the scene view (Full tier, through the
@@ -981,9 +982,9 @@ fn viewport_shows_post_processing() {
     shot_post(&on, true);
     shot_post(&off, false);
     let (on, off) = (colourful_share(&on), colourful_share(&off));
-    // The courtyard is mostly grey; the coloured props are a few percent.
+    // Mean saturation: about 17 for the demo scene, a few for grey + lines.
     assert!(
-        off > 0.01,
+        off > 8.0,
         "the demo scene has colour without grading ({off})"
     );
     let gl = std::env::var("WGPU_BACKEND").is_ok_and(|b| b.eq_ignore_ascii_case("gl"));
@@ -993,11 +994,77 @@ fn viewport_shows_post_processing() {
             "Compat has no post chain, like the game ({on} vs {off})"
         );
     } else {
-        // What colour is left belongs to editor overlays (light icons).
         assert!(
-            on < off * 0.25,
+            on < off * 0.3,
             "saturation 0 must grey the scene view ({on} vs {off})"
         );
     }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A terrain made with GameObject → 3D Object → Terrain, raised into a hill
+/// and painted half with layer 2 (stand-in colours: no images in the demo).
+/// Writes `terrain.png`; checks both layers' colours are in the scene view.
+#[test]
+#[ignore = "renders with wgpu; run with --ignored"]
+fn terrain_draws_with_its_layers() {
+    use olvin_editor::NewEntity;
+    let root = std::env::temp_dir().join(format!("olvin-terrain-shot-{}", std::process::id()));
+    demo_project(&root);
+    let dir = std::env::var_os("OLVIN_EDITOR_SHOTS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+    fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("terrain.png");
+    let assets = root.join("assets");
+    shot_with(&root, &out, ThemeKind::Dark, None, |h| {
+        let state = h.state_mut().state_mut();
+        state
+            .scene
+            .entities
+            .retain(|e| e.light.is_some() || e.camera.is_some());
+        let id = state.create(NewEntity::Terrain, None);
+        let t = state.scene.get_mut(id).unwrap();
+        let desc = t.terrain.clone().unwrap();
+        assert!(assets.join(&desc.data).exists(), "the data file is created");
+        t.terrain.as_mut().unwrap().size = Vec3::new(30.0, 6.0, 30.0);
+        t.terrain.as_mut().unwrap().layers = vec![Default::default(), Default::default()];
+        let entry = state.terrains.entry(Some(&assets), &desc.data);
+        let res = entry.data.resolution();
+        let c = (res - 1) as f32 / 2.0;
+        for z in 0..res {
+            for x in 0..res {
+                let r = ((x as f32 - c).powi(2) + (z as f32 - c).powi(2)).sqrt() / c;
+                entry.data.set_height(x, z, (1.0 - r).max(0.0).powi(2));
+                if x > res / 2 {
+                    entry.data.set_weights(x, z, [0, 255, 0, 0]);
+                }
+            }
+        }
+        state
+            .terrains
+            .heights_changed(&desc.data, ((0, 0), (res - 1, res - 1)));
+        state.terrains.weights_changed(&desc.data);
+        state.select(None);
+        h.run_steps(3);
+    });
+    let image = image::open(&out).unwrap().to_rgb8();
+    let count = |f: &dyn Fn([u8; 3]) -> bool| {
+        image
+            .enumerate_pixels()
+            .filter(|(x, y, p)| (300..1250).contains(x) && (100..700).contains(y) && f(p.0))
+            .count()
+    };
+    // Grass: green over red and blue. Rock: grey-brown, red ≥ blue, little saturation.
+    let grass = count(&|[r, g, b]| g as i32 > r as i32 + 15 && g as i32 > b as i32 + 15);
+    let rock = count(&|[r, g, b]| {
+        r > 50 && (r as i32 - b as i32) > 3 && (r as i32 - g as i32).abs() < 20 && g > b
+    });
+    assert!(grass > 5000, "layer 1 (grass) shows ({grass} px)");
+    assert!(rock > 5000, "layer 2 (rock) shows ({rock} px)");
+    // The grid's red X axis runs past the terrain: editor lines are still
+    // depth-tested against the scene, not hidden by the composite (Full tier).
+    let axis = count(&|[r, g, b]| r > 170 && g < 90 && b < 90);
+    assert!(axis > 100, "the grid's X axis is visible ({axis} px)");
     let _ = fs::remove_dir_all(&root);
 }

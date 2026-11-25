@@ -329,8 +329,9 @@ impl EngineGpu {
             return;
         };
         {
-            let ao = vp.settings.post.ao.is_some();
-            let mut pass = begin_scene_pass(encoder, hdr, depth, &vp.settings, ao);
+            // Kept even without AO: the composite writes it into egui's pass,
+            // and a discarded depth would hide every editor line and the grid.
+            let mut pass = begin_scene_pass(encoder, hdr, depth, &vp.settings, true);
             self.core.draw(view, gpu, &mut pass);
             if let Some(particles) = self.particles.get(&(id, source)) {
                 particles.draw(&mut pass);
@@ -466,6 +467,9 @@ pub struct ScenePreview {
     /// When the animations were last advanced.
     clock: Option<std::time::Instant>,
     frame: Option<u64>,
+    /// Terrains by object id: their data file and built parts.
+    terrains: HashMap<u64, (String, olvin::terrain::TerrainParts)>,
+    terrain_frame: Option<u64>,
 }
 
 impl ScenePreview {
@@ -590,6 +594,80 @@ impl ScenePreview {
                 shaders: &mut self.shaders,
             },
         )
+    }
+
+    /// Adds the scene's terrains to the world rebuilt for `frame` (after
+    /// [`Self::sync`]): parts are built once per object and then follow the
+    /// data's changed rectangles and the description.
+    pub(crate) fn sync_terrains(
+        &mut self,
+        scene: &SceneFile,
+        frame: u64,
+        store: &mut crate::terrain::TerrainStore,
+    ) {
+        if self.terrain_frame == Some(frame) {
+            return;
+        }
+        self.terrain_frame = Some(frame);
+        let worlds = scene.world_matrices();
+        let mut seen = Vec::new();
+        for e in scene
+            .entities
+            .iter()
+            .filter(|e| scene.active_in_hierarchy(e.id))
+        {
+            let (Some(desc), Some(m)) = (&e.terrain, worlds.get(&e.id)) else {
+                continue;
+            };
+            seen.push(e.id);
+            let root = self.assets.root().map(|p| p.to_path_buf());
+            let data = &store.entry(root.as_deref(), &desc.data).data;
+            let mut r = Registries {
+                textures: &mut self.textures,
+                materials: &mut self.materials,
+                shaders: &mut self.shaders,
+            };
+            let rebuild = self
+                .terrains
+                .get(&e.id)
+                .is_none_or(|(rel, _)| *rel != desc.data);
+            if rebuild {
+                let parts = olvin::terrain::TerrainParts::build(
+                    data,
+                    desc,
+                    &mut self.meshes,
+                    &mut self.assets,
+                    &mut r,
+                );
+                self.terrains.insert(e.id, (desc.data.clone(), parts));
+                // Built from the current data: nothing is pending for it.
+                store.take_dirty(&desc.data);
+            }
+            let (heights, weights) = store.take_dirty(&desc.data);
+            let data = &store.entry(root.as_deref(), &desc.data).data;
+            let Some((_, parts)) = self.terrains.get_mut(&e.id) else {
+                continue;
+            };
+            parts.sync_desc(data, desc, &mut self.meshes, &mut self.assets, &mut r);
+            if let Some(rect) = heights {
+                parts.update_heights(&mut self.meshes, data, rect);
+            }
+            if weights {
+                parts.update_weights(r.textures, data);
+            }
+            for chunk in &parts.chunks {
+                self.world.spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform(*m),
+                    MeshRenderer {
+                        mesh: chunk.mesh,
+                        color: Color([1.0; 4]),
+                        material: parts.material,
+                    },
+                ));
+            }
+        }
+        self.terrains.retain(|id, _| seen.contains(id));
     }
 
     /// A lone sphere wearing `desc` (kept under `key`, rebuilt when `desc`
@@ -1106,6 +1184,9 @@ pub(crate) fn prepare_view(
         state
             .engine_scene
             .sync(&state.scene, frame, assets_dir, &state.model_previews);
+        state
+            .engine_scene
+            .sync_terrains(&state.scene, frame, &mut state.terrains);
         let vp = view_proj(&state.engine_scene.world)?;
         let mut settings = match shading {
             Shading::Rendered => settings_for(&state.scene),

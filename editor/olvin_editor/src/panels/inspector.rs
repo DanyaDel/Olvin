@@ -413,6 +413,12 @@ impl Panel for Inspector {
                         );
                     });
                 }
+                if let Some(t) = &mut e.terrain {
+                    let textures = state.materials.textures.clone();
+                    section(ui, "⛰ Terrain", Some((&mut remove, "terrain")), |ui| {
+                        terrain_ui(ui, t, &textures)
+                    });
+                }
                 if let Some(cam) = &mut e.camera {
                     section(ui, "🎥 Camera", Some((&mut remove, "camera")), |ui| {
                         grid(ui, "camera", |ui| {
@@ -541,6 +547,7 @@ impl Panel for Inspector {
                     Some("collider") => e.collider = None,
                     Some("rigidbody") => e.rigidbody = None,
                     Some("joint") => e.joint = None,
+                    Some("terrain") => e.terrain = None,
                     Some("cc") => e.character_controller = None,
                     Some("audio") => e.audio_source = None,
                     Some("listener") => e.audio_listener = false,
@@ -1694,6 +1701,64 @@ fn vec3(ui: &mut egui::Ui, v: &mut Vec3, speed: f64, suffix: &str) {
                 .suffix(suffix),
         );
     }
+}
+
+/// A terrain's size and texture layers (the brushes are scene view tools).
+fn terrain_ui(ui: &mut egui::Ui, t: &mut olvin::scene::file::TerrainDesc, textures: &[String]) {
+    use olvin::terrain::look::MAX_LAYERS;
+    grid(ui, "terrain", |ui| {
+        row(ui, "Data", |ui| {
+            ui.add(egui::Label::new(RichText::new(&t.data).weak()).truncate())
+                .on_hover_text("Heights and layer weights, written after each brush stroke");
+        });
+        row(ui, "Width", |ui| {
+            drag(ui, &mut t.size.x, 1.0..=10000.0, 0.5, " m")
+        });
+        row(ui, "Length", |ui| {
+            drag(ui, &mut t.size.z, 1.0..=10000.0, 0.5, " m")
+        });
+        row(ui, "Height", |ui| {
+            drag(ui, &mut t.size.y, 0.0..=2000.0, 0.1, " m")
+        });
+    });
+    ui.add_space(4.0);
+    ui.label(RichText::new("Layers").strong());
+    if t.layers.is_empty() {
+        ui.weak("No layers: the terrain shows layer 1's stand-in colour (grass).");
+    }
+    let mut drop = None;
+    for (i, layer) in t.layers.iter_mut().enumerate() {
+        ui.push_id(("terrain-layer", i), |ui| {
+            grid(ui, "layer", |ui| {
+                row(ui, &format!("Layer {}", i + 1), |ui| {
+                    let mut texture = (!layer.texture.is_empty()).then(|| layer.texture.clone());
+                    if crate::materials::asset_combo(ui, "texture", &mut texture, textures, 28.0) {
+                        layer.texture = texture.unwrap_or_default();
+                    }
+                    if ui
+                        .small_button("✕")
+                        .on_hover_text("Remove the layer")
+                        .clicked()
+                    {
+                        drop = Some(i);
+                    }
+                });
+                row(ui, "Tiling", |ui| {
+                    drag(ui, &mut layer.tiling, 0.1..=1000.0, 0.1, "×")
+                });
+                row(ui, "Roughness", |ui| {
+                    drag(ui, &mut layer.roughness, 0.0..=1.0, 0.01, "")
+                });
+            });
+        });
+    }
+    if let Some(i) = drop {
+        t.layers.remove(i);
+    }
+    if t.layers.len() < MAX_LAYERS && ui.button("+ Add Layer").clicked() {
+        t.layers.push(Default::default());
+    }
+    ui.weak("Sculpt and paint with the Terrain tools in the scene view toolbar.");
 }
 
 #[cfg(test)]

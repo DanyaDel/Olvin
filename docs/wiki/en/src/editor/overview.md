@@ -36,7 +36,7 @@ Play starts a real `App` with physics, input and Rust scripts on a copy of the s
 
 ## Undo, selection, saving
 
-- Undo/redo works with snapshots: a change is committed when mouse and keyboard are released, a drag is one step. Material and prefab edits are in the history too (files are rewritten on undo). File operations in Assets cannot be undone.
+- Undo/redo works with snapshots: a change is committed when mouse and keyboard are released, a drag is one step. Material and prefab edits are in the history too (files are rewritten on undo). Renames, moves and deletes in Assets are history steps too (deleted files wait in `.olvin/trash`).
 - Selection: an active object and additional ones (`Ctrl+click` in the hierarchy and viewport, `Shift` in the hierarchy selects a range). Move, Delete and `Ctrl+D` act on the whole selection.
 - Unsaved changes: the editor asks before closing and before replacing the scene.
 

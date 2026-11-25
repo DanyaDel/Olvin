@@ -7,12 +7,12 @@ A browser of the project's `assets/` folder: breadcrumbs, tiles with thumbnails,
 | What | How |
 |---|---|
 | Rename | `F2` or the context menu |
-| Delete | `Del` (asks first; the `.meta` goes with the file) |
+| Delete | `Del` (asks first; the file and its `.meta` go to the project's trash `.olvin/trash`, `Ctrl+Z` brings them back) |
 | Move | drag a tile onto a folder, a breadcrumb or the ⬆ button |
 | Create a material | context menu of an image → Create material |
 | Import a model | double-click a `.gltf` / `.glb` or "Import into scene" |
 
-Moves and renames go through `AssetRoot::move_asset`: the GUIDs in `.meta` survive and paths are rewritten in the open scene, its undo history and in `.scene.ron`, `.mat.ron`, `.prefab.ron` files. A file operation cannot be undone.
+Moves and renames go through `AssetRoot::move_asset`: the GUIDs in `.meta` survive and paths are rewritten in the open scene, its undo history and in `.scene.ron`, `.mat.ron`, `.prefab.ron` files. Renames, moves and deletes are ordinary `Ctrl+Z`/`Ctrl+Y` steps: a move is undone by the opposite move (references follow back), a deleted file comes back from the trash with the same GUID, and the instances of a deleted prefab become instances again (in the open scene and in files). The trash keeps a session's files for a day and is emptied the next time the project opens. Opening another scene clears the history, but the files stay in `.olvin/trash` for a day.
 
 ## Drag and drop
 

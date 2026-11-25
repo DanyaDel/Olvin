@@ -14,7 +14,9 @@ use crate::ext::Extensions;
 use crate::materials::MaterialEdits;
 use crate::prefabs::{PrefabEdits, PrefabLibrary};
 
+mod files;
 mod prefab;
+pub(crate) use files::{is_prefab, is_scene};
 pub use prefab::PrefabReport;
 
 const UNDO_LIMIT: usize = 200;
@@ -26,6 +28,14 @@ const LOG_LIMIT: usize = 5000;
 struct AssetEdits {
     materials: MaterialEdits,
     prefabs: PrefabEdits,
+}
+
+/// One step of the history: the scene before an edit, or a file operation.
+// Nearly every step is an edit: boxing it would cost an allocation per step for nothing.
+#[allow(clippy::large_enum_variant)]
+enum Step {
+    Edit(SceneFile, AssetEdits),
+    File(files::FileOp),
 }
 
 /// Built-in viewport tools; elements add their own ids (e.g. `"csg.draw"`).
@@ -200,8 +210,8 @@ pub struct EditorState {
     /// The edited materials and prefabs (already on disk) at the last undo step.
     committed_edits: AssetEdits,
     saved: SceneFile,
-    undo: Vec<(SceneFile, AssetEdits)>,
-    redo: Vec<(SceneFile, AssetEdits)>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     /// The expanded members of the prefab instance last compared with its asset.
     prefab_diff: prefab::DiffCache,
     prefab_polled: Instant,
@@ -254,6 +264,9 @@ impl EditorState {
             started: Instant::now(),
         };
         state.prefabs.set_root(state.assets_dir());
+        if let Some(project) = &state.project {
+            files::purge_trash(project);
+        }
         match state.default_scene_path() {
             Some(path) if path.is_file() => state.open(&path),
             Some(path) => {
@@ -432,7 +445,10 @@ impl EditorState {
                 self.undo
                     .iter_mut()
                     .chain(self.redo.iter_mut())
-                    .map(|(s, _)| s),
+                    .filter_map(|s| match s {
+                        Step::Edit(scene, _) => Some(scene),
+                        Step::File(_) => None,
+                    }),
             );
         all.for_each(f);
     }
@@ -443,8 +459,10 @@ impl EditorState {
         let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
         self.materials.forget(&under);
         self.committed_edits.materials.retain(|k, _| !under(k));
-        for (_, m) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-            m.materials.retain(|k, _| !under(k));
+        for step in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            if let Step::Edit(_, m) = step {
+                m.materials.retain(|k, _| !under(k));
+            }
         }
     }
 
@@ -454,8 +472,10 @@ impl EditorState {
         let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
         self.prefabs.forget(&under);
         self.committed_edits.prefabs.retain(|k, _| !under(k));
-        for (_, m) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-            m.prefabs.retain(|k, _| !under(k));
+        for step in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            if let Step::Edit(_, m) = step {
+                m.prefabs.retain(|k, _| !under(k));
+            }
         }
     }
 
@@ -567,7 +587,7 @@ impl EditorState {
     fn commit(&mut self) {
         if self.scene != self.committed || self.edits_changed() {
             let edits = self.edits_now();
-            self.undo.push((
+            self.undo.push(Step::Edit(
                 std::mem::replace(&mut self.committed, self.scene.clone()),
                 std::mem::replace(&mut self.committed_edits, edits),
             ));
@@ -593,13 +613,20 @@ impl EditorState {
             return;
         }
         self.commit();
-        if let Some((scene, edits)) = self.undo.pop() {
-            self.redo.push((
-                std::mem::replace(&mut self.committed, scene),
-                std::mem::replace(&mut self.committed_edits, edits),
-            ));
-            self.scene = self.committed.clone();
-            self.after_history_jump();
+        match self.undo.pop() {
+            Some(Step::Edit(scene, edits)) => {
+                self.redo.push(Step::Edit(
+                    std::mem::replace(&mut self.committed, scene),
+                    std::mem::replace(&mut self.committed_edits, edits),
+                ));
+                self.scene = self.committed.clone();
+                self.after_history_jump();
+            }
+            Some(Step::File(op)) => match self.undo_file(op) {
+                Ok(op) => self.redo.push(Step::File(op)),
+                Err(e) => self.error(format!("undo: {e}")),
+            },
+            None => {}
         }
     }
 
@@ -607,13 +634,20 @@ impl EditorState {
         if self.play.is_some() {
             return;
         }
-        if let Some((scene, edits)) = self.redo.pop() {
-            self.undo.push((
-                std::mem::replace(&mut self.committed, scene),
-                std::mem::replace(&mut self.committed_edits, edits),
-            ));
-            self.scene = self.committed.clone();
-            self.after_history_jump();
+        match self.redo.pop() {
+            Some(Step::Edit(scene, edits)) => {
+                self.undo.push(Step::Edit(
+                    std::mem::replace(&mut self.committed, scene),
+                    std::mem::replace(&mut self.committed_edits, edits),
+                ));
+                self.scene = self.committed.clone();
+                self.after_history_jump();
+            }
+            Some(Step::File(op)) => match self.redo_file(op) {
+                Ok(op) => self.undo.push(Step::File(op)),
+                Err(e) => self.error(format!("redo: {e}")),
+            },
+            None => {}
         }
     }
 

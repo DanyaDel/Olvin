@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use egui::{Align, Layout, RichText, Sense, TextEdit};
 use glam::Vec3;
 
+use crate::state::{is_prefab, is_scene};
 use crate::{EditorState, Panel, theme};
 
 const RESCAN: Duration = Duration::from_secs(1);
@@ -366,7 +367,7 @@ impl Assets {
         egui::Modal::new(egui::Id::new("assets-delete")).show(ctx, |ui| {
             ui.heading("Delete Asset?");
             ui.label(format!(
-                "Delete {} together with its .meta file? This cannot be undone.",
+                "Delete {} together with its .meta file? Ctrl+Z brings it back.",
                 file_name(&path)
             ));
             if path.is_dir() {
@@ -646,14 +647,6 @@ fn material_from_texture(state: &mut EditorState, root: &Path, path: &Path) {
     }
 }
 
-fn is_scene(path: &Path) -> bool {
-    path.to_string_lossy().ends_with(".scene.ron")
-}
-
-fn is_prefab(path: &Path) -> bool {
-    path.to_string_lossy().ends_with(".prefab.ron")
-}
-
 /// Opens a folder or file with the system handler.
 fn reveal(path: &Path) {
     let opener = if cfg!(target_os = "windows") {
@@ -706,157 +699,14 @@ fn drag_label(ui: &egui::Ui, name: &str) {
     }
 }
 
-/// Renames or moves a file or folder (its `.meta` and GUID go with it) and
-/// rewrites every reference to it: scenes and materials on disk, and the open
-/// scene with its history.
+/// Renames or moves a file or folder; one undo step (see `state/files.rs`).
 fn move_asset(state: &mut EditorState, root: &Path, from: &Path, to: &Path) -> Result<(), String> {
-    let mut assets = olvin_assets::AssetRoot::new(root);
-    let (Some(from_rel), Some(to_rel)) = (assets.relative(from), assets.relative(to)) else {
-        return Err("outside assets/".into());
-    };
-    if to_rel == from_rel || to_rel.starts_with(&format!("{from_rel}/")) {
-        return Err("cannot move a folder into itself".into());
-    }
-    assets.move_asset(&from_rel, &to_rel)?;
-    if let Some(open) = state.scene_path.clone()
-        && let Ok(rest) = open.strip_prefix(from)
-    {
-        state.scene_path = Some(to.join(rest));
-    }
-    rewrite_references(root, &from_rel, &to_rel);
-    state.map_scenes(|scene| {
-        if let Ok(text) = ron::to_string(scene)
-            && let Some(new) = replace_path(&text, &from_rel, &to_rel)
-            && let Ok(mut fixed) = ron::from_str::<olvin_scene::file::SceneFile>(&new)
-        {
-            // Which instance a prefab node belongs to is not part of the file text.
-            for (e, old) in fixed.entities.iter_mut().zip(&scene.entities) {
-                e.prefab_node = old.prefab_node.clone();
-            }
-            *scene = fixed;
-        }
-    });
-    state.forget_materials(&from_rel);
-    state.forget_prefabs(&from_rel);
-    state.info(format!("moved {from_rel} to {to_rel}"));
-    Ok(())
+    state.move_asset(root, from, to)
 }
 
+/// Moves a file or folder to the project's trash; one undo step.
 fn delete_asset(state: &mut EditorState, root: &Path, path: &Path) -> Result<(), String> {
-    let mut assets = olvin_assets::AssetRoot::new(root);
-    let rel = assets.relative(path).ok_or("outside assets/")?;
-    unpack_instances(state, root, &rel);
-    assets.delete_asset(&rel)?;
-    state.forget_materials(&rel);
-    state.forget_prefabs(&rel);
-    state.info(format!("deleted {rel}"));
-    Ok(())
-}
-
-/// `text` with the quoted path `from` (or anything under it) renamed to `to`;
-/// `None` when it does not occur.
-fn replace_path(text: &str, from: &str, to: &str) -> Option<String> {
-    // Also inside the RON text of a prefab override (`"\"path\""`).
-    let new = text
-        .replace(&format!("\\\"{from}\\\""), &format!("\\\"{to}\\\""))
-        .replace(&format!("\\\"{from}/"), &format!("\\\"{to}/"))
-        .replace(&format!("\"{from}\""), &format!("\"{to}\""))
-        .replace(&format!("\"{from}/"), &format!("\"{to}/"));
-    (new != text).then_some(new)
-}
-
-/// Scene and material files name assets by path: follow a move.
-fn rewrite_references(root: &Path, from: &str, to: &str) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if (is_scene(&path)
-                || is_prefab(&path)
-                || path.to_string_lossy().ends_with(".mat.ron"))
-                && let Ok(text) = std::fs::read_to_string(&path)
-                && let Some(new) = replace_path(&text, from, to)
-            {
-                let _ = std::fs::write(&path, new);
-            }
-        }
-    }
-}
-
-/// Every `*.prefab.ron` under `dir`, relative to `root` and starting with `prefix`.
-fn prefabs_under(root: &Path, dir: &Path, prefix: &str, out: &mut Vec<String>) {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            prefabs_under(root, &path, prefix, out);
-        } else if is_prefab(&path)
-            && let Ok(rel) = path.strip_prefix(root)
-        {
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            if rel == prefix || rel.starts_with(&format!("{prefix}/")) {
-                out.push(rel);
-            }
-        }
-    }
-}
-
-/// A prefab (or a folder of them) is about to be deleted: its instances stop
-/// being instances and keep their objects, in the open scene and its history
-/// and in every scene and prefab file that uses it.
-fn unpack_instances(state: &mut EditorState, root: &Path, rel: &str) {
-    let mut gone = Vec::new();
-    prefabs_under(root, root, rel, &mut gone);
-    for asset in &gone {
-        state.map_scenes(|scene| scene.unpack_asset(asset));
-    }
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let Some(own) = path
-                .strip_prefix(root)
-                .ok()
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-            else {
-                continue;
-            };
-            if !(is_scene(&path) || is_prefab(&path)) || gone.contains(&own) {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if !gone.iter().any(|a| text.contains(a.as_str())) {
-                continue;
-            }
-            let mut load = |p: &str| olvin_scene::file::SceneFile::load(root.join(p));
-            if let Ok(mut scene) = olvin_scene::file::SceneFile::load(&path) {
-                // The files are still there: expand, detach, write back as a file.
-                scene.expand_prefabs(&mut load);
-                for asset in &gone {
-                    scene.unpack_asset(asset);
-                }
-                if let Err(e) = scene.collapse_prefabs(&mut load).save(&path) {
-                    state.warn(format!("{own}: {e}"));
-                }
-            }
-        }
-    }
+    state.delete_asset(root, path)
 }
 
 /// An asset dropped on the Scene view or the Hierarchy: scenes open, prefabs
@@ -994,6 +844,19 @@ mod tests {
             "other scene files follow"
         );
         assert!(!state.is_dirty(), "a rename is not an unsaved change");
+        // Undo moves it back and the references follow; redo moves it again.
+        state.undo();
+        assert!(assets.join("materials/red.mat.ron").exists());
+        assert_eq!(
+            state.scene.get(id).unwrap().material.as_deref(),
+            Some("materials/red.mat.ron")
+        );
+        state.redo();
+        assert!(assets.join("shared/red.mat.ron").exists());
+        assert_eq!(
+            state.scene.get(id).unwrap().material.as_deref(),
+            Some("shared/red.mat.ron")
+        );
         // A folder takes everything under it.
         move_asset(
             &mut state,
@@ -1038,6 +901,23 @@ mod tests {
         delete_asset(&mut state, &assets, &mat).unwrap();
         assert!(!mat.exists());
         assert!(!assets.join("materials/red.mat.ron.meta").exists());
+        assert!(
+            root.join(".olvin/trash").is_dir(),
+            "deleted files wait in the trash"
+        );
+        let guid = |assets: &Path| {
+            let mut index = olvin_assets::AssetRoot::new(assets);
+            index.scan();
+            index.guid_of("materials/red.mat.ron")
+        };
+        state.undo();
+        assert!(mat.exists(), "undo brings the file back");
+        let back = guid(&assets);
+        assert!(back.is_some());
+        state.redo();
+        assert!(!mat.exists());
+        state.undo();
+        assert_eq!(guid(&assets), back, "with the same GUID");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1138,6 +1018,30 @@ mod tests {
             "Other",
             "the instance's root stays an object"
         );
+
+        // Undo brings the prefab back with its instances, here and on disk.
+        let other_path = assets.join("scenes/other.scene.ron");
+        state.undo();
+        assert!(assets.join("shared/Box.prefab.ron").exists());
+        assert!(assets.join("shared/Box.prefab.ron.meta").exists());
+        assert_eq!(asset_of(&state.scene, cube), "shared/Box.prefab.ron");
+        assert!(state.scene.get(cube).unwrap().prefab_node.is_some());
+        assert!(!state.is_dirty());
+        assert_eq!(
+            asset_of(&SceneFile::load(&other_path).unwrap(), 5),
+            "shared/Box.prefab.ron"
+        );
+        // Redo deletes it again; undo once more, then the earlier moves.
+        state.redo();
+        assert!(!assets.join("shared/Box.prefab.ron").exists());
+        assert!(state.scene.get(cube).unwrap().prefab.is_none());
+        state.undo();
+        state.undo(); // the material move
+        state.undo(); // the prefab move
+        assert!(assets.join(&rel).exists() && assets.join("materials/red.mat.ron").exists());
+        assert_eq!(asset_of(&state.scene, cube), rel);
+        let text = std::fs::read_to_string(&other_path).unwrap();
+        assert!(text.contains("materials/red.mat.ron"), "{text}");
         std::fs::remove_dir_all(root).unwrap();
     }
 

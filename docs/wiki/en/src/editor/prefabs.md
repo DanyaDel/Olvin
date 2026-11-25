@@ -12,6 +12,7 @@ The in-memory scene keeps instances already expanded: every node is an ordinary 
 |---|---|
 | Create a prefab | GameObject → Create Prefab or the Hierarchy context menu: the subtree goes to `prefabs/<Name>.prefab.ron`, the object becomes an instance |
 | Place an instance | drag a `.prefab.ron` from Assets into the viewport or onto a Hierarchy row |
+| Select in the viewport | the first click selects the whole instance (its root), a second click on it selects the node itself |
 | Open a prefab | double-click in Assets or Open in the inspector (opens as a scene) |
 | Revert | `↺` on a field, Revert All on an instance |
 | Apply | Apply All: the asset is overwritten, other instances are rebuilt |

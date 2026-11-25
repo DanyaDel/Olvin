@@ -54,7 +54,7 @@ pub fn files(name: &str, graphical: bool, integrity: bool) -> [(&'static str, St
 }
 
 /// Build output, logs and save slots are not sources.
-pub const GITIGNORE: &str = "/target\n/dist\n/logs\n/saves\n";
+pub const GITIGNORE: &str = "/target\n/dist\n/logs\n/saves\n/.olvin\n";
 
 /// Added to `main.rs` by the `integrity` module.
 const INTEGRITY_RS: &str = r#"

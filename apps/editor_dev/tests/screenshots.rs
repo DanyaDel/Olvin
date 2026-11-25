@@ -905,3 +905,31 @@ fn material_preview_shows_the_material_on_a_sphere() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+/// Two scenes open: the tab strip above the workspace, the edited one marked
+/// unsaved. Writes `$OLVIN_EDITOR_SHOTS/scene-tabs.png` (default: `target/`).
+#[test]
+#[ignore = "renders with wgpu; run with --ignored"]
+fn scene_tabs_screenshot() {
+    let root = std::env::temp_dir().join(format!("olvin-scenetabs-{}", std::process::id()));
+    demo_project(&root);
+    let night = root.join("assets/scenes/night.scene.ron");
+    let dir = std::env::var_os("OLVIN_EDITOR_SHOTS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+    fs::create_dir_all(&dir).unwrap();
+    shot_with(
+        &root,
+        &dir.join("scene-tabs.png"),
+        ThemeKind::Dark,
+        None,
+        |h| {
+            let state = h.state_mut().state_mut();
+            state.open(&night);
+            state.scene.entities[0].position.y += 1.0;
+            h.run_steps(3);
+            assert_eq!(h.state_mut().state_mut().tab_count(), 2);
+        },
+    );
+    let _ = fs::remove_dir_all(&root);
+}

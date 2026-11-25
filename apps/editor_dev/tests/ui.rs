@@ -322,7 +322,7 @@ fn game_object_menu_creates_and_undo_removes() {
 }
 
 #[test]
-fn new_scene_asks_before_discarding_changes() {
+fn new_scene_opens_a_tab_and_closing_an_unsaved_one_asks() {
     let p = project("new-scene");
     let mut h = editor(&p);
     state(&mut h).scene.get_mut(3).unwrap().position.x = 5.0;
@@ -331,17 +331,44 @@ fn new_scene_asks_before_discarding_changes() {
     h.run_steps(3);
     h.get_by_label_contains("New Scene").click();
     h.run_steps(3);
+    assert!(
+        h.query_by_label("Unsaved Changes").is_none(),
+        "nothing is lost"
+    );
+    assert_eq!(names(&mut h).len(), 4, "the starter scene, in a new tab");
+    // Back to the edited scene through its tab: the edit is there.
+    h.get_by_label("🎬 main ●").click();
+    h.run_steps(3);
+    assert_eq!(state(&mut h).scene.get(3).unwrap().position.x, 5.0);
+    // Closing it asks; Cancel keeps it, Don't Save drops the edit.
+    // (Dock tabs have × too: take the one right after the scene tab.)
+    fn close_of(h: &Ed, tab: &str) -> egui::Pos2 {
+        let tab = h.get_by_label(tab).rect();
+        h.get_all_by_label("×")
+            .map(|n| n.rect())
+            .filter(|r| (r.center().y - tab.center().y).abs() < 4.0 && r.min.x >= tab.max.x)
+            .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+            .expect("the scene tab's ×")
+            .center()
+    }
+    let at = close_of(&h, "🎬 main ●");
+    click_at(&mut h, at);
+    h.run_steps(3);
     assert!(h.query_by_label("Unsaved Changes").is_some());
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert_eq!(names(&mut h).len(), 3);
-    h.get_by_label("FILE").click();
-    h.run_steps(3);
-    h.get_by_label_contains("New Scene").click();
+    assert_eq!(state(&mut h).tab_count(), 2);
+    let at = close_of(&h, "🎬 main ●");
+    click_at(&mut h, at);
     h.run_steps(3);
     h.get_by_label("Don't Save").click();
     h.run_steps(3);
-    assert_eq!(names(&mut h).len(), 4, "the starter scene");
+    assert_eq!(state(&mut h).tab_count(), 1);
+    assert_eq!(names(&mut h).len(), 4, "the new scene is left");
+    assert!(
+        h.query_by_label("🎬 untitled").is_none(),
+        "one scene: no tab strip"
+    );
 }
 
 /// The "+" of the top bar's workspace tabs (docks have their own).

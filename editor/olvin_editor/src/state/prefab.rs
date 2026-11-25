@@ -367,6 +367,18 @@ impl EditorState {
         if baseline {
             reexpand(&mut self.committed, old, &mut self.prefabs);
         }
+        // Other open scenes see it as an outside change.
+        let active = self.active_tab;
+        for (_, doc) in self
+            .tabs
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| *i != active)
+        {
+            warnings.extend(reexpand(&mut doc.scene, old, &mut self.prefabs));
+            reexpand(&mut doc.saved, old, &mut self.prefabs);
+            reexpand(&mut doc.committed, old, &mut self.prefabs);
+        }
         for warning in warnings.drain(..) {
             self.warn(warning);
         }

@@ -17,8 +17,10 @@ use crate::prefabs::{PrefabEdits, PrefabLibrary};
 mod autosave;
 mod files;
 mod prefab;
+mod tabs;
 pub(crate) use files::{is_prefab, is_scene};
 pub use prefab::PrefabReport;
+pub use tabs::TabInfo;
 
 const UNDO_LIMIT: usize = 200;
 /// Log lines kept; the oldest tenth goes when it is exceeded.
@@ -222,6 +224,10 @@ pub struct EditorState {
     saved: SceneFile,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// Open scenes in tab order; the active one's slot is a placeholder
+    /// while its state lives in the fields above (see `state/tabs.rs`).
+    tabs: Vec<tabs::SceneDoc>,
+    active_tab: usize,
     /// The expanded members of the prefab instance last compared with its asset.
     prefab_diff: prefab::DiffCache,
     prefab_polled: Instant,
@@ -272,6 +278,8 @@ impl EditorState {
             saved: SceneFile::default(),
             undo: Vec::new(),
             redo: Vec::new(),
+            tabs: vec![tabs::SceneDoc::default()],
+            active_tab: 0,
             prefab_diff: Default::default(),
             prefab_polled: Instant::now(),
             started: Instant::now(),
@@ -361,9 +369,16 @@ impl EditorState {
         self.open_request = Some(path);
     }
 
+    /// Opens a scene in a tab: switches to it when it is open already,
+    /// replaces a blank active scene, otherwise adds a tab.
     pub fn open(&mut self, path: &Path) {
+        if let Some(i) = self.tab_of(path) {
+            self.switch_tab(i);
+            return;
+        }
         match SceneFile::load(path) {
             Ok(mut scene) => {
+                self.make_room();
                 self.prefabs.set_root(self.assets_dir());
                 self.expand_prefabs(&mut scene);
                 self.replace_scene(scene, Some(path.to_path_buf()), true);
@@ -378,11 +393,9 @@ impl EditorState {
         }
     }
 
+    /// A new scene in its own tab.
     pub fn new_scene(&mut self) {
-        let path = self
-            .default_scene_path()
-            .map(|p| p.with_file_name("untitled.scene.ron"));
-        self.replace_scene(starter_scene(), path, false);
+        self.new_tab();
         self.info("new scene");
     }
 
@@ -454,19 +467,48 @@ impl EditorState {
 
     /// Applies `f` to the open scene, its saved and committed copies and the
     /// whole history (an asset moved: every copy must name the new path).
+    /// Every scene the editor holds: the active one, its baselines and
+    /// history, and the same for every other open tab.
     pub(crate) fn map_scenes(&mut self, f: impl Fn(&mut SceneFile)) {
-        let all = [&mut self.scene, &mut self.committed, &mut self.saved]
+        fn edits(steps: &mut [Step]) -> impl Iterator<Item = &mut SceneFile> {
+            steps.iter_mut().filter_map(|s| match s {
+                Step::Edit(scene, _) => Some(scene),
+                Step::File(_) => None,
+            })
+        }
+        let active = self.active_tab;
+        let others = self
+            .tabs
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| *i != active)
+            .flat_map(|(_, d)| {
+                [&mut d.scene, &mut d.committed, &mut d.saved]
+                    .into_iter()
+                    .chain(edits(&mut d.undo))
+                    .chain(edits(&mut d.redo))
+            });
+        [&mut self.scene, &mut self.committed, &mut self.saved]
             .into_iter()
-            .chain(
-                self.undo
-                    .iter_mut()
-                    .chain(self.redo.iter_mut())
-                    .filter_map(|s| match s {
-                        Step::Edit(scene, _) => Some(scene),
-                        Step::File(_) => None,
-                    }),
-            );
-        all.for_each(f);
+            .chain(edits(&mut self.undo))
+            .chain(edits(&mut self.redo))
+            .chain(others)
+            .for_each(f);
+    }
+
+    /// The edit steps of every history, active scene and other tabs.
+    fn all_steps(&mut self) -> impl Iterator<Item = &mut Step> {
+        let active = self.active_tab;
+        let others = self
+            .tabs
+            .iter_mut()
+            .enumerate()
+            .filter(move |(i, _)| *i != active)
+            .flat_map(|(_, d)| d.undo.iter_mut().chain(d.redo.iter_mut()));
+        self.undo
+            .iter_mut()
+            .chain(self.redo.iter_mut())
+            .chain(others)
     }
 
     /// Drops the material edits under `prefix` (an asset moved or deleted)
@@ -475,7 +517,7 @@ impl EditorState {
         let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
         self.materials.forget(&under);
         self.committed_edits.materials.retain(|k, _| !under(k));
-        for step in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+        for step in self.all_steps() {
             if let Step::Edit(_, m) = step {
                 m.materials.retain(|k, _| !under(k));
             }
@@ -488,7 +530,7 @@ impl EditorState {
         let under = |k: &String| k == prefix || k.starts_with(&format!("{prefix}/"));
         self.prefabs.forget(&under);
         self.committed_edits.prefabs.retain(|k, _| !under(k));
-        for step in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+        for step in self.all_steps() {
             if let Step::Edit(_, m) = step {
                 m.prefabs.retain(|k, _| !under(k));
             }

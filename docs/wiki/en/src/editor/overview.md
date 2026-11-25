@@ -34,6 +34,12 @@ Play starts a real `App` with physics, input and Rust scripts on a copy of the s
 
 > **Status:** Lua scripts do not run in Play (the editor does not load `LuaPlugin`, so Lua script parameters are not visible in the inspector either, see the ROADMAP item on Lua) and particles and sprites are not drawn. glTF models stand in their default pose in Play.
 
+## Several scenes
+
+A scene from Assets (double-click, "Open scene", "Open demo" in the Library) opens in a tab, and the current one stays open. The exception: an untouched, never-saved scene (a new project's starter scene) is simply replaced. A scene that is open already is not opened twice: the editor switches to its tab. File → New Scene (`Ctrl+N`) always opens a new tab (`untitled`, `untitled-2`…).
+
+With more than one scene open, a tab strip appears above the workspace: the scene's name, `●` when unsaved, `×` closes it (asking first if there are unsaved changes), `+` makes a new scene. Each scene has its own undo/redo history, selection, timeline frame and animation previews. Materials and prefabs are shared by all scenes, and moving or deleting assets rewrites references in every open scene. Switching is off during Play: the game belongs to the active scene. The last tab cannot be closed; a new scene takes its place. On quit the editor lists the unsaved scenes and offers Save All. File → Save All saves every changed scene, File → Close Scene closes the active one.
+
 ## Undo, selection, saving
 
 - Undo/redo works with snapshots: a change is committed when mouse and keyboard are released, a drag is one step. Material and prefab edits are in the history too (files are rewritten on undo). Renames, moves and deletes in Assets are history steps too (deleted files wait in `.olvin/trash`).

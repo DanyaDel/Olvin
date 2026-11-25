@@ -44,13 +44,15 @@ pub(super) enum FileOp {
     },
 }
 
-/// The scenes the history holds, for putting back what unpacking changed.
+/// The scenes one open tab holds, for putting back what unpacking changed.
 pub(super) struct History {
     scene: SceneFile,
     committed: SceneFile,
     saved: SceneFile,
     /// The scenes of the edit steps below, oldest first.
     undo: Vec<SceneFile>,
+    /// The same for every other open tab, in tab order (`None`: the active one).
+    others: Vec<Option<History>>,
 }
 
 impl EditorState {
@@ -217,35 +219,68 @@ impl EditorState {
     }
 
     fn history(&self) -> History {
+        let edit_scenes = |steps: &[Step]| -> Vec<SceneFile> {
+            steps
+                .iter()
+                .filter_map(|s| match s {
+                    Step::Edit(scene, _) => Some(scene.clone()),
+                    Step::File(_) => None,
+                })
+                .collect()
+        };
+        let others = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                (i != self.active_tab).then(|| History {
+                    scene: d.scene.clone(),
+                    committed: d.committed.clone(),
+                    saved: d.saved.clone(),
+                    undo: edit_scenes(&d.undo),
+                    others: Vec::new(),
+                })
+            })
+            .collect();
         History {
             scene: self.scene.clone(),
             committed: self.committed.clone(),
             saved: self.saved.clone(),
-            undo: self.edit_scenes().cloned().collect(),
+            undo: edit_scenes(&self.undo),
+            others,
         }
     }
 
     /// Puts back the scenes of `history`. The edit steps are matched from the
     /// top: the oldest may have dropped off the history since.
     fn restore_history(&mut self, history: History) {
+        fn put_back(steps: &mut [Step], old: Vec<SceneFile>) {
+            let now = steps.iter_mut().rev().filter_map(|s| match s {
+                Step::Edit(scene, _) => Some(scene),
+                Step::File(_) => None,
+            });
+            for (now, old) in now.zip(old.into_iter().rev()) {
+                *now = old;
+            }
+        }
         self.scene = history.scene;
         self.committed = history.committed;
         self.saved = history.saved;
-        let steps = self.undo.iter_mut().rev().filter_map(|s| match s {
-            Step::Edit(scene, _) => Some(scene),
-            Step::File(_) => None,
-        });
-        for (now, old) in steps.zip(history.undo.into_iter().rev()) {
-            *now = old;
+        put_back(&mut self.undo, history.undo);
+        // Other tabs, if the same tabs are still open.
+        if history.others.len() == self.tabs.len() {
+            for (doc, old) in self.tabs.iter_mut().zip(history.others) {
+                if let Some(old) = old {
+                    doc.scene = old.scene;
+                    doc.committed = old.committed;
+                    doc.saved = old.saved;
+                    put_back(&mut doc.undo, old.undo);
+                }
+            }
+        } else {
+            self.warn("undo: tabs were opened or closed since; other open scenes keep the prefab unpacked");
         }
         self.after_history_jump();
-    }
-
-    fn edit_scenes(&self) -> impl Iterator<Item = &SceneFile> {
-        self.undo.iter().filter_map(|s| match s {
-            Step::Edit(scene, _) => Some(scene),
-            Step::File(_) => None,
-        })
     }
 
     /// A fresh folder in this session's trash.

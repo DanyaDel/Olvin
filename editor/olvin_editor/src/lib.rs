@@ -28,7 +28,9 @@ pub use registry::{
     EditorPlugin, FrameHook, Panel, PanelKind, Registry, TabAlloc, WorkspaceTemplate,
 };
 pub use render::{DEPTH_FORMAT, MSAA};
-pub use state::{EditorState, LogLevel, LogLine, NewEntity, PrefabReport, SnapSettings, tools};
+pub use state::{
+    EditorState, LogLevel, LogLine, NewEntity, PrefabReport, SnapSettings, TabInfo, tools,
+};
 pub use workspace::Tab;
 
 // Re-exports so plugins build against exactly the editor's versions.

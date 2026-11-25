@@ -60,9 +60,65 @@ const MIN_TABS_W: f32 = 120.0;
 
 /// Waiting for "save changes?" before doing something destructive.
 enum Confirm {
-    Open(PathBuf),
-    NewScene,
+    /// Close the active scene tab.
+    CloseTab,
     Quit,
+}
+
+/// A click in the scene tab strip.
+enum SceneTabAction {
+    Switch(usize),
+    Close(usize),
+    New,
+}
+
+/// One tab per open scene above the workspace: name, ● when unsaved, × to
+/// close, + for a new scene. Shown once a second scene is open (with one,
+/// the editor looks as it always did). Switching is off while playing.
+fn scene_tabs(ui: &mut egui::Ui, state: &EditorState) -> Option<SceneTabAction> {
+    if state.tab_count() < 2 {
+        return None;
+    }
+    let mut action = None;
+    let playing = state.is_playing();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, tab) in state.tabs().into_iter().enumerate() {
+            let title = if tab.dirty {
+                format!("🎬 {} ●", tab.title)
+            } else {
+                format!("🎬 {}", tab.title)
+            };
+            let hover = tab
+                .path
+                .as_ref()
+                .map_or("not saved yet".to_owned(), |p| p.display().to_string());
+            let enabled = tab.active || !playing;
+            let label = ui
+                .add_enabled(enabled, egui::Button::selectable(tab.active, title))
+                .on_hover_text(hover)
+                .on_disabled_hover_text("Stop Play to switch scenes");
+            if label.clicked() && !tab.active {
+                action = Some(SceneTabAction::Switch(i));
+            }
+            if ui
+                .add_enabled(enabled, egui::Button::new("×").small().frame(false))
+                .on_hover_text("Close this scene")
+                .clicked()
+            {
+                action = Some(SceneTabAction::Close(i));
+            }
+            ui.add_space(6.0);
+        }
+        if ui
+            .add(egui::Button::new("+").small())
+            .on_hover_text("New scene (Ctrl+N)")
+            .clicked()
+        {
+            action = Some(SceneTabAction::New);
+        }
+    });
+    action
 }
 
 enum WsAction {
@@ -187,7 +243,7 @@ impl EditorApp {
             self.save();
         }
         if new {
-            self.request(Confirm::NewScene);
+            self.state.new_scene();
         }
         if typing {
             return; // Text fields keep their own undo, delete, etc.
@@ -227,7 +283,11 @@ impl EditorApp {
     }
 
     fn request(&mut self, action: Confirm) {
-        if self.state.is_dirty() {
+        let dirty = match action {
+            Confirm::CloseTab => self.state.is_dirty(),
+            Confirm::Quit => self.state.any_dirty(),
+        };
+        if dirty {
             self.confirm = Some(action);
         } else {
             self.perform(action);
@@ -236,8 +296,7 @@ impl EditorApp {
 
     fn perform(&mut self, action: Confirm) {
         match action {
-            Confirm::Open(path) => self.state.open(&path),
-            Confirm::NewScene => self.state.new_scene(),
+            Confirm::CloseTab => self.state.close_active_tab(),
             Confirm::Quit => self.allow_close = true,
         }
     }
@@ -245,7 +304,7 @@ impl EditorApp {
     fn menus(&mut self, ui: &mut egui::Ui) {
         menu(ui, theme::menu_title("File"), |ui| {
             if ui.button("New Scene        Ctrl+N").clicked() {
-                self.request(Confirm::NewScene);
+                self.state.new_scene();
             }
             if ui.button("Save                    Ctrl+S").clicked() {
                 self.save();
@@ -256,7 +315,13 @@ impl EditorApp {
             if self.state.recovery.is_some() && ui.button("Recover Autosave").clicked() {
                 self.state.recover_autosave();
             }
-            ui.weak("Open: double-click a scene in Assets");
+            if self.state.tab_count() > 1 && ui.button("Save All").clicked() {
+                self.state.save_all();
+            }
+            if ui.button("Close Scene").clicked() {
+                self.request(Confirm::CloseTab);
+            }
+            ui.weak("Open: double-click a scene in Assets (each opens in a tab)");
             ui.separator();
             if ui.button("Quit").clicked() {
                 ui.ctx().send_viewport_cmd(ViewportCommand::Close);
@@ -784,18 +849,30 @@ impl EditorApp {
         }
 
         if let Some(confirm) = &self.confirm {
-            let what = match confirm {
-                Confirm::Open(_) => "opening another scene",
-                Confirm::NewScene => "creating a new scene",
-                Confirm::Quit => "quitting",
+            let question = match confirm {
+                Confirm::CloseTab => "Save the scene before closing it?".to_owned(),
+                Confirm::Quit => {
+                    let dirty: Vec<String> = self
+                        .state
+                        .tabs()
+                        .into_iter()
+                        .filter(|t| t.dirty)
+                        .map(|t| t.title)
+                        .collect();
+                    format!("Save before quitting? Unsaved: {}", dirty.join(", "))
+                }
+            };
+            let save_label = match confirm {
+                Confirm::Quit if self.state.tab_count() > 1 => "Save All",
+                _ => "Save",
             };
             let mut choice = None;
             egui::Modal::new(Id::new("confirm")).show(ctx, |ui| {
                 ui.heading("Unsaved Changes");
-                ui.label(format!("Save the scene before {what}?"));
+                ui.label(question);
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button(save_label).clicked() {
                         choice = Some(1);
                     }
                     if ui.button("Don't Save").clicked() {
@@ -809,16 +886,18 @@ impl EditorApp {
             if let Some(choice) = choice
                 && let Some(action) = self.confirm.take()
             {
+                let quit = matches!(action, Confirm::Quit);
                 let proceed = match choice {
+                    1 if quit => self.state.save_all(),
                     1 => self.state.save(),
-                    2 => {
-                        self.state.drop_autosave();
+                    2 if quit => {
+                        self.state.discard_all();
                         true
                     }
+                    2 => true,
                     _ => false,
                 };
                 if proceed {
-                    let quit = matches!(action, Confirm::Quit);
                     self.perform(action);
                     if quit {
                         ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -1012,14 +1091,14 @@ impl EditorApp {
         let ctx = ui.ctx().clone();
 
         if ctx.input(|i| i.viewport().close_requested())
-            && self.state.is_dirty()
+            && self.state.any_dirty()
             && !self.allow_close
         {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
         if let Some(path) = self.state.open_request.take() {
-            self.request(Confirm::Open(path));
+            self.state.open(&path);
         }
         self.shortcuts(&ctx);
         self.run_frame_hooks(&ctx);
@@ -1142,9 +1221,11 @@ impl EditorApp {
 
         let active = self.layout.active;
         let mut added = Vec::new();
+        let mut tab_action = None;
         egui::CentralPanel::default_margins()
             .frame(egui::Frame::new().fill(palette.bg))
             .show(ui, |ui| {
+                tab_action = scene_tabs(ui, &self.state);
                 let dock = &mut self.layout.workspaces[active].dock;
                 let mut viewer = Viewer {
                     registry: &self.registry,
@@ -1169,6 +1250,17 @@ impl EditorApp {
                     .show_inside(ui, &mut viewer);
                 added = viewer.added;
             });
+        match tab_action {
+            Some(SceneTabAction::Switch(i)) => self.state.switch_tab(i),
+            Some(SceneTabAction::Close(i)) => {
+                self.state.switch_tab(i);
+                if self.state.active_tab() == i {
+                    self.request(Confirm::CloseTab);
+                }
+            }
+            Some(SceneTabAction::New) => self.state.new_scene(),
+            None => {}
+        }
         for (path, kind) in added {
             let mut alloc = self.layout.alloc();
             let tab = alloc.tab(kind);

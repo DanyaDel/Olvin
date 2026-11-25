@@ -23,7 +23,7 @@ use crate::{Camera, Transform};
 /// in [`MIGRATIONS`] whenever a change cannot be absorbed by serde defaults/aliases,
 /// or when an older build would silently lose data it does not know (it refuses
 /// files newer than its own version instead).
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Upgrades a scene one version up: `MIGRATIONS[n]` takes version `n` to `n + 1`.
 /// It runs on the parsed scene, so renamed or new fields are handled by `#[serde(alias)]`
@@ -32,7 +32,7 @@ pub type Migration = fn(&mut SceneFile);
 
 /// The migration chain, oldest first. Its length must equal [`FORMAT_VERSION`].
 pub const MIGRATIONS: &[Migration] = &[
-    v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7,
+    v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8,
 ];
 
 /// Version 0 is a file from before versioning: the same data without the `version` field.
@@ -95,6 +95,11 @@ fn v5_to_v6(_: &mut SceneFile) {}
 /// none, so the data stays as it is; the bump makes version-6 builds refuse
 /// new files instead of dropping the joints.
 fn v6_to_v7(_: &mut SceneFile) {}
+
+/// Version 8 adds `EntityDesc::terrain` (heightmap terrains). Older files have
+/// none, so the data stays as it is; the bump makes version-7 builds refuse
+/// new files instead of dropping the terrain.
+fn v7_to_v8(_: &mut SceneFile) {}
 
 /// The timeline clip of format versions 1 and 2.
 #[derive(Deserialize)]
@@ -497,6 +502,9 @@ pub struct EntityDesc {
     /// Physics joint to another object or to the world (format version 7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joint: Option<JointDesc>,
+    /// A heightmap terrain drawn and collided at this object (format version 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<TerrainDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_controller: Option<CharacterControllerDesc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -719,6 +727,51 @@ pub enum JointKind {
     },
 }
 
+/// A heightmap terrain. Heights and layer weights are a binary file of their
+/// own (`data`, see `olvin_terrain`), too big for the scene's text; the
+/// terrain is centred on its object, `size.y` is the height of a full value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerrainDesc {
+    /// `*.terrain` file, relative to `assets/`.
+    pub data: String,
+    /// Width (x), height of the highest point (y) and depth (z), in metres.
+    pub size: Vec3,
+    /// Up to four texture layers, painted with the terrain brushes.
+    pub layers: Vec<TerrainLayer>,
+}
+
+impl Default for TerrainDesc {
+    fn default() -> Self {
+        Self {
+            data: String::new(),
+            size: Vec3::new(100.0, 20.0, 100.0),
+            layers: Vec::new(),
+        }
+    }
+}
+
+/// One texture layer of a terrain.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerrainLayer {
+    /// Image, relative to `assets/`.
+    pub texture: String,
+    /// Repeats of the texture across the whole terrain.
+    pub tiling: f32,
+    pub roughness: f32,
+}
+
+impl Default for TerrainLayer {
+    fn default() -> Self {
+        Self {
+            texture: String::new(),
+            tiling: 20.0,
+            roughness: 0.9,
+        }
+    }
+}
+
 /// Joins this object's body to another object's, or to the world.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JointDesc {
@@ -903,6 +956,7 @@ impl EntityDesc {
             collider: None,
             rigidbody: None,
             joint: None,
+            terrain: None,
             character_controller: None,
             audio_source: None,
             audio_listener: false,

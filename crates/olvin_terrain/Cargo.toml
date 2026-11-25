@@ -1,0 +1,12 @@
+[package]
+name = "olvin_terrain"
+description = "Olvin terrain: heightmap data and its file, chunked meshes with levels of detail, texture layers blended by a painted weight map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam.workspace = true
+olvin_render.workspace = true
+olvin_scene = { workspace = true, features = ["serde"] }

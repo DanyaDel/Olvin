@@ -1,0 +1,185 @@
+//! How a terrain is coloured: up to four texture layers packed into one
+//! atlas, blended by the painted weights through a generated surface shader.
+//!
+//! A material has four texture slots and no texture arrays (WebGL2-class
+//! hardware is a target), so the layers share one 2×2 atlas in the base
+//! colour slot and the weight map takes the ORM slot. Each atlas tile has a
+//! wrapped border (`GUTTER`) and is sampled with the gradients of the
+//! unwrapped coordinates, so tiling shows no seams and mip levels stay right.
+
+use olvin_render::{Material, TextureData, TextureFormat};
+use olvin_scene::file::TerrainLayer;
+
+use crate::TerrainData;
+
+/// Pixels of one atlas tile.
+pub const TILE: u32 = 512;
+/// Wrapped border around each tile, in pixels.
+pub const GUTTER: u32 = 16;
+/// Layers a terrain can blend.
+pub const MAX_LAYERS: usize = 4;
+
+/// Colours of layers without an image (or whose image failed): grass, rock,
+/// sand, snow, so a fresh terrain is readable before any texture is set.
+const FALLBACK: [[u8; 4]; 4] = [
+    [86, 125, 70, 255],
+    [118, 112, 104, 255],
+    [196, 176, 132, 255],
+    [235, 238, 242, 255],
+];
+
+/// The atlas of `layers`: `image(path)` loads one (any size, 8-bit RGBA);
+/// a missing one becomes its fallback colour.
+pub fn atlas(
+    layers: &[TerrainLayer],
+    mut image: impl FnMut(&str) -> Option<TextureData>,
+) -> TextureData {
+    let side = TILE * 2;
+    let mut pixels = vec![0u8; (side * side * 4) as usize];
+    for slot in 0..MAX_LAYERS {
+        let source = layers
+            .get(slot)
+            .filter(|l| !l.texture.is_empty())
+            .and_then(|l| image(&l.texture))
+            .filter(|t| {
+                matches!(
+                    t.format,
+                    TextureFormat::Rgba8Srgb | TextureFormat::Rgba8Linear
+                ) && t.width > 0
+                    && t.height > 0
+                    && t.pixels.len() >= (t.width * t.height * 4) as usize
+            });
+        let (ox, oy) = ((slot as u32 % 2) * TILE, (slot as u32 / 2) * TILE);
+        let inner = (TILE - 2 * GUTTER) as f32;
+        for y in 0..TILE {
+            for x in 0..TILE {
+                // Wrapped: the gutter repeats the opposite edge of the tile.
+                let u = ((x as f32 - GUTTER as f32 + 0.5) / inner).rem_euclid(1.0);
+                let v = ((y as f32 - GUTTER as f32 + 0.5) / inner).rem_euclid(1.0);
+                let rgba = match &source {
+                    Some(t) => bilinear_wrap(t, u, v),
+                    None => FALLBACK[slot],
+                };
+                let at = (((oy + y) * side + ox + x) * 4) as usize;
+                pixels[at..at + 4].copy_from_slice(&rgba);
+            }
+        }
+    }
+    TextureData {
+        width: side,
+        height: side,
+        format: TextureFormat::Rgba8Srgb,
+        pixels,
+    }
+}
+
+fn bilinear_wrap(t: &TextureData, u: f32, v: f32) -> [u8; 4] {
+    let (w, h) = (t.width as i64, t.height as i64);
+    let (fx, fy) = (u * w as f32 - 0.5, v * h as f32 - 0.5);
+    let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let px = |x: i64, y: i64| {
+        let i = ((y.rem_euclid(h) * w + x.rem_euclid(w)) * 4) as usize;
+        [
+            t.pixels[i],
+            t.pixels[i + 1],
+            t.pixels[i + 2],
+            t.pixels[i + 3],
+        ]
+        .map(f32::from)
+    };
+    let (a, b, c, d) = (
+        px(x0, y0),
+        px(x0 + 1, y0),
+        px(x0, y0 + 1),
+        px(x0 + 1, y0 + 1),
+    );
+    std::array::from_fn(|k| {
+        let top = a[k] * (1.0 - tx) + b[k] * tx;
+        let bottom = c[k] * (1.0 - tx) + d[k] * tx;
+        (top * (1.0 - ty) + bottom * ty).round().clamp(0.0, 255.0) as u8
+    })
+}
+
+/// The weight map: one linear RGBA texel per vertex.
+pub fn weight_map(data: &TerrainData) -> TextureData {
+    TextureData {
+        width: data.resolution(),
+        height: data.resolution(),
+        format: TextureFormat::Rgba8Linear,
+        pixels: data.splat().iter().flatten().copied().collect(),
+    }
+}
+
+/// The surface shader blending `layers` (at most four) by the weight map of
+/// a terrain `resolution` vertices a side.
+pub fn surface_shader(layers: &[TerrainLayer], resolution: u32) -> String {
+    let n = layers.len().clamp(1, MAX_LAYERS);
+    let layer = |i: usize| layers.get(i).cloned().unwrap_or_default();
+    let mut blend = String::new();
+    let mut rough = String::new();
+    for (i, channel) in ["r", "g", "b", "a"].iter().take(n).enumerate() {
+        let l = layer(i);
+        blend += &format!(
+            "    color += terrain_layer({i}u, in.uv, {:.4}) * w.{channel};\n",
+            l.tiling.max(0.01)
+        );
+        rough += &format!(
+            "    roughness += {:.4} * w.{channel};\n",
+            l.roughness.clamp(0.0, 1.0)
+        );
+    }
+    let gutter = GUTTER as f32 / (TILE * 2) as f32;
+    format!(
+        "// Generated by olvin_terrain: {n} layer(s), {resolution}² weight map.\n\
+fn terrain_layer(i: u32, uv: vec2<f32>, tiling: f32) -> vec4<f32> {{\n\
+    let tile = vec2<f32>(f32(i % 2u), f32(i / 2u)) * 0.5;\n\
+    let inner = 0.5 - 2.0 * {gutter:.6};\n\
+    let t = uv * tiling;\n\
+    let at = tile + vec2<f32>({gutter:.6}) + fract(t) * inner;\n\
+    return textureSampleGrad(base_texture, material_sampler, at, dpdx(t) * inner, dpdy(t) * inner);\n\
+}}\n\
+\n\
+fn surface(in: SurfaceInput) -> SurfaceOutput {{\n\
+    var out = default_surface(in);\n\
+    // Vertex i sits at uv i / (res - 1); its weight texel's centre is (i + 0.5) / res.\n\
+    let res = {res:.1};\n\
+    let weights = textureSample(orm_texture, material_sampler, (in.uv * (res - 1.0) + 0.5) / res);\n\
+    var w = weights;\n\
+{mask}\
+    w = w / max(w.r + w.g + w.b + w.a, 0.0001);\n\
+    var color = vec4<f32>(0.0);\n\
+    var roughness = 0.0;\n\
+{blend}{rough}\
+    out.color = vec4<f32>(color.rgb, 1.0);\n\
+    out.metallic = 0.0;\n\
+    out.roughness = roughness;\n\
+    return out;\n\
+}}\n",
+        res = resolution as f32,
+        // Unused channels must not take weight from the used ones.
+        mask = ["", "", "", ""]
+            .iter()
+            .enumerate()
+            .skip(n)
+            .map(|(i, _)| format!("    w.{} = 0.0;\n", ["r", "g", "b", "a"][i]))
+            .collect::<String>(),
+    )
+}
+
+/// The terrain's material: the atlas, the weight map and the shader, already
+/// registered by the caller (handles from its `Textures` and `Shaders`).
+pub fn material(
+    atlas: olvin_render::TextureHandle,
+    weights: olvin_render::TextureHandle,
+    shader: olvin_render::ShaderHandle,
+) -> Material {
+    Material {
+        base_texture: Some(atlas),
+        orm_texture: Some(weights),
+        shader: Some(shader),
+        metallic: 0.0,
+        roughness: 1.0,
+        ..Material::default()
+    }
+}

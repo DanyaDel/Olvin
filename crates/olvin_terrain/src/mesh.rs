@@ -226,7 +226,11 @@ pub fn raycast(data: &TerrainData, size: Vec3, origin: Vec3, dir: Vec3) -> Optio
     let (t0, t1) = ((lo - origin) * inv, (hi - origin) * inv);
     let enter = t0.min(t1).max_element().max(0.0);
     let exit = t0.max(t1).min_element();
-    if !(enter <= exit) {
+    // NaN (a ray parallel to a face) counts as a miss too.
+    if enter
+        .partial_cmp(&exit)
+        .is_none_or(|o| o == std::cmp::Ordering::Greater)
+    {
         return None;
     }
     let cell = (size.x.min(size.z) / (data.resolution() - 1) as f32).max(1e-3);

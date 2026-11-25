@@ -147,9 +147,40 @@ impl Viewport {
         if let Some((id, _)) = icon {
             return Some(id);
         }
-        self.geometry
-            .raycast(&camera.ray(pointer))
-            .and_then(|h| h.entity)
+        let ray = camera.ray(pointer);
+        let hit = self
+            .geometry
+            .raycast(&ray)
+            .filter(|h| h.entity.is_some())
+            .map(|h| (h.distance, h.entity));
+        // Terrains are drawn by the engine, not by editor geometry: their own ray cast.
+        let terrain = state
+            .scene
+            .entities
+            .iter()
+            .filter(|e| state.scene.active_in_hierarchy(e.id))
+            .filter_map(|e| {
+                let desc = e.terrain.as_ref()?;
+                let world = *worlds.get(&e.id)?;
+                let data = state.terrains.peek(&desc.data)?;
+                let inv = world.inverse();
+                let local = olvin::terrain::mesh::raycast(
+                    data,
+                    desc.size,
+                    inv.transform_point3(ray.origin),
+                    inv.transform_vector3(ray.dir),
+                )?;
+                Some((
+                    world.transform_point3(local).distance(ray.origin),
+                    Some(e.id),
+                ))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        [hit, terrain]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .and_then(|(_, id)| id)
     }
 }
 

@@ -50,6 +50,7 @@ pub fn plugins() -> Vec<Box<dyn EditorPlugin>> {
         Box::new(olvin_editor_console::ConsolePlugin),
         Box::new(olvin_editor_animator::AnimatorPlugin),
         Box::new(olvin_editor_csg::CsgPlugin),
+        Box::new(olvin_editor_terrain::TerrainPlugin),
         Box::new(olvin_editor_modeling::ModelingPlugin),
         Box::new(olvin_editor_uv::UvPlugin),
         Box::new(olvin_editor_ide::IdePlugin),
@@ -1046,6 +1047,8 @@ fn terrain_draws_with_its_layers() {
             .heights_changed(&desc.data, ((0, 0), (res - 1, res - 1)));
         state.terrains.weights_changed(&desc.data);
         state.select(None);
+        // The brush settings show while a terrain tool is active.
+        state.tool = "terrain.raise".into();
         h.run_steps(3);
     });
     let image = image::open(&out).unwrap().to_rgb8();

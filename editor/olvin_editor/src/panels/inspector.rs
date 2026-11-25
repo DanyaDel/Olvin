@@ -415,7 +415,7 @@ impl Panel for Inspector {
                 }
                 if let Some(t) = &mut e.terrain {
                     let textures = state.materials.textures.clone();
-                    section(ui, "⛰ Terrain", Some((&mut remove, "terrain")), |ui| {
+                    section(ui, "▲ Terrain", Some((&mut remove, "terrain")), |ui| {
                         terrain_ui(ui, t, &textures)
                     });
                 }

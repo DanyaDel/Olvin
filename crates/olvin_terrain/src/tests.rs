@@ -165,3 +165,61 @@ fn layer_shader_validates_and_atlas_wraps() {
     let gutter_first = look::GUTTER - 1;
     assert_eq!(px(gutter_first, 200), px(inner_last, 200));
 }
+
+#[test]
+fn brushes_raise_smooth_flatten_and_paint() {
+    use brush::{Brush, BrushOp, apply};
+    let size = Vec3::new(64.0, 10.0, 64.0);
+    let mut d = TerrainData::flat(65);
+    let brush = Brush {
+        center: Vec2::ZERO,
+        radius: 8.0,
+        strength: 1.0,
+    };
+    let rect = apply(&mut d, size, &brush, BrushOp::Raise(0.5), 1.0).unwrap();
+    // 8 m on a 1 m grid around the centre vertex (32, 32).
+    assert_eq!(rect, ((24, 24), (40, 40)));
+    assert!(
+        (d.height(32, 32) - 0.5).abs() < 1e-5,
+        "full strength at the centre"
+    );
+    assert!(
+        d.height(38, 32) > 0.0 && d.height(38, 32) < 0.5,
+        "falls off"
+    );
+    assert_eq!(d.height(41, 32), 0.0, "nothing past the radius");
+    // Lower takes it back down; heights never go below 0.
+    apply(&mut d, size, &brush, BrushOp::Raise(-2.0), 1.0);
+    assert_eq!(d.height(32, 32), 0.0);
+
+    // A spike smooths out; the sum over the area is about kept.
+    let mut spike = TerrainData::flat(65);
+    spike.set_height(32, 32, 1.0);
+    apply(&mut spike, size, &brush, BrushOp::Smooth, 0.1);
+    assert!(spike.height(32, 32) < 1.0 && spike.height(33, 32) > 0.0);
+
+    // Flatten pulls towards the target.
+    let mut slope = TerrainData::flat(65);
+    for x in 0..65 {
+        for z in 0..65 {
+            slope.set_height(x, z, x as f32 / 64.0);
+        }
+    }
+    apply(&mut slope, size, &brush, BrushOp::Flatten(0.5), 1.0);
+    assert!((slope.height(30, 32) - 0.5).abs() < 0.01);
+
+    // Paint: layer 2 takes over at the centre, weights still sum to 255.
+    let mut p = TerrainData::flat(65);
+    apply(&mut p, size, &brush, BrushOp::Paint(2), 1.0);
+    let w = p.weights(32, 32);
+    assert!(w[2] > 200, "{w:?}");
+    assert_eq!(w.iter().map(|&v| v as u32).sum::<u32>(), 255);
+    assert_eq!(p.weights(0, 0), [255, 0, 0, 0], "far away untouched");
+
+    // Outside the terrain: nothing.
+    let away = Brush {
+        center: Vec2::new(500.0, 0.0),
+        ..brush
+    };
+    assert_eq!(apply(&mut p, size, &away, BrushOp::Paint(1), 1.0), None);
+}

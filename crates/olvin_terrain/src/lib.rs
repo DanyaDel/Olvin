@@ -3,6 +3,7 @@
 //! layers are blended ([`look`]). Spawning from a scene lives in `olvin`
 //! (feature `terrain`); the brushes live in the editor element.
 
+pub mod brush;
 mod data;
 pub mod look;
 pub mod mesh;

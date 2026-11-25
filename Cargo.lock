@@ -1394,6 +1394,7 @@ dependencies = [
  "olvin_editor_library",
  "olvin_editor_modeling",
  "olvin_editor_profiler",
+ "olvin_editor_terrain",
  "olvin_editor_uv",
  "winresource",
 ]
@@ -3899,6 +3900,13 @@ name = "olvin_editor_profiler"
 version = "0.1.0"
 dependencies = [
  "olvin",
+ "olvin_editor",
+]
+
+[[package]]
+name = "olvin_editor_terrain"
+version = "0.1.0"
+dependencies = [
  "olvin_editor",
 ]
 

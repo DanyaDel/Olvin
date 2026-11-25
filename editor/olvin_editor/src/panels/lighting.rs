@@ -92,7 +92,7 @@ pub(crate) fn environment_ui(ui: &mut egui::Ui, env: &mut Environment, textures:
             fog.end = fog.end.max(fog.start + 0.1);
         }
     });
-    section(ui, "⛰ Height Fog", None, |ui| {
+    section(ui, "▲ Height Fog", None, |ui| {
         let mut on = env.height_fog.is_some();
         if ui.checkbox(&mut on, "Enabled").changed() {
             env.height_fog = on.then(|| HeightFogDesc {

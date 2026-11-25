@@ -50,6 +50,11 @@ impl TerrainStore {
             })
     }
 
+    /// The data of `rel` if it is loaded already.
+    pub fn peek(&self, rel: &str) -> Option<&TerrainData> {
+        self.entries.get(rel).map(|e| &e.data)
+    }
+
     /// Marks heights in `rect` of `rel` as changed.
     pub fn heights_changed(&mut self, rel: &str, rect: VertexRect) {
         if let Some(e) = self.entries.get_mut(rel) {

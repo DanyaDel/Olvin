@@ -183,6 +183,16 @@ impl EditorState {
         });
         self.forget_materials(from);
         self.forget_prefabs(from);
+        // Terrain data follows its file: the cache reloads it, strokes in
+        // the history write to the new path.
+        self.terrains.forget(from);
+        for step in self.all_steps() {
+            if let Step::Terrain(rel, _) = step
+                && (rel == from || rel.starts_with(&format!("{from}/")))
+            {
+                *rel = format!("{to}{}", &rel[from.len()..]);
+            }
+        }
         Ok(())
     }
 
@@ -210,6 +220,7 @@ impl EditorState {
         }
         self.forget_materials(rel);
         self.forget_prefabs(rel);
+        self.terrains.forget(rel);
         Ok(FileOp::Delete {
             rel: rel.to_owned(),
             trash,
@@ -224,7 +235,7 @@ impl EditorState {
                 .iter()
                 .filter_map(|s| match s {
                     Step::Edit(scene, _) => Some(scene.clone()),
-                    Step::File(_) => None,
+                    Step::File(_) | Step::Terrain(..) => None,
                 })
                 .collect()
         };
@@ -257,7 +268,7 @@ impl EditorState {
         fn put_back(steps: &mut [Step], old: Vec<SceneFile>) {
             let now = steps.iter_mut().rev().filter_map(|s| match s {
                 Step::Edit(scene, _) => Some(scene),
-                Step::File(_) => None,
+                Step::File(_) | Step::Terrain(..) => None,
             });
             for (now, old) in now.zip(old.into_iter().rev()) {
                 *now = old;

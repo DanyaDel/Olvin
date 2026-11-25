@@ -1,0 +1,10 @@
+[package]
+name = "olvin_editor_terrain"
+description = "Olvin editor element: terrain brushes (raise, lower, smooth, flatten, paint layers) in the scene view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+olvin_editor.workspace = true

@@ -108,9 +108,12 @@ pub fn dock_style(style: &egui::Style, p: &Palette) -> egui_dock::Style {
 
     // STYLE.md §6: the focused tab is inverted (text colour fill, bg text),
     // everywhere. The editor eases between these states per tab.
+    // Not a pill: egui_dock joins a tab to its body with a line from
+    // `left + radius` to `right - radius`, and a pill radius turns that
+    // range inside out into a stripe across the whole tab bar.
     let tab = |bg: Color32, text: Color32| egui_dock::TabInteractionStyle {
         outline_color: Color32::TRANSPARENT,
-        corner_radius: CornerRadius::same(RADIUS_PILL),
+        corner_radius: CornerRadius::same(RADIUS_SM),
         bg_fill: bg,
         text_color: text,
     };

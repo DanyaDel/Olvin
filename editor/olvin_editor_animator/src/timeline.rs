@@ -2,6 +2,7 @@
 //! strip of the selected objects' keyframes under the frame ruler.
 
 use olvin_editor::egui::{self, DragValue, Rect, Sense, pos2, vec2};
+use olvin_editor::keymap::Command;
 use olvin_editor::{EditorState, Panel, theme};
 
 use crate::clock::{self, Dir};
@@ -45,9 +46,9 @@ impl Panel for Timeline {
             self.fit(state, rect);
         }
         view::navigate_x(ui, &response, rect, &mut self.view, true);
-        if response.hovered() {
+        if response.hovered() && !state.capturing_key && !ui.ctx().egui_wants_keyboard_input() {
             let a = &state.scene.animation;
-            if ui.input(|i| i.key_pressed(egui::Key::Home)) {
+            if ui.input_mut(|i| state.prefs.keymap.pressed(i, Command::AnimViewAll)) {
                 self.view = Axis::fit(
                     a.frame_start as f32,
                     a.frame_end as f32,
@@ -141,6 +142,8 @@ impl Timeline {
     }
 
     fn header(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
+        let keys = state.prefs.keymap.clone();
+        let hint = |label, command| format!("{label}  ({})", keys.shortcut_text(command));
         ui.horizontal_wrapped(|ui| {
             let playing = clock::with(|s| s.play.dir);
             let (start, end) = (
@@ -149,14 +152,14 @@ impl Timeline {
             );
             if ui
                 .button("⏮")
-                .on_hover_text("Jump to start  (Shift+Left)")
+                .on_hover_text(hint("Jump to start", Command::AnimStart))
                 .clicked()
             {
                 state.anim_frame = start;
             }
             if ui
                 .button("◀◆")
-                .on_hover_text("Previous keyframe  (Down)")
+                .on_hover_text(hint("Previous keyframe", Command::AnimPreviousKey))
                 .clicked()
             {
                 clock::jump_keyframe(state, false);
@@ -168,7 +171,7 @@ impl Timeline {
             };
             if ui
                 .button(reverse)
-                .on_hover_text("Play reverse  (Shift+Ctrl+Space)")
+                .on_hover_text(hint("Play reverse", Command::AnimReverse))
                 .clicked()
             {
                 clock::with(|s| s.play.toggle(Dir::Reverse, state.anim_frame));
@@ -180,21 +183,21 @@ impl Timeline {
             };
             if ui
                 .button(forward)
-                .on_hover_text("Play / pause  (Space); Esc stops and returns")
+                .on_hover_text(hint("Play / pause", Command::AnimForward))
                 .clicked()
             {
                 clock::with(|s| s.play.toggle(Dir::Forward, state.anim_frame));
             }
             if ui
                 .button("◆▶")
-                .on_hover_text("Next keyframe  (Up)")
+                .on_hover_text(hint("Next keyframe", Command::AnimNextKey))
                 .clicked()
             {
                 clock::jump_keyframe(state, true);
             }
             if ui
                 .button("⏭")
-                .on_hover_text("Jump to end  (Shift+Right)")
+                .on_hover_text(hint("Jump to end", Command::AnimEnd))
                 .clicked()
             {
                 state.anim_frame = end;

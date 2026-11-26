@@ -4,7 +4,8 @@
 
 use std::collections::HashSet;
 
-use olvin_editor::egui::{self, Align2, FontId, Key, Pos2, Rect, Sense, pos2, vec2};
+use olvin_editor::egui::{self, Align2, FontId, Pos2, Rect, Sense, pos2, vec2};
+use olvin_editor::keymap::Command;
 use olvin_editor::olvin_scene::action::Interp;
 use olvin_editor::{EditorState, Panel, theme};
 
@@ -84,7 +85,7 @@ impl Default for DopeSheet {
 
 impl Panel for DopeSheet {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
-        let cmd = self.header(ui);
+        let cmd = self.header(ui, state);
         let rect = ui.available_rect_before_wrap();
         if rect.width() < NAMES_W + 40.0 || rect.height() < RULER_H + ROW_H {
             return;
@@ -128,7 +129,11 @@ impl Panel for DopeSheet {
         if let Some(modal) = &mut self.modal {
             state.busy = true;
             state.tool_owns_keys = true;
-            let outcome = modal.input(&ctx, response.drag_stopped());
+            let outcome = if state.capturing_key {
+                Outcome::Running
+            } else {
+                modal.input(&ctx, response.drag_stopped())
+            };
             let ctrl = ui.input(|i| i.modifiers.ctrl);
             let result = modal.result(mouse, current, ctrl);
             match outcome {
@@ -139,7 +144,7 @@ impl Panel for DopeSheet {
                 self.modal = None;
             }
         } else {
-            cmd = cmd.or_else(|| self.keyboard(ui, &response));
+            cmd = cmd.or_else(|| self.keyboard(ui, &response, state));
             self.pointer(
                 ui, state, &response, &rows, rect, keys_rect, ruler_rect, top,
             );
@@ -150,15 +155,23 @@ impl Panel for DopeSheet {
 
         self.paint(ui, state, &rows, rect, keys_rect, ruler_rect, top);
         self.interp_popup(&ctx, state);
+        let map = state.prefs.keymap.clone();
+        let key_label = |label, command| format!("{label}  ({})", map.shortcut_text(command));
         response.context_menu(|ui| {
             for (label, c) in [
-                ("Grab  (G)", Cmd::Grab),
-                ("Scale  (S)", Cmd::Scale),
-                ("Duplicate  (Shift+D)", Cmd::Duplicate),
-                ("Delete Keyframes  (X)", Cmd::Delete),
-                ("Snap to Frame", Cmd::SnapFrames),
-                ("Copy  (Ctrl+C)", Cmd::Copy),
-                ("Paste  (Ctrl+V)", Cmd::Paste),
+                (key_label("Grab", Command::AnimGrab), Cmd::Grab),
+                (key_label("Scale", Command::AnimScale), Cmd::Scale),
+                (
+                    key_label("Duplicate", Command::AnimDuplicate),
+                    Cmd::Duplicate,
+                ),
+                (
+                    key_label("Delete Keyframes", Command::AnimDelete),
+                    Cmd::Delete,
+                ),
+                ("Snap to Frame".into(), Cmd::SnapFrames),
+                (key_label("Copy", Command::AnimCopy), Cmd::Copy),
+                (key_label("Paste", Command::AnimPaste), Cmd::Paste),
             ] {
                 if ui.button(label).clicked() {
                     self.run(c, state, &rows, mouse, current, keys_rect);
@@ -184,15 +197,17 @@ const INTERPS: [(&str, Interp); 3] = [
 ];
 
 impl DopeSheet {
-    fn header(&mut self, ui: &mut egui::Ui) -> Option<Cmd> {
+    fn header(&mut self, ui: &mut egui::Ui, state: &EditorState) -> Option<Cmd> {
+        let key_label =
+            |label, command| format!("{label}  ({})", state.prefs.keymap.shortcut_text(command));
         let mut cmd = None;
         ui.horizontal(|ui| {
             ui.menu_button("Select", |ui| {
                 for (label, c) in [
-                    ("All  (A)", Cmd::SelectAll),
-                    ("None  (Alt+A)", Cmd::SelectNone),
-                    ("Invert  (Ctrl+I)", Cmd::Invert),
-                    ("Box Select  (B)", Cmd::BoxSelect),
+                    (key_label("All", Command::AnimSelectAll), Cmd::SelectAll),
+                    (key_label("None", Command::AnimSelectNone), Cmd::SelectNone),
+                    (key_label("Invert", Command::AnimInvert), Cmd::Invert),
+                    (key_label("Box Select", Command::AnimBox), Cmd::BoxSelect),
                 ] {
                     if ui.button(label).clicked() {
                         cmd = Some(c);
@@ -202,28 +217,40 @@ impl DopeSheet {
             });
             ui.menu_button("Key", |ui| {
                 for (label, c) in [
-                    ("Insert Keyframes  (I)", Cmd::InsertKeys),
-                    ("Grab  (G)", Cmd::Grab),
-                    ("Scale  (S)", Cmd::Scale),
-                    ("Duplicate  (Shift+D)", Cmd::Duplicate),
-                    ("Delete Keyframes  (X)", Cmd::Delete),
-                    ("Snap to Frame", Cmd::SnapFrames),
-                    ("Copy  (Ctrl+C)", Cmd::Copy),
-                    ("Paste  (Ctrl+V)", Cmd::Paste),
+                    (
+                        key_label("Insert Keyframes", Command::AnimInsert),
+                        Cmd::InsertKeys,
+                    ),
+                    (key_label("Grab", Command::AnimGrab), Cmd::Grab),
+                    (key_label("Scale", Command::AnimScale), Cmd::Scale),
+                    (
+                        key_label("Duplicate", Command::AnimDuplicate),
+                        Cmd::Duplicate,
+                    ),
+                    (
+                        key_label("Delete Keyframes", Command::AnimDelete),
+                        Cmd::Delete,
+                    ),
+                    ("Snap to Frame".into(), Cmd::SnapFrames),
+                    (key_label("Copy", Command::AnimCopy), Cmd::Copy),
+                    (key_label("Paste", Command::AnimPaste), Cmd::Paste),
                 ] {
                     if ui.button(label).clicked() {
                         cmd = Some(c);
                         ui.close();
                     }
                 }
-                ui.menu_button("Interpolation Mode  (T)", |ui| {
-                    for (label, i) in INTERPS {
-                        if ui.button(label).clicked() {
-                            cmd = Some(Cmd::Interp(i));
-                            ui.close();
+                ui.menu_button(
+                    key_label("Interpolation Mode", Command::AnimInterpolation),
+                    |ui| {
+                        for (label, i) in INTERPS {
+                            if ui.button(label).clicked() {
+                                cmd = Some(Cmd::Interp(i));
+                                ui.close();
+                            }
                         }
-                    }
-                });
+                    },
+                );
             });
             if ui.button("View All  (Home)").clicked() {
                 cmd = Some(Cmd::ViewAll);
@@ -307,42 +334,46 @@ impl DopeSheet {
         self.view = Axis::fit(lo, hi, rect.width() - NAMES_W, 30.0, false);
     }
 
-    fn keyboard(&mut self, ui: &egui::Ui, response: &egui::Response) -> Option<Cmd> {
-        if !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
+    fn keyboard(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        state: &EditorState,
+    ) -> Option<Cmd> {
+        if state.capturing_key || !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
             return None;
         }
         // T opens the interpolation menu at the mouse.
-        if ui.input(|i| i.key_pressed(Key::T) && i.modifiers.is_none()) {
+        let pressed = |command| ui.input_mut(|i| state.prefs.keymap.pressed(i, command));
+        if pressed(Command::AnimInterpolation) {
             self.interp_menu = response.hover_pos();
         }
+        for (command, action) in [
+            (Command::AnimSelectAll, Cmd::SelectAll),
+            (Command::AnimSelectNone, Cmd::SelectNone),
+            (Command::AnimInvert, Cmd::Invert),
+            (Command::AnimBox, Cmd::BoxSelect),
+            (Command::AnimGrab, Cmd::Grab),
+            (Command::AnimScale, Cmd::Scale),
+            (Command::AnimDuplicate, Cmd::Duplicate),
+            (Command::AnimDelete, Cmd::Delete),
+            (Command::AnimInsert, Cmd::InsertKeys),
+            (Command::AnimViewAll, Cmd::ViewAll),
+            (Command::AnimCopy, Cmd::Copy),
+            (Command::AnimPaste, Cmd::Paste),
+        ] {
+            if pressed(command) {
+                return Some(action);
+            }
+        }
         ui.input(|i| {
-            let m = i.modifiers;
-            let plain = m.is_none();
-            let key = |k| i.key_pressed(k);
-            if key(Key::A) && plain {
-                Some(Cmd::SelectAll)
-            } else if key(Key::A) && m.matches_exact(egui::Modifiers::ALT) {
-                Some(Cmd::SelectNone)
-            } else if key(Key::I) && m.matches_exact(egui::Modifiers::CTRL) {
-                Some(Cmd::Invert)
-            } else if key(Key::B) && plain {
-                Some(Cmd::BoxSelect)
-            } else if key(Key::G) && plain {
-                Some(Cmd::Grab)
-            } else if key(Key::S) && plain {
-                Some(Cmd::Scale)
-            } else if key(Key::D) && m.matches_exact(egui::Modifiers::SHIFT) {
-                Some(Cmd::Duplicate)
-            } else if (key(Key::X) || key(Key::Delete)) && plain {
-                Some(Cmd::Delete)
-            } else if key(Key::I) && plain {
-                Some(Cmd::InsertKeys)
-            } else if key(Key::Home) && plain {
-                Some(Cmd::ViewAll)
-            } else if i.events.iter().any(|e| matches!(e, egui::Event::Copy)) {
+            let keymap = &state.prefs.keymap;
+            if keymap.is_default(Command::AnimCopy)
+                && i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+            {
                 Some(Cmd::Copy)
-            } else if i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-                || (key(Key::V) && m.command)
+            } else if keymap.is_default(Command::AnimPaste)
+                && i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
             {
                 Some(Cmd::Paste)
             } else {

@@ -28,9 +28,12 @@ impl Page {
     ];
 }
 
+const KEY_CAPTURE_ID: &str = "keymap capture";
+
 /// Draws the window while it's open; saves preferences when they change.
 pub(crate) fn window(ctx: &egui::Context, state: &mut EditorState) {
     let Some(mut page) = state.settings_page else {
+        cancel_key_capture(ctx, state);
         return;
     };
     let before = state.prefs.clone();
@@ -73,6 +76,9 @@ pub(crate) fn window(ctx: &egui::Context, state: &mut EditorState) {
             });
         });
     state.settings_page = open.then_some(page);
+    if state.settings_page != Some(Page::Keymap) {
+        cancel_key_capture(ctx, state);
+    }
     if state.prefs != before
         && let Err(e) = state.prefs.save()
     {
@@ -239,46 +245,24 @@ fn theme_card(ui: &mut egui::Ui, kind: ThemeKind, selected: bool) -> egui::Respo
         .on_hover_text(kind.label())
 }
 
-const KEYS: [(&str, &[(&str, &str)]); 4] = [
+const KEYS: [(&str, &[(&str, &str)]); 3] = [
+    ("Scene", &[("Ctrl+click", "Add to / remove from selection")]),
     (
-        "Scene",
+        "Modal tools",
         &[
-            ("Q / W / E / R", "Hand / Move / Rotate / Scale"),
-            ("X", "Global / Local gizmo"),
-            ("F", "Frame selection"),
-            ("Shift+Z", "Solid / Rendered"),
-            ("Ctrl+click", "Add to / remove from selection"),
-        ],
-    ),
-    (
-        "Edit Mode (Tab)",
-        &[
-            ("1 / 2 / 3", "Vertex / Edge / Face"),
-            (
-                "G / R / S",
-                "Move / rotate / scale; X Y Z axis, type a value",
-            ),
-            ("E / I", "Extrude / Inset"),
-            ("Ctrl+R / K", "Loop cut / Knife"),
-            ("F / J", "Make face / Connect vertices"),
-            ("X / M", "Delete / Merge"),
-            ("Alt+click", "Edge or face loop"),
-            ("Alt+Z", "X-ray"),
-            ("H / Alt+H", "Hide / Reveal"),
+            ("Enter / Esc", "Confirm / cancel"),
+            ("X / Y / Z", "Constrain to axis"),
+            ("Numbers / Backspace", "Enter a value"),
         ],
     ),
     ("CSG", &[("B", "Draw brush"), ("T", "Resize brush faces")]),
-    (
-        "Editor",
-        &[
-            ("Ctrl+S", "Save scene"),
-            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
-            ("Ctrl+D / Del", "Duplicate / Delete"),
-            ("Ctrl+P", "Play / Stop"),
-            ("Ctrl+,", "Settings"),
-        ],
-    ),
 ];
+
+fn cancel_key_capture(ctx: &egui::Context, state: &mut EditorState) {
+    if std::mem::take(&mut state.capturing_key) {
+        ctx.data_mut(|data| data.remove::<Option<Command>>(egui::Id::new(KEY_CAPTURE_ID)));
+    }
+}
 
 /// The key pressed this frame, with modifiers, for the capture field.
 fn captured_chord(ui: &egui::Ui) -> Option<Option<Chord>> {
@@ -311,16 +295,16 @@ fn keymap(ui: &mut egui::Ui, state: &mut EditorState) {
         "Keymap",
         "Unity-style object keys, Blender-style Edit Mode. Click a key to change it.",
     );
-    let capture_id = egui::Id::new("keymap capture");
+    let capture_id = egui::Id::new(KEY_CAPTURE_ID);
     let mut waiting: Option<Command> =
         ui.data(|d| d.get_temp::<Option<Command>>(capture_id).flatten());
-    for group in ["Editor", "Scene view"] {
+    for group in Command::GROUPS {
         section(ui, group, None, |ui| {
             egui::Grid::new(group)
                 .num_columns(4)
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
-                    for command in Command::ALL.into_iter().filter(|c| c.group() == group) {
+                    for command in Command::ALL.iter().copied().filter(|c| c.group() == group) {
                         ui.label(command.label());
                         let chords = state.prefs.keymap.chords(command);
                         let text = chords
@@ -383,7 +367,7 @@ fn keymap(ui: &mut egui::Ui, state: &mut EditorState) {
     heading(
         ui,
         "Fixed keys",
-        "Edit Mode, the UV editor, the timeline and text fields use these.",
+        "Pointer gestures, modal input and CSG tools.",
     );
     for (title, keys) in KEYS {
         section(ui, title, None, |ui| {

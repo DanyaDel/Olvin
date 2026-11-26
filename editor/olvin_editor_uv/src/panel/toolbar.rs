@@ -2,6 +2,7 @@
 
 use olvin_editor::EditorState;
 use olvin_editor::egui;
+use olvin_editor::keymap::Command;
 use olvin_mesh::{PolyMesh, UvCorner};
 
 use super::{Request, UvEditor, display, poly_mut};
@@ -18,10 +19,17 @@ impl UvEditor {
         request: &mut Option<Request>,
     ) {
         let busy = self.modal.is_some();
+        let key = |command| state.prefs.keymap.shortcut_text(command);
+        let label = |name, command| format!("{name}  {}", key(command));
         ui.add_enabled_ui(!busy, |ui| {
             ui.horizontal_wrapped(|ui| {
-                for (mode, label) in SelectMode::ALL {
-                    ui.selectable_value(&mut self.mode, mode, label);
+                for (mode, name, command) in [
+                    (SelectMode::Vertex, "Vertex", Command::UvVertex),
+                    (SelectMode::Edge, "Edge", Command::UvEdge),
+                    (SelectMode::Face, "Face", Command::UvFace),
+                    (SelectMode::Island, "Island", Command::UvIsland),
+                ] {
+                    ui.selectable_value(&mut self.mode, mode, format!("{name} {}", key(command)));
                 }
                 ui.separator();
                 let mut op = |ui: &mut egui::Ui, op: UvOp, label: &str| {
@@ -30,7 +38,7 @@ impl UvEditor {
                         ui.close();
                     }
                 };
-                op(ui, UvOp::Unwrap, "Unwrap  U");
+                op(ui, UvOp::Unwrap, &label("Unwrap", Command::UvUnwrap));
                 ui.menu_button("Project", |ui| {
                     for o in UvOp::PROJECT {
                         op(ui, o, o.label());
@@ -38,10 +46,14 @@ impl UvEditor {
                 });
                 ui.menu_button("Seams", |ui| {
                     for o in UvOp::SEAMS {
-                        op(ui, o, o.label());
+                        if o == UvOp::MarkSeam && !state.prefs.keymap.is_default(Command::UvSeam) {
+                            op(ui, o, &label(o.label(), Command::UvSeam));
+                        } else {
+                            op(ui, o, o.label());
+                        }
                     }
                 });
-                op(ui, UvOp::Pack, "Pack  Ctrl+P");
+                op(ui, UvOp::Pack, &label("Pack", Command::UvPack));
                 ui.menu_button("Arrange", |ui| {
                     for o in UvOp::ARRANGE {
                         op(ui, o, o.label());
@@ -49,10 +61,10 @@ impl UvEditor {
                 });
                 ui.menu_button("Select", |ui| {
                     for (r, label) in [
-                        (Request::SelectAll, "All  A"),
-                        (Request::SelectNone, "None  Alt+A"),
-                        (Request::SelectInvert, "Invert  Ctrl+I"),
-                        (Request::SelectLinked, "Linked  Ctrl+L"),
+                        (Request::SelectAll, label("All", Command::UvSelectAll)),
+                        (Request::SelectNone, label("None", Command::UvSelectNone)),
+                        (Request::SelectInvert, label("Invert", Command::UvInvert)),
+                        (Request::SelectLinked, label("Linked", Command::UvLinked)),
                     ] {
                         if ui.button(label).clicked() {
                             *request = Some(r);

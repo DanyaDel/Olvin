@@ -2,6 +2,7 @@
 
 use olvin_editor::egui::{self, DragValue, RichText};
 use olvin_editor::glam::{Mat4, Vec3};
+use olvin_editor::keymap::{Command, Keymap};
 use olvin_editor::{EditorState, Panel, tools};
 
 use crate::ops::{self, Op, make_editable};
@@ -12,11 +13,13 @@ pub struct ModelingPanel;
 impl Panel for ModelingPanel {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            let keys = state.prefs.keymap.clone();
+            let key = |command| keys.shortcut_text(command);
             let editing = state.tool == EDIT_TOOL;
             let has_mesh = state.selection.and_then(|id| state.scene.get(id)).is_some_and(|e| e.poly.is_some());
             ui.horizontal(|ui| {
                 let label = if editing { "◀ Object Mode" } else { "◆ Edit Mode" };
-                if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(egui::vec2(130.0, 26.0))).on_hover_text("Tab").clicked() {
+                if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(egui::vec2(130.0, 26.0))).on_hover_text(key(Command::EditToggle)).clicked() {
                     if editing {
                         state.tool = tools::MOVE.to_owned();
                     } else if let Some(id) = state.selection {
@@ -41,23 +44,23 @@ impl Panel for ModelingPanel {
             section(ui, "Select", |ui| {
                 ui.horizontal(|ui| {
                     shared(|s| {
-                        for (mode, label) in [(Mode::Vertex, "Vertex 1"), (Mode::Edge, "Edge 2"), (Mode::Face, "Face 3")] {
-                            ui.selectable_value(&mut s.mode, mode, label);
+                        for (mode, label, command) in [(Mode::Vertex, "Vertex", Command::EditVertex), (Mode::Edge, "Edge", Command::EditEdge), (Mode::Face, "Face", Command::EditFace)] {
+                            ui.selectable_value(&mut s.mode, mode, format!("{label} {}", key(command)));
                         }
                     });
                 });
-                grid(ui, &mut run, &[Op::SelectAll, Op::SelectNone, Op::SelectInvert, Op::SelectLinked, Op::SelectGrow, Op::SelectShrink]);
-                grid(ui, &mut run, &[Op::Hide, Op::HideUnselected, Op::Reveal]);
+                grid(ui, &keys, &mut run, &[Op::SelectAll, Op::SelectNone, Op::SelectInvert, Op::SelectLinked, Op::SelectGrow, Op::SelectShrink]);
+                grid(ui, &keys, &mut run, &[Op::Hide, Op::HideUnselected, Op::Reveal]);
                 ui.horizontal(|ui| {
                     shared(|s| {
-                        ui.toggle_value(&mut s.xray, "X-ray").on_hover_text("Select through the mesh (Alt+Z)");
+                        ui.toggle_value(&mut s.xray, "X-ray").on_hover_text(format!("Select through the mesh ({})", key(Command::EditXray)));
                         ui.toggle_value(&mut s.gizmo, "Gizmo").on_hover_text("Move gizmo at the selection");
                     });
                 });
                 let (n, hidden) = shared(|s| (s.verts.len(), s.hidden.len()));
                 let hidden = if hidden > 0 { format!(" · {hidden} hidden") } else { String::new() };
                 ui.weak(format!("{n} vertices selected{hidden}"));
-                ui.weak("Click · Shift+click adds · drag: box (Shift adds, Ctrl subtracts) · Alt+click: loop · Ctrl+Alt+click: ring · L: linked under cursor");
+                ui.weak("Click · Shift+click adds · drag: box (Shift adds, Ctrl subtracts) · Alt+click: loop · Ctrl+Alt+click: ring · use Select linked under pointer");
             });
 
             section(ui, "Transform", |ui| {
@@ -76,12 +79,12 @@ impl Panel for ModelingPanel {
                         run = Some(Op::MoveBy(shared(|s| s.move_by)));
                     }
                 });
-                ui.weak("Viewport: G move · R rotate · S scale, then X/Y/Z (twice: local / normal), Shift+X/Y/Z plane, type a value, Ctrl snap, Shift precise");
+                ui.weak(format!("Viewport: {} move · {} rotate · {} scale. X/Y/Z constrains the axis, Shift+X/Y/Z constrains the plane.", key(Command::EditMove), key(Command::EditRotate), key(Command::EditScale)));
             });
 
             section(ui, "Create", |ui| {
-                grid(ui, &mut run, &[Op::Fill, Op::Duplicate, Op::Connect]);
-                ui.weak("E extrude · I inset · K knife · Ctrl+R loop cut (in the viewport)");
+                grid(ui, &keys, &mut run, &[Op::Fill, Op::Duplicate, Op::Connect]);
+                ui.weak(format!("{} extrude · {} inset · {} knife · {} loop cut", key(Command::EditExtrude), key(Command::EditInset), key(Command::EditKnife), key(Command::EditLoopCut)));
             });
             section(ui, "Cut", |ui| {
                 ui.horizontal(|ui| {
@@ -90,18 +93,18 @@ impl Panel for ModelingPanel {
                         ui.add(DragValue::new(&mut s.cuts).range(1..=16));
                     });
                 });
-                grid(ui, &mut run, &[Op::LoopCutSelected, Op::Subdivide]);
+                grid(ui, &keys, &mut run, &[Op::LoopCutSelected, Op::Subdivide]);
             });
             section(ui, "Delete & Convert", |ui| {
-                grid(ui, &mut run, &[Op::Delete, Op::DeleteOnlyFaces, Op::DissolveEdges]);
-                ui.weak("Faces → Edges keeps the outline as edges; select edges and F to turn them back into a face.");
+                grid(ui, &keys, &mut run, &[Op::Delete, Op::DeleteOnlyFaces, Op::DissolveEdges]);
+                ui.weak("Faces → Edges keeps the outline. Select those edges and use Make Face / Fill to restore the face.");
             });
             section(ui, "Clean Up", |ui| {
-                grid(ui, &mut run, &[Op::Merge, Op::MergeByDistance, Op::Flip, Op::RecalculateNormals, Op::Smooth]);
+                grid(ui, &keys, &mut run, &[Op::Merge, Op::MergeByDistance, Op::Flip, Op::RecalculateNormals, Op::Smooth]);
             });
             if let Some(op) = run {
                 if !editing {
-                    state.warn("enter Edit Mode first (Tab)");
+                    state.warn(format!("enter Edit Mode first ({})", key(Command::EditToggle)));
                 } else if let Err(e) = ops::apply(state, op) {
                     state.warn(e);
                 }
@@ -137,10 +140,36 @@ fn pivot(state: &EditorState) -> Option<Vec3> {
     (!verts.is_empty()).then(|| verts.iter().sum::<Vec3>() / verts.len() as f32)
 }
 
-fn grid(ui: &mut egui::Ui, run: &mut Option<Op>, ops: &[Op]) {
+fn grid(ui: &mut egui::Ui, keys: &Keymap, run: &mut Option<Op>, ops: &[Op]) {
     ui.horizontal_wrapped(|ui| {
         for op in ops {
-            if ui.button(op.label()).clicked() {
+            let label = op.label();
+            let command = match op {
+                Op::SelectAll => Some(Command::EditSelectAll),
+                Op::SelectNone => Some(Command::EditSelectNone),
+                Op::SelectInvert => Some(Command::EditInvert),
+                Op::SelectLinked => Some(Command::EditLinked),
+                Op::SelectGrow => Some(Command::EditGrow),
+                Op::SelectShrink => Some(Command::EditShrink),
+                Op::Hide => Some(Command::EditHide),
+                Op::HideUnselected => Some(Command::EditHideOthers),
+                Op::Reveal => Some(Command::EditReveal),
+                Op::Duplicate => Some(Command::EditDuplicate),
+                Op::Connect => Some(Command::EditConnect),
+                Op::Fill => Some(Command::EditFill),
+                Op::Delete => Some(Command::EditDelete),
+                Op::Merge => Some(Command::EditMerge),
+                Op::RecalculateNormals => Some(Command::EditNormals),
+                _ => None,
+            };
+            let label = match command {
+                Some(command) if !keys.is_default(command) => {
+                    let name = label.split_once("  ").map_or(label, |(name, _)| name);
+                    format!("{name}  {}", keys.shortcut_text(command))
+                }
+                _ => label.to_owned(),
+            };
+            if ui.button(label).clicked() {
                 *run = Some(*op);
             }
         }

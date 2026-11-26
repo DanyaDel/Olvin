@@ -6,7 +6,8 @@
 use std::cell::RefCell;
 
 use olvin_editor::EditorState;
-use olvin_editor::egui::{self, Key, Modifiers};
+use olvin_editor::egui::{self, Key};
+use olvin_editor::keymap::Command;
 use olvin_editor::olvin_scene::action::{Action, KeyClipboard};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +107,7 @@ pub fn frame_hook(ctx: &egui::Context, state: &mut EditorState) {
 
 impl Shared {
     fn update(&mut self, ctx: &egui::Context, state: &mut EditorState) {
-        if !ctx.egui_wants_keyboard_input() && !state.busy {
+        if !state.capturing_key && !ctx.egui_wants_keyboard_input() && !state.busy {
             self.frame_keys(ctx, state);
         }
         if self.play.is_playing() {
@@ -121,40 +122,34 @@ impl Shared {
     }
 
     fn frame_keys(&mut self, ctx: &egui::Context, state: &mut EditorState) {
-        let (shift, ctrl, none) = (
-            Modifiers::SHIFT,
-            Modifiers::CTRL | Modifiers::SHIFT,
-            Modifiers::NONE,
-        );
-        let pressed = |key: Key, mods: Modifiers| {
-            ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_exact(mods))
-        };
+        let keys = &state.prefs.keymap;
+        let pressed = |command| ctx.input_mut(|i| keys.pressed(i, command));
         let a = &state.scene.animation;
         let (start, end) = (a.frame_start, a.frame_end);
-        if pressed(Key::Space, none) {
+        if pressed(Command::AnimForward) {
             self.play.toggle(Dir::Forward, state.anim_frame);
-        } else if pressed(Key::Space, ctrl) {
+        } else if pressed(Command::AnimReverse) {
             self.play.toggle(Dir::Reverse, state.anim_frame);
         }
-        if pressed(Key::Escape, none) {
+        if ctx.input(|i| i.modifiers.is_none() && i.key_pressed(Key::Escape)) {
             self.play.cancel(&mut state.anim_frame);
         }
         let mut jump = None;
-        if pressed(Key::ArrowLeft, none) {
+        if pressed(Command::AnimPreviousFrame) {
             state.anim_frame -= 1;
             self.play.dir = None;
-        } else if pressed(Key::ArrowRight, none) {
+        } else if pressed(Command::AnimNextFrame) {
             state.anim_frame += 1;
             self.play.dir = None;
-        } else if pressed(Key::ArrowLeft, shift) {
+        } else if pressed(Command::AnimStart) {
             state.anim_frame = start;
             self.play.dir = None;
-        } else if pressed(Key::ArrowRight, shift) {
+        } else if pressed(Command::AnimEnd) {
             state.anim_frame = end;
             self.play.dir = None;
-        } else if pressed(Key::ArrowUp, none) {
+        } else if pressed(Command::AnimNextKey) {
             jump = Some(true);
-        } else if pressed(Key::ArrowDown, none) {
+        } else if pressed(Command::AnimPreviousKey) {
             jump = Some(false);
         }
         if let Some(forward) = jump {

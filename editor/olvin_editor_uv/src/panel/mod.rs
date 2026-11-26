@@ -1,6 +1,6 @@
 //! The UV Editor panel: toolbar, 2D canvas, selection, modal G/R/S, gizmo.
 
-use olvin_editor::egui::{self, Align2, FontId, Key, Modifiers, Pos2, Sense};
+use olvin_editor::egui::{self, Align2, FontId, Pos2, Sense};
 use olvin_editor::glam::Vec2;
 use olvin_editor::{EditorState, Panel, theme};
 use olvin_mesh::{PolyMesh, UvCorner};
@@ -103,10 +103,6 @@ fn poly_mut(state: &mut EditorState, id: u64) -> Option<&mut PolyMesh> {
     state.scene.get_mut(id)?.poly.as_mut()
 }
 
-fn chord(ui: &egui::Ui, mods: Modifiers, key: Key) -> bool {
-    ui.input(|i| i.key_pressed(key) && i.modifiers.matches_exact(mods))
-}
-
 impl Panel for UvEditor {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
         let id = state
@@ -153,12 +149,15 @@ impl Panel for UvEditor {
         if response.hovered() {
             state.tool_owns_keys = true;
         }
-        let keys =
-            (response.hovered() || self.modal.is_some()) && !ui.ctx().egui_wants_keyboard_input();
+        let keys = (response.hovered() || self.modal.is_some())
+            && !state.capturing_key
+            && !ui.ctx().egui_wants_keyboard_input();
 
         if self.modal.is_some() {
             state.busy = true;
-            self.run_modal(ui, state, id, origin);
+            if !state.capturing_key {
+                self.run_modal(ui, state, id, origin);
+            }
         } else {
             if keys {
                 self.hotkeys(

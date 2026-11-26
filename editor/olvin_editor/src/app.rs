@@ -1100,19 +1100,6 @@ impl EditorApp {
         if let Some(path) = self.state.open_request.take() {
             self.state.open(&path);
         }
-        self.shortcuts(&ctx);
-        self.run_frame_hooks(&ctx);
-        let keys = self.state.prefs.keymap.clone();
-        let capturing = self.state.capturing_key;
-        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Play)) {
-            self.toggle_play();
-        }
-        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Settings)) {
-            self.state.settings_page = match self.state.settings_page {
-                Some(_) => None,
-                None => Some(crate::settings::Page::default()),
-            };
-        }
         if ctx.zoom_factor() != self.state.prefs.ui_scale && !ctx.input(|i| i.pointer.any_down()) {
             ctx.set_zoom_factor(self.state.prefs.ui_scale);
         }
@@ -1270,6 +1257,20 @@ impl EditorApp {
             dock.push_to_focused_leaf(tab);
         }
 
+        // A hovered panel can consume its shortcut before a global command uses it.
+        self.run_frame_hooks(&ctx);
+        self.shortcuts(&ctx);
+        let keys = self.state.prefs.keymap.clone();
+        let capturing = self.state.capturing_key;
+        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Play)) {
+            self.toggle_play();
+        }
+        if !capturing && ctx.input_mut(|i| keys.pressed(i, Command::Settings)) {
+            self.state.settings_page = match self.state.settings_page {
+                Some(_) => None,
+                None => Some(crate::settings::Page::default()),
+            };
+        }
         crate::settings::window(&ctx, &mut self.state);
         self.dialogs(&ctx);
         self.update_title(&ctx);

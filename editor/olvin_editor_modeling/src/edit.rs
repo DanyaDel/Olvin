@@ -2,11 +2,11 @@
 //! X-ray), the move gizmo and Blender's modal operations.
 
 use olvin_editor::egui::{
-    self, Align2, Color32, Event, FontId, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke,
-    vec2,
+    self, Align2, Color32, Event, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke, vec2,
 };
 use olvin_editor::ext::{Geometry, ToolDesc, ViewportCtx, ViewportExtension};
 use olvin_editor::glam::{Mat4, Vec3};
+use olvin_editor::keymap::Command;
 use olvin_editor::olvin_scene::file::PolyMesh;
 use olvin_editor::{EditorState, theme, tools};
 
@@ -20,7 +20,7 @@ use crate::{EDIT_TOOL, Mode, face_verts, selected_edges, selected_faces, shared}
 const TOOLS: [ToolDesc; 1] = [ToolDesc {
     id: EDIT_TOOL,
     label: "Edit Mesh",
-    tooltip: "Blender-style Edit Mode (Tab): 1/2/3 select mode, G R S, E I K J F X M, Ctrl+R, Alt+Z X-ray",
+    tooltip: "Edit mesh vertices, edges and faces",
     key: None,
 }];
 
@@ -87,10 +87,17 @@ impl ViewportExtension for EditMode {
     fn interact(&mut self, ctx: &mut ViewportCtx) -> bool {
         // While RMB is held the keys fly the camera (WASD/QE), never edit.
         let flying = ctx.ui.input(|i| i.pointer.secondary_down());
-        let keys_free =
-            ctx.response.hovered() && !flying && !ctx.ui.ctx().egui_wants_keyboard_input();
+        let keys_free = ctx.response.hovered()
+            && !flying
+            && !ctx.state.capturing_key
+            && !ctx.ui.ctx().egui_wants_keyboard_input();
         let mut editing = self.reclaim(ctx, keys_free);
-        if keys_free && self.modal.is_none() && pressed(ctx, Key::Tab) {
+        if keys_free
+            && self.modal.is_none()
+            && ctx
+                .ui
+                .input_mut(|i| ctx.state.prefs.keymap.pressed(i, Command::EditToggle))
+        {
             editing = self.toggle(ctx, editing);
         }
         self.keyboard_zoom(ctx, editing);
@@ -104,7 +111,7 @@ impl ViewportExtension for EditMode {
         }
         ctx.state.tool_owns_keys = true;
         let Some(id) = ctx.state.selection else {
-            hint(ctx, "Select a mesh, then Tab");
+            hint(ctx, "Select a mesh to edit");
             return true;
         };
         // Picking another brush while editing: it becomes editable at once.
@@ -143,7 +150,9 @@ impl ViewportExtension for EditMode {
 
         if self.modal.is_some() {
             ctx.state.busy = true;
-            self.run_modal(ctx, id);
+            if !ctx.state.capturing_key {
+                self.run_modal(ctx, id);
+            }
             let mesh = ctx
                 .state
                 .scene
@@ -186,7 +195,7 @@ impl ViewportExtension for EditMode {
         if keys_free {
             self.hotkeys(ctx, &mesh, world, id, hover);
         }
-        if ctx.ui.input(|i| i.key_pressed(Key::Escape)) {
+        if !ctx.state.capturing_key && ctx.ui.input(|i| i.key_pressed(Key::Escape)) {
             self.sub = Sub::None;
         }
 
@@ -291,54 +300,47 @@ impl EditMode {
         id: u64,
         hover: Option<Hover>,
     ) {
+        let keys = ctx.state.prefs.keymap.clone();
+        let pressed = |command| ctx.ui.input_mut(|i| keys.pressed(i, command));
         for (key, mode) in [
-            (Key::Num1, Mode::Vertex),
-            (Key::Num2, Mode::Edge),
-            (Key::Num3, Mode::Face),
+            (Command::EditVertex, Mode::Vertex),
+            (Command::EditEdge, Mode::Edge),
+            (Command::EditFace, Mode::Face),
         ] {
-            if pressed(ctx, key) {
+            if pressed(key) {
                 shared(|s| s.mode = mode);
             }
         }
-        let ui = ctx.ui;
-        let alt = |k| chord_ui(ui, Modifiers::ALT, k);
-        let shift = |k| chord_ui(ui, Modifiers::SHIFT, k);
-        let ctrl = |k| chord_ui(ui, Modifiers::COMMAND, k);
-        let ctrl_any = |keys: &[Key]| {
-            ui.input(|i| {
-                i.modifiers.command && !i.modifiers.alt && keys.iter().any(|k| i.key_pressed(*k))
-            })
-        };
-        if alt(Key::Z) {
+        if pressed(Command::EditXray) {
             shared(|s| s.xray = !s.xray);
         }
-        let op = if pressed(ctx, Key::A) {
+        let op = if pressed(Command::EditSelectAll) {
             Some(Op::SelectAll)
-        } else if alt(Key::A) {
+        } else if pressed(Command::EditSelectNone) {
             Some(Op::SelectNone)
-        } else if ctrl(Key::I) {
+        } else if pressed(Command::EditInvert) {
             Some(Op::SelectInvert)
-        } else if ctrl(Key::L) {
+        } else if pressed(Command::EditLinked) {
             Some(Op::SelectLinked)
-        } else if ctrl_any(&[Key::Plus, Key::Equals]) {
+        } else if pressed(Command::EditGrow) {
             Some(Op::SelectGrow)
-        } else if ctrl_any(&[Key::Minus]) {
+        } else if pressed(Command::EditShrink) {
             Some(Op::SelectShrink)
-        } else if pressed(ctx, Key::H) {
+        } else if pressed(Command::EditHide) {
             Some(Op::Hide)
-        } else if shift(Key::H) {
+        } else if pressed(Command::EditHideOthers) {
             Some(Op::HideUnselected)
-        } else if alt(Key::H) {
+        } else if pressed(Command::EditReveal) {
             Some(Op::Reveal)
-        } else if pressed(ctx, Key::F) {
+        } else if pressed(Command::EditFill) {
             Some(Op::Fill)
-        } else if pressed(ctx, Key::J) {
+        } else if pressed(Command::EditConnect) {
             Some(Op::Connect)
-        } else if pressed(ctx, Key::X) || pressed(ctx, Key::Delete) {
+        } else if pressed(Command::EditDelete) {
             Some(Op::Delete)
-        } else if pressed(ctx, Key::M) {
+        } else if pressed(Command::EditMerge) {
             Some(Op::Merge)
-        } else if shift(Key::N) {
+        } else if pressed(Command::EditNormals) {
             Some(Op::RecalculateNormals)
         } else {
             None
@@ -349,20 +351,20 @@ impl EditMode {
             ctx.state.warn(e);
         }
         // L / Shift+L: (de)select everything linked to the element under the cursor.
-        for (mods, how) in [
-            (Modifiers::NONE, Combine::Add),
-            (Modifiers::SHIFT, Combine::Subtract),
+        for (command, how) in [
+            (Command::EditPickLinked, Combine::Add),
+            (Command::EditUnpickLinked, Combine::Subtract),
         ] {
-            if chord(ctx, mods, Key::L)
+            if pressed(command)
                 && let Some(h) = hover
             {
                 let linked = mesh.linked(&h.verts(mesh));
                 shared(|s| combine(&mut s.verts, &linked, how));
             }
         }
-        if ctrl(Key::R) {
+        if pressed(Command::EditLoopCut) {
             self.sub = Sub::LoopCut;
-        } else if pressed(ctx, Key::K) {
+        } else if pressed(Command::EditKnife) {
             self.sub = Sub::Knife(None);
         }
 
@@ -372,15 +374,15 @@ impl EditMode {
         }
         let start = ctx.response.hover_pos().unwrap_or(ctx.camera.rect.center());
         for (key, kind) in [
-            (Key::G, Kind::Move),
-            (Key::R, Kind::Rotate),
-            (Key::S, Kind::Scale),
+            (Command::EditMove, Kind::Move),
+            (Command::EditRotate, Kind::Rotate),
+            (Command::EditScale, Kind::Scale),
         ] {
-            if pressed(ctx, key) {
+            if pressed(key) {
                 self.start_transform(ctx, kind, "Move", mesh.clone(), world, start);
             }
         }
-        if shift(Key::D) {
+        if pressed(Command::EditDuplicate) {
             match ops::apply(ctx.state, Op::Duplicate) {
                 Ok(()) => {
                     if let Some(m) = ctx.state.scene.get(id).and_then(|e| e.poly.clone()) {
@@ -389,9 +391,9 @@ impl EditMode {
                 }
                 Err(e) => ctx.state.warn(e),
             }
-        } else if pressed(ctx, Key::E) {
+        } else if pressed(Command::EditExtrude) {
             self.extrude(ctx, mesh, world, id, start);
-        } else if pressed(ctx, Key::I) {
+        } else if pressed(Command::EditInset) {
             let faces = selected_faces(mesh, &verts);
             let center = self.cage.pivot().and_then(|p| ctx.camera.project(p));
             if let (false, Some(c)) = (faces.is_empty(), center) {
@@ -800,18 +802,6 @@ fn modal_input(ctx: &ViewportCtx) -> Input {
             .map(|(_, kind)| kind),
         }
     })
-}
-
-fn pressed(ctx: &ViewportCtx, key: Key) -> bool {
-    chord(ctx, Modifiers::NONE, key)
-}
-
-fn chord(ctx: &ViewportCtx, mods: Modifiers, key: Key) -> bool {
-    chord_ui(ctx.ui, mods, key)
-}
-
-fn chord_ui(ui: &egui::Ui, mods: Modifiers, key: Key) -> bool {
-    ui.input(|i| i.key_pressed(key) && i.modifiers.matches_exact(mods))
 }
 
 fn hint(ctx: &ViewportCtx, text: &str) {

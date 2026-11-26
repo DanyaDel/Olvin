@@ -2180,6 +2180,89 @@ fn a_rebound_tool_key_works_and_the_old_one_does_not() {
 }
 
 #[test]
+fn element_keymap_rebinds_modeling_uv_and_animation() {
+    use egui::{Key, Modifiers};
+    use olvin_editor::keymap::{Chord, Command};
+    let p = project("element-keymap");
+    let mut h = editor(&p);
+    {
+        let s = state(&mut h);
+        s.select(Some(3));
+        s.prefs
+            .keymap
+            .set(Command::EditSelectAll, Chord::plain(Key::F6));
+        s.prefs.keymap.set(Command::UvUnwrap, Chord::plain(Key::F7));
+        s.prefs
+            .keymap
+            .set(Command::AnimNextFrame, Chord::plain(Key::F8));
+    }
+    assert!(h.state_mut().show_workspace("Modeling"));
+    h.run_steps(3);
+    h.get_by_label("◆ Edit Mode").click();
+    h.run_steps(3);
+    h.hover_at(SCENE_VIEW);
+    h.run_steps(3);
+    h.key_press(Key::A);
+    h.run_steps(3);
+    h.get_by_label_contains("0 vertices selected");
+    h.key_press(Key::F6);
+    h.run_steps(3);
+    h.get_by_label_contains("8 vertices selected");
+
+    assert!(h.state_mut().show_workspace("UV Editing"));
+    h.hover_at(egui::pos2(330.0, 700.0));
+    h.run_steps(3);
+    h.key_press(Key::U);
+    h.run_steps(3);
+    assert!(
+        !state(&mut h)
+            .scene
+            .get(3)
+            .unwrap()
+            .poly
+            .as_ref()
+            .unwrap()
+            .has_uvs()
+    );
+    h.key_press(Key::F7);
+    h.run_steps(3);
+    assert!(
+        state(&mut h)
+            .scene
+            .get(3)
+            .unwrap()
+            .poly
+            .as_ref()
+            .unwrap()
+            .has_uvs()
+    );
+    h.event(egui::Event::Key {
+        key: Key::P,
+        physical_key: Some(Key::P),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    });
+    h.run_steps(3);
+    assert!(
+        !state(&mut h).is_playing(),
+        "over the UV canvas Ctrl+P packs UVs"
+    );
+
+    let frame = state(&mut h).anim_frame;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(state(&mut h).anim_frame, frame);
+    h.key_press(Key::F8);
+    h.run_steps(3);
+    assert_eq!(state(&mut h).anim_frame, frame + 1);
+    state(&mut h).capturing_key = true;
+    h.key_press(Key::F8);
+    h.run_steps(1);
+    assert_eq!(state(&mut h).anim_frame, frame + 1);
+}
+
+#[test]
 fn settings_rebinds_a_command_by_pressing_the_new_key() {
     use olvin_editor::keymap::Command;
     let p = project("rebind-ui");
@@ -2189,21 +2272,27 @@ fn settings_rebinds_a_command_by_pressing_the_new_key() {
     h.get_by_label("W").click();
     h.run_steps(3);
     assert!(state(&mut h).capturing_key, "waiting for a key");
-    h.key_press(egui::Key::M);
+    h.key_press(egui::Key::F10);
     h.run_steps(3);
     assert!(!state(&mut h).capturing_key);
     let chords = state(&mut h).prefs.keymap.chords(Command::ToolMove);
     assert_eq!(chords.len(), 1);
-    assert_eq!(chords[0].to_string(), "M");
+    assert_eq!(chords[0].to_string(), "F10");
+    let mut reopened = editor_with(&p, false);
+    assert_eq!(
+        state(&mut reopened).prefs.keymap.chords(Command::ToolMove),
+        chords,
+        "the new binding is loaded from preferences on restart"
+    );
     // Esc while waiting changes nothing.
-    h.get_by_label("M").click();
+    h.get_by_label("F10").click();
     h.run_steps(3);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(!state(&mut h).capturing_key);
     assert_eq!(
         state(&mut h).prefs.keymap.chords(Command::ToolMove)[0].to_string(),
-        "M"
+        "F10"
     );
 }
 

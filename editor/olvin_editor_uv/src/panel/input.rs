@@ -1,14 +1,15 @@
 //! Canvas input: navigation, framing, hotkeys, click / box selection.
 
 use olvin_editor::EditorState;
-use olvin_editor::egui::{self, Key, Modifiers, PointerButton, Rect};
+use olvin_editor::egui::{self, PointerButton, Rect};
 use olvin_editor::glam::Vec2;
 use olvin_mesh::{PolyMesh, UvCorner};
 
-use super::{Request, UvEditor, chord, v2};
+use super::{Request, UvEditor, v2};
 use crate::ops::UvOp;
 use crate::select::{Combine, Hit, SelectMode, Topo};
 use crate::transform::{self, Kind};
+use olvin_editor::keymap::Command;
 
 impl UvEditor {
     pub(super) fn navigate(&mut self, ui: &egui::Ui, response: &egui::Response, origin: Vec2) {
@@ -66,30 +67,31 @@ impl UvEditor {
         response: &egui::Response,
         request: &mut Option<Request>,
     ) {
-        let none = Modifiers::NONE;
+        let keys = state.prefs.keymap.clone();
+        let pressed = |command| ui.input_mut(|i| keys.pressed(i, command));
         for (key, mode) in [
-            (Key::Num1, SelectMode::Vertex),
-            (Key::Num2, SelectMode::Edge),
-            (Key::Num3, SelectMode::Face),
-            (Key::Num4, SelectMode::Island),
+            (Command::UvVertex, SelectMode::Vertex),
+            (Command::UvEdge, SelectMode::Edge),
+            (Command::UvFace, SelectMode::Face),
+            (Command::UvIsland, SelectMode::Island),
         ] {
-            if chord(ui, none, key) {
+            if pressed(key) {
                 self.mode = mode;
             }
         }
-        let r = if chord(ui, none, Key::A) {
+        let r = if pressed(Command::UvSelectAll) {
             Some(Request::SelectAll)
-        } else if chord(ui, Modifiers::ALT, Key::A) {
+        } else if pressed(Command::UvSelectNone) {
             Some(Request::SelectNone)
-        } else if chord(ui, Modifiers::COMMAND, Key::I) {
+        } else if pressed(Command::UvInvert) {
             Some(Request::SelectInvert)
-        } else if chord(ui, Modifiers::COMMAND, Key::L) {
+        } else if pressed(Command::UvLinked) {
             Some(Request::SelectLinked)
-        } else if chord(ui, none, Key::U) {
+        } else if pressed(Command::UvUnwrap) {
             Some(Request::Op(UvOp::Unwrap))
-        } else if chord(ui, Modifiers::COMMAND, Key::E) {
+        } else if pressed(Command::UvSeam) {
             Some(Request::Op(UvOp::MarkSeam))
-        } else if chord(ui, Modifiers::COMMAND, Key::P) {
+        } else if pressed(Command::UvPack) {
             Some(Request::Op(UvOp::Pack))
         } else {
             None
@@ -97,15 +99,18 @@ impl UvEditor {
         if r.is_some() {
             *request = r;
         }
-        if chord(ui, none, Key::F) {
+        if pressed(Command::UvFrame) {
             self.frame(rect, mesh, visible, true);
-        } else if chord(ui, none, Key::Home) {
+        } else if pressed(Command::UvViewAll) {
             self.frame(rect, mesh, visible, false);
         }
         let mouse = response.hover_pos().map(v2);
         // L / Shift+L: (de)select the island under the cursor.
-        for (mods, how) in [(none, Combine::Add), (Modifiers::SHIFT, Combine::Subtract)] {
-            if chord(ui, mods, Key::L)
+        for (command, how) in [
+            (Command::UvPickLinked, Combine::Add),
+            (Command::UvUnpickLinked, Combine::Subtract),
+        ] {
+            if pressed(command)
                 && let Some(m) = mouse
             {
                 let topo = Topo::new(mesh, visible.to_vec());
@@ -126,11 +131,11 @@ impl UvEditor {
         }
         let start = mouse.unwrap_or(origin);
         for (key, kind) in [
-            (Key::G, Kind::Move),
-            (Key::R, Kind::Rotate),
-            (Key::S, Kind::Scale),
+            (Command::UvMove, Kind::Move),
+            (Command::UvRotate, Kind::Rotate),
+            (Command::UvScale, Kind::Scale),
         ] {
-            if chord(ui, none, key) {
+            if pressed(key) {
                 self.start_transform(
                     state,
                     id,

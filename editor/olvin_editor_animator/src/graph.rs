@@ -5,9 +5,8 @@
 
 use std::collections::HashSet;
 
-use olvin_editor::egui::{
-    self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Shape, pos2, vec2,
-};
+use olvin_editor::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, pos2, vec2};
+use olvin_editor::keymap::Command;
 use olvin_editor::olvin_scene::action::{
     Action, HandleType, Interp, Prop, SEL_ALL, SEL_KEY, SEL_LEFT, SEL_RIGHT,
 };
@@ -109,7 +108,7 @@ const HANDLES: [(&str, HandleType); 5] = [
 
 impl Panel for GraphEditor {
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
-        let cmd = self.header(ui);
+        let cmd = self.header(ui, state);
         let rect = ui.available_rect_before_wrap();
         if rect.width() < NAMES_W + 60.0 || rect.height() < RULER_H + 40.0 {
             return;
@@ -143,7 +142,11 @@ impl Panel for GraphEditor {
         if let Some(modal) = &mut self.modal {
             state.busy = true;
             state.tool_owns_keys = true;
-            let outcome = modal.input(&ctx, response.drag_stopped());
+            let outcome = if state.capturing_key {
+                Outcome::Running
+            } else {
+                modal.input(&ctx, response.drag_stopped())
+            };
             let ctrl = ui.input(|i| i.modifiers.ctrl);
             let result = modal.result(mouse, current, ctrl);
             match outcome {
@@ -154,7 +157,7 @@ impl Panel for GraphEditor {
                 self.modal = None;
             }
         } else {
-            cmd = cmd.or_else(|| self.keyboard(ui, &response));
+            cmd = cmd.or_else(|| self.keyboard(ui, &response, state));
             self.pointer(ui, state, &response, &curves, ruler_rect, body);
         }
         if let Some(cmd) = cmd {
@@ -168,15 +171,17 @@ impl Panel for GraphEditor {
 }
 
 impl GraphEditor {
-    fn header(&mut self, ui: &mut egui::Ui) -> Option<Cmd> {
+    fn header(&mut self, ui: &mut egui::Ui, state: &EditorState) -> Option<Cmd> {
+        let key_label =
+            |label, command| format!("{label}  ({})", state.prefs.keymap.shortcut_text(command));
         let mut cmd = None;
         ui.horizontal(|ui| {
             ui.menu_button("Select", |ui| {
                 for (label, c) in [
-                    ("All  (A)", Cmd::SelectAll),
-                    ("None  (Alt+A)", Cmd::SelectNone),
-                    ("Invert  (Ctrl+I)", Cmd::Invert),
-                    ("Box Select  (B)", Cmd::BoxSelect),
+                    (key_label("All", Command::AnimSelectAll), Cmd::SelectAll),
+                    (key_label("None", Command::AnimSelectNone), Cmd::SelectNone),
+                    (key_label("Invert", Command::AnimInvert), Cmd::Invert),
+                    (key_label("Box Select", Command::AnimBox), Cmd::BoxSelect),
                 ] {
                     if ui.button(label).clicked() {
                         cmd = Some(c);
@@ -186,28 +191,40 @@ impl GraphEditor {
             });
             ui.menu_button("Key", |ui| {
                 for (label, c) in [
-                    ("Insert Keyframes  (I)", Cmd::InsertKeys),
-                    ("Grab  (G)", Cmd::Grab),
-                    ("Scale  (S)", Cmd::Scale),
-                    ("Duplicate  (Shift+D)", Cmd::Duplicate),
-                    ("Delete Keyframes  (X)", Cmd::Delete),
-                    ("Copy  (Ctrl+C)", Cmd::Copy),
-                    ("Paste  (Ctrl+V)", Cmd::Paste),
+                    (
+                        key_label("Insert Keyframes", Command::AnimInsert),
+                        Cmd::InsertKeys,
+                    ),
+                    (key_label("Grab", Command::AnimGrab), Cmd::Grab),
+                    (key_label("Scale", Command::AnimScale), Cmd::Scale),
+                    (
+                        key_label("Duplicate", Command::AnimDuplicate),
+                        Cmd::Duplicate,
+                    ),
+                    (
+                        key_label("Delete Keyframes", Command::AnimDelete),
+                        Cmd::Delete,
+                    ),
+                    (key_label("Copy", Command::AnimCopy), Cmd::Copy),
+                    (key_label("Paste", Command::AnimPaste), Cmd::Paste),
                 ] {
                     if ui.button(label).clicked() {
                         cmd = Some(c);
                         ui.close();
                     }
                 }
-                ui.menu_button("Interpolation Mode  (T)", |ui| {
-                    for (label, i) in INTERPS {
-                        if ui.button(label).clicked() {
-                            cmd = Some(Cmd::Interp(i));
-                            ui.close();
+                ui.menu_button(
+                    key_label("Interpolation Mode", Command::AnimInterpolation),
+                    |ui| {
+                        for (label, i) in INTERPS {
+                            if ui.button(label).clicked() {
+                                cmd = Some(Cmd::Interp(i));
+                                ui.close();
+                            }
                         }
-                    }
-                });
-                ui.menu_button("Handle Type  (V)", |ui| {
+                    },
+                );
+                ui.menu_button(key_label("Handle Type", Command::AnimHandle), |ui| {
                     for (label, h) in HANDLES {
                         if ui.button(label).clicked() {
                             cmd = Some(Cmd::Handle(h));
@@ -304,44 +321,48 @@ impl GraphEditor {
         self.y = Axis::fit(lo.1, hi.1, body.height(), 30.0, true);
     }
 
-    fn keyboard(&mut self, ui: &egui::Ui, response: &egui::Response) -> Option<Cmd> {
-        if !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
+    fn keyboard(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        state: &EditorState,
+    ) -> Option<Cmd> {
+        if state.capturing_key || !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
             return None;
         }
-        if ui.input(|i| i.key_pressed(Key::T) && i.modifiers.is_none()) {
+        let pressed = |command| ui.input_mut(|i| state.prefs.keymap.pressed(i, command));
+        if pressed(Command::AnimInterpolation) {
             self.menu = response.hover_pos().map(|p| (Menu::Interp, p));
         }
-        if ui.input(|i| i.key_pressed(Key::V) && i.modifiers.is_none()) {
+        if pressed(Command::AnimHandle) {
             self.menu = response.hover_pos().map(|p| (Menu::Handle, p));
         }
+        for (command, action) in [
+            (Command::AnimSelectAll, Cmd::SelectAll),
+            (Command::AnimSelectNone, Cmd::SelectNone),
+            (Command::AnimInvert, Cmd::Invert),
+            (Command::AnimBox, Cmd::BoxSelect),
+            (Command::AnimGrab, Cmd::Grab),
+            (Command::AnimScale, Cmd::Scale),
+            (Command::AnimDuplicate, Cmd::Duplicate),
+            (Command::AnimDelete, Cmd::Delete),
+            (Command::AnimInsert, Cmd::InsertKeys),
+            (Command::AnimViewAll, Cmd::ViewAll),
+            (Command::AnimCopy, Cmd::Copy),
+            (Command::AnimPaste, Cmd::Paste),
+        ] {
+            if pressed(command) {
+                return Some(action);
+            }
+        }
         ui.input(|i| {
-            let m = i.modifiers;
-            let plain = m.is_none();
-            let key = |k| i.key_pressed(k);
-            if key(Key::A) && plain {
-                Some(Cmd::SelectAll)
-            } else if key(Key::A) && m.matches_exact(egui::Modifiers::ALT) {
-                Some(Cmd::SelectNone)
-            } else if key(Key::I) && m.matches_exact(egui::Modifiers::CTRL) {
-                Some(Cmd::Invert)
-            } else if key(Key::B) && plain {
-                Some(Cmd::BoxSelect)
-            } else if key(Key::G) && plain {
-                Some(Cmd::Grab)
-            } else if key(Key::S) && plain {
-                Some(Cmd::Scale)
-            } else if key(Key::D) && m.matches_exact(egui::Modifiers::SHIFT) {
-                Some(Cmd::Duplicate)
-            } else if (key(Key::X) || key(Key::Delete)) && plain {
-                Some(Cmd::Delete)
-            } else if key(Key::I) && plain {
-                Some(Cmd::InsertKeys)
-            } else if key(Key::Home) && plain {
-                Some(Cmd::ViewAll)
-            } else if i.events.iter().any(|e| matches!(e, egui::Event::Copy)) {
+            let keymap = &state.prefs.keymap;
+            if keymap.is_default(Command::AnimCopy)
+                && i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+            {
                 Some(Cmd::Copy)
-            } else if i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-                || (key(Key::V) && m.command)
+            } else if keymap.is_default(Command::AnimPaste)
+                && i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
             {
                 Some(Cmd::Paste)
             } else {

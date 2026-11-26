@@ -147,7 +147,6 @@ impl Panel for Viewport {
         let scene_slot = painter.add(egui::Shape::Noop);
 
         let worlds = state.world_matrices();
-        self.hotkeys(ui, &response, state);
         self.navigate(ui, &response, state, &worlds);
         let camera = self.camera(rect);
         let grid_step = self.grid_step();
@@ -183,6 +182,8 @@ impl Panel for Viewport {
             }
         }
         state.ext.viewport = extensions;
+        self.hotkeys(ui, &response, state);
+        let tool = state.tool.clone();
         let transform_tool = [tools::MOVE, tools::ROTATE, tools::SCALE].contains(&tool.as_str());
         let mut gizmo_hot = false;
         if !consumed && transform_tool {

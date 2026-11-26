@@ -18,7 +18,7 @@ fn input_with(key: Key, modifiers: Modifiers) -> egui::InputState {
 
 #[test]
 fn chords_print_and_parse_back() {
-    for command in Command::ALL {
+    for &command in Command::ALL {
         for chord in command.defaults() {
             let text = chord.to_string();
             assert_eq!(Chord::parse(&text), Some(chord), "{command:?}: {text}");
@@ -40,7 +40,7 @@ fn chords_print_and_parse_back() {
 }
 
 #[test]
-fn defaults_match_the_old_hard_coded_keys_and_do_not_clash() {
+fn defaults_match_the_old_hard_coded_keys() {
     let map = Keymap::default();
     assert_eq!(
         map.chords(Command::Save),
@@ -51,11 +51,7 @@ fn defaults_match_the_old_hard_coded_keys_and_do_not_clash() {
     );
     assert_eq!(map.chords(Command::Redo).len(), 2);
     assert_eq!(map.chords(Command::ToolMove), [Chord::plain(Key::W)]);
-    for command in Command::ALL {
-        assert!(
-            map.conflicts(command).is_empty(),
-            "{command:?} clashes by default"
-        );
+    for &command in Command::ALL {
         assert!(map.is_default(command));
     }
 }
@@ -117,4 +113,38 @@ fn conflicts_are_reported_and_junk_in_the_file_is_ignored() {
     assert!(!cleaned.keys.contains_key("old_command"));
     let again: Keymap = ron::from_str(&ron::to_string(&cleaned).unwrap()).unwrap();
     assert_eq!(again, cleaned);
+}
+
+#[test]
+fn conflicts_follow_context_and_local_commands_consume_input() {
+    let mut map = Keymap::default();
+    assert!(map.conflicts(Command::UvPack).contains(&Command::Play));
+    assert!(
+        !map.conflicts(Command::UvSelectAll)
+            .contains(&Command::EditSelectAll)
+    );
+    assert!(
+        map.conflicts(Command::EditFill)
+            .contains(&Command::FrameSelection)
+    );
+    let mut pack = input_with(Key::P, Modifiers::COMMAND);
+    assert!(map.pressed(&mut pack, Command::UvPack));
+    assert!(!map.pressed(&mut pack, Command::Play));
+
+    let mut delete = input_with(Key::Delete, Modifiers::NONE);
+    assert!(map.pressed(&mut delete, Command::EditDelete));
+    assert!(!map.pressed(&mut delete, Command::Delete));
+
+    map.set(Command::AnimNextFrame, Chord::plain(Key::F9));
+    let saved = ron::to_string(&map).unwrap();
+    let mut loaded = ron::from_str::<Keymap>(&saved).unwrap().cleaned();
+    assert_eq!(
+        loaded.chords(Command::AnimNextFrame),
+        [Chord::plain(Key::F9)]
+    );
+    loaded.reset(Command::AnimNextFrame);
+    assert_eq!(
+        loaded.chords(Command::AnimNextFrame),
+        [Chord::plain(Key::ArrowRight)]
+    );
 }
